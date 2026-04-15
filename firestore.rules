@@ -1,0 +1,128 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- Helpers ----------
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function emailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function tenantIdClaim() {
+      return request.auth.token.tenantId;
+    }
+
+    function belongsToTenant(tenantId) {
+      return isSignedIn() && tenantIdClaim() == tenantId;
+    }
+
+    function isPlatformAdmin() {
+      return isSignedIn() && request.auth.token.platformAdmin == true;
+    }
+
+    function authEmailLower() {
+      return request.auth.token.email.lower();
+    }
+
+    // ---------- users/{uid} ----------
+    // Admin-SDK-only writes. Users read their own doc.
+    match /users/{uid} {
+      allow read: if isSignedIn() && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    // ---------- userTenantMemberships/{uid}_{tenantId} ----------
+    // Admin-SDK-only writes. User reads their own rows (docId prefix match).
+    match /userTenantMemberships/{membershipId} {
+      allow read: if isSignedIn()
+        && membershipId.matches(request.auth.uid + "_.*");
+      allow write: if false;
+    }
+
+    // ---------- customDomains/{domain} ----------
+    match /customDomains/{domain} {
+      allow read: if false;
+      allow write: if false;
+    }
+
+    // ---------- stripeAccounts/{stripeAccountId} ----------
+    match /stripeAccounts/{accountId} {
+      allow read: if false;
+      allow write: if false;
+    }
+
+    // ---------- platformAdmins/{uid} ----------
+    match /platformAdmins/{uid} {
+      allow read: if isPlatformAdmin();
+      allow write: if false;
+    }
+
+    // ---------- tenants/{tenantId} ----------
+    match /tenants/{tenantId} {
+
+      // meta/settings — readable by members; public read for customer portal handled via dedicated endpoint (Phase 3+).
+      match /meta/{docId} {
+        allow read: if belongsToTenant(tenantId);
+        allow write: if false;
+      }
+
+      match /entitlements/{docId} {
+        allow read: if belongsToTenant(tenantId);
+        allow write: if false;
+      }
+
+      match /counters/{counterId} {
+        allow read: if belongsToTenant(tenantId);
+        allow write: if false;
+      }
+
+      match /customers/{customerId} {
+        // Tenant members (staff) read all. Customer portal uses separate dual-read via
+        // collection-group query guarded by email match — see Phase 2 callable fallback.
+        allow read: if belongsToTenant(tenantId);
+        allow write: if false;
+      }
+
+      match /invoices/{invoiceId} {
+        allow read: if belongsToTenant(tenantId)
+          || (emailVerified()
+              && resource.data.customer.email.lower() == authEmailLower());
+        allow write: if false;
+      }
+
+      match /quotes/{quoteId} {
+        allow read: if belongsToTenant(tenantId)
+          || (emailVerified()
+              && resource.data.customer.email.lower() == authEmailLower());
+        allow write: if false;
+      }
+
+      match /recurringInvoices/{recurringId} {
+        allow read: if belongsToTenant(tenantId);
+        allow write: if false;
+      }
+
+      match /invitations/{invitationId} {
+        allow read: if belongsToTenant(tenantId);
+        allow write: if false;
+      }
+    }
+
+    // ---------- Collection-group customer portal reads ----------
+    // Deferred to Phase 2 callable (getCustomerInvoicesByEmail / getCustomerQuotesByEmail).
+    // Placeholder stub intentionally left commented — do not enable without rules-unit tests.
+    // match /{path=**}/invoices/{invoiceId} {
+    //   allow read: if emailVerified()
+    //     && resource.data.customer.email.lower() == authEmailLower();
+    // }
+
+    // ---------- Default deny ----------
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

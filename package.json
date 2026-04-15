@@ -1,0 +1,35 @@
+{
+  "name": "techflow-saas",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --turbopack",
+    "build": "next build --turbopack",
+    "start": "next start",
+    "lint": "eslint",
+    "functions:build": "npm --prefix functions run build",
+    "functions:install": "npm --prefix functions install",
+    "emulators": "firebase emulators:start",
+    "emulators:functions": "npm run functions:build && firebase emulators:start",
+    "test:rules": "npm --prefix functions run test:rules",
+    "firebase": "firebase"
+  },
+  "dependencies": {
+    "next": "^15.5.15",
+    "react": "19.1.0",
+    "react-dom": "19.1.0"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3",
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "^15.5.15",
+    "firebase": "^11.1.0",
+    "firebase-tools": "^13.29.1",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}

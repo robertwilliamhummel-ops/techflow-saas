@@ -1,0 +1,26 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function belongsToTenant(tenantId) {
+      return isSignedIn() && request.auth.token.tenantId == tenantId;
+    }
+
+    // Tenant-scoped assets (logos, favicons, attachments).
+    // Writes go through admin SDK in Cloud Functions — client writes denied.
+    match /tenants/{tenantId}/{allPaths=**} {
+      allow read: if belongsToTenant(tenantId);
+      allow write: if false;
+    }
+
+    // Default deny.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
