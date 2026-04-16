@@ -1,8 +1,10 @@
-import { initializeApp } from "firebase-admin/app";
+// Shared admin-app init lives in shared/admin.ts and self-guards against
+// double init. Every callable imports from there, so no initialization code
+// is needed here.
 
-// Single admin-app init shared by all callables/triggers in this codebase.
-initializeApp();
-
-// Phase 1 ships no callables yet. Real callables land in Phase 2.
-// Scaffold deliberately empty so `firebase deploy --only functions` is a no-op.
-export {};
+// Bundle A — Tenant lifecycle (Phase 2).
+export { onSignup } from "./tenants/onSignup";
+export { setUserRole } from "./tenants/setUserRole";
+export { updateUserProfile } from "./tenants/updateUserProfile";
+export { createInvitation } from "./tenants/createInvitation";
+export { onAcceptInvite } from "./tenants/onAcceptInvite";

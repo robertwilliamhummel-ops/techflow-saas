@@ -11,7 +11,8 @@
     "build:watch": "tsc --watch",
     "serve": "npm run build && firebase emulators:start --only functions",
     "lint": "eslint --ext .ts src",
-    "test:rules": "vitest run"
+    "test:rules": "vitest run test/rules",
+    "test:callables": "vitest run test/callables"
   },
   "dependencies": {
     "firebase-admin": "^13.0.2",
