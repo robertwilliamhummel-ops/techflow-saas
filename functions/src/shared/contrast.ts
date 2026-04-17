@@ -40,3 +40,7 @@ export function meetsWcagAA(hex: string, against: string = "#FFFFFF"): boolean {
 export function isValidHexColor(v: unknown): v is string {
   return typeof v === "string" && HEX_RE.test(v.trim());
 }
+
+export function computeForeground(hex: string): "#000000" | "#FFFFFF" {
+  return relativeLuminance(hex) > 0.179 ? "#000000" : "#FFFFFF";
+}

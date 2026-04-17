@@ -10,6 +10,7 @@ import type { MembershipRole } from "../shared/auth";
 import { isValidEmail, lowerEmail } from "../shared/email";
 import { generateOpaqueToken } from "../shared/tokens";
 import { sendInvitationEmail } from "../emails/send";
+import type { TenantSnapshotForEmail } from "../emails/send";
 
 interface Input {
   email?: unknown;
@@ -78,8 +79,20 @@ export async function createInvitationHandler(
   });
 
   const tenantMeta = await db.doc(`tenants/${tenantId}/meta/settings`).get();
-  const tenantName =
-    (tenantMeta.data() as { name?: string } | undefined)?.name ?? tenantId;
+  const metaData = tenantMeta.data() as {
+    name?: string;
+    address?: string | null;
+    logoUrl?: string | null;
+    emailFooter?: string | null;
+    primaryColor?: string | null;
+  } | undefined;
+  const tenant: TenantSnapshotForEmail = {
+    name: metaData?.name ?? tenantId,
+    address: metaData?.address ?? null,
+    logoUrl: metaData?.logoUrl ?? null,
+    emailFooter: metaData?.emailFooter ?? null,
+    primaryColor: metaData?.primaryColor ?? null,
+  };
 
   const inviterSnap = await db.doc(`users/${inviterUid}`).get();
   const inviterName =
@@ -95,7 +108,7 @@ export async function createInvitationHandler(
 
   await sendInvitationEmail({
     to: email,
-    tenantName,
+    tenant,
     inviterName,
     role,
     acceptUrl,

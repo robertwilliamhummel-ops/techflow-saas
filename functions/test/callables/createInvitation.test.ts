@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearAuthUsers,
   clearFirestore,
@@ -6,6 +6,13 @@ import {
   fakeRequest,
   testDb,
 } from "./_setup";
+
+// Mock the email send layer — callable tests verify Firestore state, not
+// Resend delivery. The send.test.ts suite covers the real send path.
+vi.mock("../../src/emails/send", () => ({
+  sendInvitationEmail: vi.fn().mockResolvedValue(undefined),
+}));
+
 import { createInvitationHandler } from "../../src/tenants/createInvitation";
 import { onSignupHandler } from "../../src/tenants/onSignup";
 
