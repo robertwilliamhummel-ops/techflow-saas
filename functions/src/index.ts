@@ -24,3 +24,12 @@ export { createQuote } from "./quotes/createQuote";
 export { updateQuote } from "./quotes/updateQuote";
 export { deleteQuote } from "./quotes/deleteQuote";
 export { convertQuoteToInvoice } from "./quotes/convertQuoteToInvoice";
+
+// Bundle F — Customer-facing + send callables (Phase 2).
+export { getCustomerInvoices } from "./portal/getCustomerInvoices";
+export { getCustomerInvoiceDetail } from "./portal/getCustomerInvoiceDetail";
+export { verifyInvoicePayToken } from "./portal/verifyInvoicePayToken";
+export { createPayTokenCheckoutSession } from "./portal/createPayTokenCheckoutSession";
+export { regenerateInvoicePayLink } from "./invoices/regenerateInvoicePayLink";
+export { sendInvoiceEmail } from "./invoices/sendInvoiceEmail";
+export { sendQuoteEmail } from "./quotes/sendQuoteEmail";

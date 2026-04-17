@@ -27,6 +27,7 @@ Zero-trust multi-tenancy. `tenantId` in Firebase Auth custom claims is the autho
 - Phase 1 (schema + security rules + emulator verification) ships before any UI work.
 - User ("Solo Orchestrator") reviews every diff — keep explanations concise, show the change, not a lecture.
 - User prefers full-context sessions: read ALL of `Docs/REBUILD_PLAN.md` AND `Docs/REBUILD_PLAN_DEFERRED.md` at the start of each phase before writing code. Do not skim.
+- Commit per bundle exactly as listed in the blueprint. No combining bundles.
 
 ## Git
 - Never force-push, reset --hard, or skip hooks without explicit approval.
