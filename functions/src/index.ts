@@ -12,3 +12,9 @@ export { onAcceptInvite } from "./tenants/onAcceptInvite";
 // Bundle B — Tenant settings (Phase 2).
 export { updateTenantBranding } from "./tenants/updateTenantBranding";
 export { updatePaymentSettings } from "./tenants/updatePaymentSettings";
+
+// Bundle D — Invoice CRUD (Phase 2).
+export { createInvoice } from "./invoices/createInvoice";
+export { updateInvoice } from "./invoices/updateInvoice";
+export { deleteInvoice } from "./invoices/deleteInvoice";
+export { markInvoicePaid } from "./invoices/markInvoicePaid";

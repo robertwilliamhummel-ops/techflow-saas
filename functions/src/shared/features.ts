@@ -2,10 +2,12 @@
 // compiles separately (rootDir: src). Keep in sync when adding new flags.
 
 export const FEATURE_DEFAULTS = {
+  invoices: true,
   recurringInvoices: false,
   quotes: true,
   customDomain: false,
   stripeConnect: false,
+  stripePayments: false,
   etransfer: true,
   multiCurrency: false,
 } as const;

@@ -2,10 +2,12 @@
 // Flags resolved from tenants/{tenantId}/entitlements.features with fall-through to defaults.
 
 export const FEATURE_DEFAULTS = {
+  invoices: true,
   recurringInvoices: false,
   quotes: true,
   customDomain: false,
   stripeConnect: false,
+  stripePayments: false,
   etransfer: true,
   multiCurrency: false,
 } as const;
