@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { httpsCallable } from "firebase/functions";
+import * as Sentry from "@sentry/nextjs";
 import { getClientFunctions } from "@/lib/firebase/client";
 import { useAuth } from "@/lib/auth/useAuth";
 
@@ -91,6 +92,16 @@ export function CustomerPortalProvider({ children }: { children: ReactNode }) {
     if (authLoading) return;
     void load();
   }, [authLoading, load]);
+
+  useEffect(() => {
+    if (user) {
+      Sentry.setUser({ id: user.uid, email: user.email ?? undefined });
+      Sentry.setTag("portalCustomer", "true");
+    } else {
+      Sentry.setUser(null);
+      Sentry.setTag("portalCustomer", "false");
+    }
+  }, [user]);
 
   const value = useMemo<CustomerPortalContextValue>(
     () => ({

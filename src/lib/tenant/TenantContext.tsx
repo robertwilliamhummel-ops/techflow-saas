@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { doc, onSnapshot } from "firebase/firestore";
+import * as Sentry from "@sentry/nextjs";
 import { getClientDb } from "@/lib/firebase/client";
 import { useAuth } from "@/lib/auth/useAuth";
 import {
@@ -41,8 +42,17 @@ const TenantContext = createContext<TenantContextValue>({
 });
 
 export function TenantProvider({ children }: { children: ReactNode }) {
-  const { claims, loading: authLoading } = useAuth();
+  const { user, claims, loading: authLoading } = useAuth();
   const tenantId = claims.tenantId ?? null;
+
+  useEffect(() => {
+    if (user) {
+      Sentry.setUser({ id: user.uid, email: user.email ?? undefined });
+    } else {
+      Sentry.setUser(null);
+    }
+    Sentry.setTag("tenantId", tenantId ?? "none");
+  }, [user, tenantId]);
 
   const [meta, setMeta] = useState<TenantMeta | null>(null);
   const [entitlements, setEntitlements] = useState<TenantEntitlements | null>(

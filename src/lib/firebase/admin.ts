@@ -1,8 +1,13 @@
 import { initializeApp, getApps, cert, type App } from "firebase-admin/app";
-import { getAuth } from "firebase-admin/auth";
-import { getFirestore } from "firebase-admin/firestore";
+import { getAuth, type Auth } from "firebase-admin/auth";
+import { getFirestore, type Firestore } from "firebase-admin/firestore";
 
-function createAdminApp(): App {
+// Lazy init — avoid crashing during next build when admin env vars are absent.
+let _app: App | undefined;
+let _auth: Auth | undefined;
+let _db: Firestore | undefined;
+
+function getOrCreateApp(): App {
   const existing = getApps();
   if (existing.length) return existing[0];
 
@@ -16,8 +21,17 @@ function createAdminApp(): App {
   });
 }
 
-const app = createAdminApp();
+export function getAdminApp(): App {
+  if (!_app) _app = getOrCreateApp();
+  return _app;
+}
 
-export const adminAuth = getAuth(app);
-export const adminDb = getFirestore(app);
-export { app as adminApp };
+export function getAdminAuth(): Auth {
+  if (!_auth) _auth = getAuth(getAdminApp());
+  return _auth;
+}
+
+export function getAdminDb(): Firestore {
+  if (!_db) _db = getFirestore(getAdminApp());
+  return _db;
+}
