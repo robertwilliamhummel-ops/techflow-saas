@@ -111,6 +111,21 @@ vi.mock("@/lib/stripe/admin", () => ({
   getStripeClient: () => ({ webhooks: { constructEvent } }),
 }));
 
+// Connect-side handlers — stub them out so this file tests routing, not
+// the handler bodies. Full handler behavior is covered in handlers.test.ts.
+const handleCheckoutCompleted = vi.fn();
+const handlePaymentFailed = vi.fn();
+const handleChargeRefunded = vi.fn();
+const handleDisputeCreated = vi.fn();
+const handleDisputeClosed = vi.fn();
+vi.mock("../handlers", () => ({
+  handleCheckoutCompleted: (...args: unknown[]) => handleCheckoutCompleted(...args),
+  handlePaymentFailed: (...args: unknown[]) => handlePaymentFailed(...args),
+  handleChargeRefunded: (...args: unknown[]) => handleChargeRefunded(...args),
+  handleDisputeCreated: (...args: unknown[]) => handleDisputeCreated(...args),
+  handleDisputeClosed: (...args: unknown[]) => handleDisputeClosed(...args),
+}));
+
 // ---------------------------------------------------------------------------
 // Route imports — AFTER mocks are wired
 // ---------------------------------------------------------------------------
@@ -125,6 +140,11 @@ import { POST as connectPOST } from "../connect/route";
 function resetStore(): void {
   store.clear();
   constructEvent.mockReset();
+  handleCheckoutCompleted.mockReset();
+  handlePaymentFailed.mockReset();
+  handleChargeRefunded.mockReset();
+  handleDisputeCreated.mockReset();
+  handleDisputeClosed.mockReset();
 }
 
 function makeRequest(body: string, sig: string | null = "t=1,v1=fake"): Request {
@@ -374,32 +394,57 @@ describe("connect webhook — POST /api/webhooks/stripe/connect", () => {
     err.mockRestore();
   });
 
-  it("claims known event types and writes the idempotency sentinel", async () => {
+  it("dispatches checkout.session.completed to the handler with tenantId + event", async () => {
     store.set("stripeAccounts/acct_live", { tenantId: "tnt_live" });
-    const info = vi.spyOn(console, "info").mockImplementation(() => {});
-    constructEvent.mockReturnValue({
+    const event = {
       id: "evt_live",
       type: "checkout.session.completed",
       account: "acct_live",
       livemode: true,
-      data: { object: {} },
-    } as unknown as Stripe.Event);
+      data: { object: { id: "cs_test" } },
+    } as unknown as Stripe.Event;
+    constructEvent.mockReturnValue(event);
 
     const res = await connectPOST(makeRequest("{}"));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ received: true });
+
+    expect(handleCheckoutCompleted).toHaveBeenCalledTimes(1);
+    expect(handleCheckoutCompleted).toHaveBeenCalledWith("tnt_live", event);
 
     expect(store.get("stripeEvents/evt_live")).toMatchObject({
       type: "checkout.session.completed",
       account: "acct_live",
       livemode: true,
     });
-    info.mockRestore();
+  });
+
+  it("dispatches each payment/refund/dispute event type to its dedicated handler", async () => {
+    store.set("stripeAccounts/acct_live", { tenantId: "tnt_live" });
+    const cases: Array<[string, ReturnType<typeof vi.fn>]> = [
+      ["payment_intent.payment_failed", handlePaymentFailed],
+      ["charge.refunded", handleChargeRefunded],
+      ["charge.dispute.created", handleDisputeCreated],
+      ["charge.dispute.closed", handleDisputeClosed],
+    ];
+
+    let i = 0;
+    for (const [type, handler] of cases) {
+      constructEvent.mockReturnValue({
+        id: `evt_dispatch_${i++}`,
+        type,
+        account: "acct_live",
+        livemode: false,
+        data: { object: {} },
+      } as unknown as Stripe.Event);
+      const res = await connectPOST(makeRequest("{}"));
+      expect(res.status).toBe(200);
+      expect(handler).toHaveBeenCalledTimes(1);
+    }
   });
 
   it("redelivered event returns duplicate:true and does not re-dispatch", async () => {
     store.set("stripeAccounts/acct_live", { tenantId: "tnt_live" });
-    const info = vi.spyOn(console, "info").mockImplementation(() => {});
     const prime = () => {
       constructEvent.mockReturnValue({
         id: "evt_dup_c",
@@ -412,28 +457,30 @@ describe("connect webhook — POST /api/webhooks/stripe/connect", () => {
 
     prime();
     await connectPOST(makeRequest("{}"));
-    info.mockClear();
+    expect(handleChargeRefunded).toHaveBeenCalledTimes(1);
 
     prime();
     const res = await connectPOST(makeRequest("{}"));
     const body = await res.json();
     expect(body).toEqual({ received: true, duplicate: true });
-    expect(info).not.toHaveBeenCalled();
-    info.mockRestore();
+    expect(handleChargeRefunded).toHaveBeenCalledTimes(1); // still 1, not 2
   });
 
-  it("dispute events are acknowledged in Bundle C (handlers land in Bundle D)", async () => {
+  it("handler throwing yields 500 and does not silently swallow", async () => {
     store.set("stripeAccounts/acct_live", { tenantId: "tnt_live" });
-    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    handleChargeRefunded.mockRejectedValueOnce(new Error("db boom"));
     constructEvent.mockReturnValue({
-      id: "evt_disp",
-      type: "charge.dispute.created",
+      id: "evt_throw",
+      type: "charge.refunded",
       account: "acct_live",
       livemode: false,
       data: { object: {} },
     } as unknown as Stripe.Event);
+
     const res = await connectPOST(makeRequest("{}"));
-    expect(res.status).toBe(200);
-    info.mockRestore();
+    expect(res.status).toBe(500);
+    expect(err).toHaveBeenCalled();
+    err.mockRestore();
   });
 });

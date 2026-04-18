@@ -93,6 +93,26 @@ export interface InvoiceDoc {
   paymentMethod?: ManualPaymentMethod | "stripe" | null;
   sourceQuoteId?: string | null;
   sourceRecurringInvoiceId?: string | null;
+
+  // Stripe payment reconciliation — written by the Connect webhook.
+  // paidAmountCents + surchargeAmountCents split is preserved so accounting
+  // can reconcile "invoice was $500, surcharge was $12, tenant received $512".
+  paidAmountCents?: number | null;
+  surchargeAmountCents?: number | null;
+  stripeChargeId?: string | null;
+
+  // Refund fields — set by charge.refunded. Partial vs full distinguished via
+  // status ('refunded' vs 'partially-refunded'). paidAmountCents is NOT cleared
+  // so historic records survive.
+  refundedAt?: Timestamp | FieldValue | null;
+  refundedAmountCents?: number | null;
+
+  // Dispute fields — set by charge.dispute.created / closed. `disputed` stays
+  // true while the dispute is open; `disputeOutcome` is set when it closes.
+  disputed?: boolean;
+  disputedAt?: Timestamp | FieldValue | null;
+  disputeReason?: string | null;
+  disputeOutcome?: "won" | "lost" | null;
 }
 
 // ---------------------------------------------------------------------------

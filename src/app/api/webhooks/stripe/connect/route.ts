@@ -11,6 +11,13 @@ import type Stripe from "stripe";
 import { getAdminDb } from "@/lib/firebase/admin";
 import { getStripeClient } from "@/lib/stripe/admin";
 import { claimStripeEvent } from "@/lib/stripe/idempotency";
+import {
+  handleChargeRefunded,
+  handleCheckoutCompleted,
+  handleDisputeClosed,
+  handleDisputeCreated,
+  handlePaymentFailed,
+} from "../handlers";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -82,16 +89,19 @@ export async function POST(req: Request): Promise<Response> {
   try {
     switch (event.type) {
       case "checkout.session.completed":
+        await handleCheckoutCompleted(tenantId, event);
+        break;
       case "payment_intent.payment_failed":
+        await handlePaymentFailed(tenantId, event);
+        break;
       case "charge.refunded":
+        await handleChargeRefunded(tenantId, event);
+        break;
       case "charge.dispute.created":
+        await handleDisputeCreated(tenantId, event);
+        break;
       case "charge.dispute.closed":
-        // Handlers land in Bundle D. Logging the claim so redelivery
-        // observability works today; idempotency sentinel is already written,
-        // so a retry of the same event won't re-enter the switch.
-        console.info(
-          `[stripe connect] claimed ${event.type} for tenant ${tenantId} (Bundle D pending)`,
-        );
+        await handleDisputeClosed(tenantId, event);
         break;
       default:
         console.info(
