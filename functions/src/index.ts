@@ -37,3 +37,6 @@ export { createPayTokenCheckoutSession } from "./portal/createPayTokenCheckoutSe
 export { regenerateInvoicePayLink } from "./invoices/regenerateInvoicePayLink";
 export { sendInvoiceEmail } from "./invoices/sendInvoiceEmail";
 export { sendQuoteEmail } from "./quotes/sendQuoteEmail";
+
+// Bundle H — Infrastructure (Phase 2).
+export { scheduledFirestoreExport } from "./scheduled/firestoreExport";

@@ -21,6 +21,7 @@
     "@types/stripe": "^8.0.416",
     "firebase-admin": "^13.0.2",
     "firebase-functions": "^6.2.0",
+    "googleapis": "^171.4.0",
     "jsonwebtoken": "^9.0.3",
     "react": "^19.2.5",
     "resend": "^6.12.0",
