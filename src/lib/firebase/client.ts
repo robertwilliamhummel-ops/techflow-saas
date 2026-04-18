@@ -1,6 +1,7 @@
 import { initializeApp, getApps, getApp, type FirebaseApp } from "firebase/app";
 import { getAuth, type Auth } from "firebase/auth";
 import { getFirestore, type Firestore } from "firebase/firestore";
+import { getFunctions, type Functions } from "firebase/functions";
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -20,6 +21,7 @@ function getOrCreateApp(): FirebaseApp {
 let _app: FirebaseApp | undefined;
 let _auth: Auth | undefined;
 let _db: Firestore | undefined;
+let _functions: Functions | undefined;
 
 export function getClientApp(): FirebaseApp {
   if (!_app) _app = getOrCreateApp();
@@ -36,4 +38,10 @@ export function getClientAuth(): Auth {
 export function getClientDb(): Firestore {
   if (!_db) _db = getFirestore(getClientApp());
   return _db;
+}
+
+/** Cloud Functions client (default region us-central1). */
+export function getClientFunctions(): Functions {
+  if (!_functions) _functions = getFunctions(getClientApp());
+  return _functions;
 }
