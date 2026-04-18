@@ -29,7 +29,6 @@ import { onSignupHandler } from "../../src/tenants/onSignup";
 import { startConnectOnboardingHandler } from "../../src/stripe/startConnectOnboarding";
 import { completeConnectOnboardingHandler } from "../../src/stripe/completeConnectOnboarding";
 import { __setStripeClientForTest } from "../../src/shared/stripe";
-import { FieldValue } from "firebase-admin/firestore";
 import type Stripe from "stripe";
 
 const OWNER_UID = "owner1";
