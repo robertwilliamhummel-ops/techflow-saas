@@ -40,3 +40,7 @@ export { sendQuoteEmail } from "./quotes/sendQuoteEmail";
 
 // Bundle H — Infrastructure (Phase 2).
 export { scheduledFirestoreExport } from "./scheduled/firestoreExport";
+
+// Phase 4 Bundle B — Stripe Connect Express onboarding.
+export { startConnectOnboarding } from "./stripe/startConnectOnboarding";
+export { completeConnectOnboarding } from "./stripe/completeConnectOnboarding";
