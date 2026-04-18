@@ -55,6 +55,14 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // ---------- stripeEvents/{eventId} ----------
+    // Webhook idempotency sentinel — written by Cloud Functions only.
+    // 30-day TTL via Firestore TTL policy on `expireAt`.
+    match /stripeEvents/{eventId} {
+      allow read: if false;
+      allow write: if false;
+    }
+
     // ---------- platformAdmins/{uid} ----------
     match /platformAdmins/{uid} {
       allow read: if isPlatformAdmin();
@@ -92,6 +100,21 @@ service cloud.firestore {
           || (emailVerified()
               && resource.data.customer.email.lower() == authEmailLower());
         allow write: if false;
+
+        // payAttempts — rate-limit ledger for createPayTokenCheckoutSession.
+        // Admin-SDK only; never read or written by clients.
+        match /payAttempts/{attemptId} {
+          allow read: if false;
+          allow write: if false;
+        }
+
+        // paymentIncidents — audit trail for version-mismatch auto-refunds
+        // (C2 guard). Tenant staff may read for support/debugging; writes
+        // are admin-SDK only from the Stripe webhook handler.
+        match /paymentIncidents/{incidentId} {
+          allow read: if belongsToTenant(tenantId);
+          allow write: if false;
+        }
       }
 
       match /quotes/{quoteId} {
