@@ -92,6 +92,7 @@ export interface InvoiceDoc {
   paidAt?: Timestamp | FieldValue | null;
   paymentMethod?: ManualPaymentMethod | "stripe" | null;
   sourceQuoteId?: string | null;
+  sourceRecurringInvoiceId?: string | null;
 }
 
 // ---------------------------------------------------------------------------

@@ -25,6 +25,10 @@ export { updateQuote } from "./quotes/updateQuote";
 export { deleteQuote } from "./quotes/deleteQuote";
 export { convertQuoteToInvoice } from "./quotes/convertQuoteToInvoice";
 
+// Bundle G — Recurring invoices (Phase 2).
+export { createRecurringInvoice } from "./recurring/createRecurringInvoice";
+export { processRecurringInvoices } from "./recurring/processRecurringInvoices";
+
 // Bundle F — Customer-facing + send callables (Phase 2).
 export { getCustomerInvoices } from "./portal/getCustomerInvoices";
 export { getCustomerInvoiceDetail } from "./portal/getCustomerInvoiceDetail";
