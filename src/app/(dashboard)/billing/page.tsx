@@ -1,5 +1,17 @@
-import { PagePlaceholder } from "@/components/scaffold/PagePlaceholder";
+import { Suspense } from "react";
+import { BillingClient } from "./BillingClient";
 
 export default function BillingPage() {
-  return <PagePlaceholder title="Billing" phase="Phase 4" />;
+  return (
+    <Suspense
+      fallback={
+        <div className="p-8">
+          <h1 className="text-2xl font-semibold">Billing</h1>
+          <p className="mt-2 text-sm text-muted-foreground">Loading…</p>
+        </div>
+      }
+    >
+      <BillingClient />
+    </Suspense>
+  );
 }

@@ -2,6 +2,7 @@
 
 import { computeForeground } from "@/lib/design/contrast";
 import { TenantProvider, useTenantContext } from "@/lib/tenant/TenantContext";
+import { BillingStatusBanner } from "./BillingStatusBanner";
 
 const FALLBACK_PRIMARY = "#0066CC";
 const FALLBACK_SECONDARY = "#F5F5F5";
@@ -22,6 +23,7 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
         } as React.CSSProperties
       }
     >
+      <BillingStatusBanner />
       {children}
     </div>
   );
