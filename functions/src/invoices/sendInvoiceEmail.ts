@@ -56,6 +56,27 @@ export async function sendInvoiceEmailHandler(
     );
   }
 
+  // Phase 4 Bundle E — refuse to send if the customer would have no way to
+  // pay. Card payments require stripeStatus.chargesEnabled === true; e-transfer
+  // requires meta.etransferEmail. If neither is available, sending the invoice
+  // is just noise — tell the tenant to finish setup instead.
+  const metaForPreflight = await db
+    .doc(`tenants/${tenantId}/meta/settings`)
+    .get();
+  if (metaForPreflight.exists) {
+    const m = metaForPreflight.data()!;
+    const cardReady = (m.stripeStatus as { chargesEnabled?: boolean } | undefined)
+      ?.chargesEnabled === true;
+    const etransferReady =
+      typeof m.etransferEmail === "string" && m.etransferEmail.length > 0;
+    if (!cardReady && !etransferReady) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Add an e-transfer email or finish Stripe onboarding before sending invoices.",
+      );
+    }
+  }
+
   // Build email props.
   const snapshot = invoice.tenantSnapshot ?? {};
   const tenant: TenantSnapshotForEmail = {

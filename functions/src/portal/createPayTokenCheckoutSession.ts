@@ -104,6 +104,20 @@ export async function createPayTokenCheckoutSessionHandler(
     );
   }
 
+  // Phase 4 Bundle E — friendly preflight. stripeStatus.chargesEnabled is the
+  // platform webhook's mirror of account.updated capabilities; if Stripe has
+  // restricted or not-yet-approved the account, sessions.create will reject
+  // with a less-helpful error. Fail early with a human-readable message.
+  const stripeStatus = meta.stripeStatus as
+    | { chargesEnabled?: boolean }
+    | undefined;
+  if (stripeStatus && stripeStatus.chargesEnabled === false) {
+    throw new HttpsError(
+      "failed-precondition",
+      "This business cannot accept card payments right now. Ask them for an e-transfer alternative.",
+    );
+  }
+
   // 5. Build Checkout session with surcharge logic.
   const totalCents = Math.round((invoice.totals?.total ?? 0) * 100);
   const currency = String(

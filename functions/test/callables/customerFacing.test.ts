@@ -478,6 +478,18 @@ describe("createPayTokenCheckoutSession", () => {
       ),
     ).rejects.toThrow(/not available for payment/);
   });
+
+  it("rejects when stripeStatus.chargesEnabled is false (preflight)", async () => {
+    await testDb.doc(`tenants/${TENANT}/meta/settings`).update({
+      stripeStatus: { chargesEnabled: false },
+    });
+    await expect(
+      createPayTokenCheckoutSessionHandler(
+        fakeRequest({ token: validToken }, null),
+      ),
+    ).rejects.toThrow(/cannot accept card payments/);
+    expect(mockStripeCreate).not.toHaveBeenCalled();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -584,6 +596,41 @@ describe("sendInvoiceEmail", () => {
         fakeRequest({ invoiceId: "INV-9999" }, ownerAuth),
       ),
     ).rejects.toThrow(/Invoice not found/);
+  });
+
+  it("rejects when neither card nor e-transfer rail is ready (preflight)", async () => {
+    await testDb.doc(`tenants/${TENANT}/meta/settings`).update({
+      etransferEmail: FieldValue.delete(),
+    });
+    await expect(
+      sendInvoiceEmailHandler(
+        fakeRequest({ invoiceId: "INV-0001" }, ownerAuth),
+      ),
+    ).rejects.toThrow(/Add an e-transfer email or finish Stripe onboarding/);
+    expect(mockResendSend).not.toHaveBeenCalled();
+  });
+
+  it("sends when only card rail is ready (chargesEnabled true)", async () => {
+    await testDb.doc(`tenants/${TENANT}/meta/settings`).update({
+      etransferEmail: FieldValue.delete(),
+      stripeStatus: { chargesEnabled: true },
+    });
+    const result = await sendInvoiceEmailHandler(
+      fakeRequest({ invoiceId: "INV-0001" }, ownerAuth),
+    );
+    expect(result.success).toBe(true);
+    expect(mockResendSend).toHaveBeenCalledOnce();
+  });
+
+  it("sends when only e-transfer rail is ready (no Stripe)", async () => {
+    await testDb.doc(`tenants/${TENANT}/meta/settings`).update({
+      stripeStatus: { chargesEnabled: false },
+    });
+    const result = await sendInvoiceEmailHandler(
+      fakeRequest({ invoiceId: "INV-0001" }, ownerAuth),
+    );
+    expect(result.success).toBe(true);
+    expect(mockResendSend).toHaveBeenCalledOnce();
   });
 });
 
