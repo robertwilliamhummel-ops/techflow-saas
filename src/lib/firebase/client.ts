@@ -10,6 +10,11 @@ import {
   connectFunctionsEmulator,
   type Functions,
 } from "firebase/functions";
+import {
+  getStorage,
+  connectStorageEmulator,
+  type FirebaseStorage,
+} from "firebase/storage";
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -32,6 +37,7 @@ let _app: FirebaseApp | undefined;
 let _auth: Auth | undefined;
 let _db: Firestore | undefined;
 let _functions: Functions | undefined;
+let _storage: FirebaseStorage | undefined;
 
 export function getClientApp(): FirebaseApp {
   if (!_app) _app = getOrCreateApp();
@@ -71,4 +77,15 @@ export function getClientFunctions(): Functions {
     }
   }
   return _functions;
+}
+
+/** Firebase Storage instance. */
+export function getClientStorage(): FirebaseStorage {
+  if (!_storage) {
+    _storage = getStorage(getClientApp());
+    if (USE_EMULATORS) {
+      connectStorageEmulator(_storage, "127.0.0.1", 9199);
+    }
+  }
+  return _storage;
 }

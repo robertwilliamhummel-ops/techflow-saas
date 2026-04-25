@@ -11,8 +11,32 @@ service firebase.storage {
       return isSignedIn() && request.auth.token.tenantId == tenantId;
     }
 
-    // Tenant-scoped assets (logos, favicons, attachments).
-    // Writes go through admin SDK in Cloud Functions — client writes denied.
+    function isOwnerOrAdmin() {
+      return isSignedIn()
+        && (request.auth.token.role == 'owner'
+            || request.auth.token.role == 'admin');
+    }
+
+    function isSmallImage() {
+      return request.resource.contentType.matches('image/.*')
+        && request.resource.size < 2 * 1024 * 1024;
+    }
+
+    // Branding assets — owners/admins of the tenant can upload directly so the
+    // client can `getDownloadURL` and pass the public URL to updateTenantBranding.
+    // Read access mirrors Firestore (tenant-scoped); the public download URL
+    // returned by getDownloadURL is what's exposed to customers + PDF service.
+    match /tenants/{tenantId}/logo.{ext} {
+      allow read: if belongsToTenant(tenantId);
+      allow write: if belongsToTenant(tenantId) && isOwnerOrAdmin() && isSmallImage();
+    }
+    match /tenants/{tenantId}/favicon.{ext} {
+      allow read: if belongsToTenant(tenantId);
+      allow write: if belongsToTenant(tenantId) && isOwnerOrAdmin() && isSmallImage();
+    }
+
+    // All other tenant-scoped assets (attachments etc.) flow through Cloud
+    // Functions — clients cannot write directly.
     match /tenants/{tenantId}/{allPaths=**} {
       allow read: if belongsToTenant(tenantId);
       allow write: if false;
