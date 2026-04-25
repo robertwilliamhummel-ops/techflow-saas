@@ -1,7 +1,15 @@
 import { initializeApp, getApps, getApp, type FirebaseApp } from "firebase/app";
-import { getAuth, type Auth } from "firebase/auth";
-import { getFirestore, type Firestore } from "firebase/firestore";
-import { getFunctions, type Functions } from "firebase/functions";
+import { getAuth, connectAuthEmulator, type Auth } from "firebase/auth";
+import {
+  getFirestore,
+  connectFirestoreEmulator,
+  type Firestore,
+} from "firebase/firestore";
+import {
+  getFunctions,
+  connectFunctionsEmulator,
+  type Functions,
+} from "firebase/functions";
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -11,6 +19,8 @@ const firebaseConfig = {
   messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
 };
+
+const USE_EMULATORS = process.env.NEXT_PUBLIC_USE_EMULATORS === "1";
 
 function getOrCreateApp(): FirebaseApp {
   if (getApps().length) return getApp();
@@ -30,18 +40,35 @@ export function getClientApp(): FirebaseApp {
 
 /** Firebase Auth instance. Throws at runtime if env vars are missing. */
 export function getClientAuth(): Auth {
-  if (!_auth) _auth = getAuth(getClientApp());
+  if (!_auth) {
+    _auth = getAuth(getClientApp());
+    if (USE_EMULATORS) {
+      connectAuthEmulator(_auth, "http://127.0.0.1:9099", {
+        disableWarnings: true,
+      });
+    }
+  }
   return _auth;
 }
 
 /** Firestore instance. Throws at runtime if env vars are missing. */
 export function getClientDb(): Firestore {
-  if (!_db) _db = getFirestore(getClientApp());
+  if (!_db) {
+    _db = getFirestore(getClientApp());
+    if (USE_EMULATORS) {
+      connectFirestoreEmulator(_db, "127.0.0.1", 8080);
+    }
+  }
   return _db;
 }
 
 /** Cloud Functions client (default region us-central1). */
 export function getClientFunctions(): Functions {
-  if (!_functions) _functions = getFunctions(getClientApp());
+  if (!_functions) {
+    _functions = getFunctions(getClientApp());
+    if (USE_EMULATORS) {
+      connectFunctionsEmulator(_functions, "127.0.0.1", 5001);
+    }
+  }
   return _functions;
 }

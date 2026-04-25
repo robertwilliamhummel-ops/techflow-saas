@@ -12,6 +12,7 @@
     "functions:install": "npm --prefix functions install",
     "emulators": "firebase emulators:start",
     "emulators:functions": "npm run functions:build && firebase emulators:start",
+    "seed:emulator": "node scripts/seed-emulator.mjs",
     "test:rules": "npm --prefix functions run test:rules",
     "firebase": "firebase"
   },
