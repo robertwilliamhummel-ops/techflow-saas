@@ -8,6 +8,7 @@ export { setUserRole } from "./tenants/setUserRole";
 export { updateUserProfile } from "./tenants/updateUserProfile";
 export { createInvitation } from "./tenants/createInvitation";
 export { onAcceptInvite } from "./tenants/onAcceptInvite";
+export { revokeInvitation } from "./tenants/revokeInvitation";
 
 // Bundle B — Tenant settings (Phase 2).
 export { updateTenantBranding } from "./tenants/updateTenantBranding";

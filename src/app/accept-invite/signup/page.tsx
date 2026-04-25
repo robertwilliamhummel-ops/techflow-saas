@@ -6,14 +6,22 @@ import { Suspense, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { signInWithEmailAndPassword } from "firebase/auth";
+import {
+  createUserWithEmailAndPassword,
+  sendEmailVerification,
+} from "firebase/auth";
 
 import { getClientAuth } from "@/lib/firebase/client";
-import { getPostLoginRoute, type AuthClaims } from "@/lib/auth/useAuth";
 import { authErrorMessage } from "@/lib/auth/authErrors";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import {
   Form,
   FormControl,
@@ -26,31 +34,31 @@ import { Input } from "@/components/ui/input";
 
 const schema = z.object({
   email: z.string().email("Enter a valid email address."),
-  password: z.string().min(1, "Password is required."),
+  password: z.string().min(8, "Password must be at least 8 characters."),
 });
 
 type FormValues = z.infer<typeof schema>;
 
-export default function LoginPage() {
-  return (
-    <Suspense fallback={null}>
-      <LoginInner />
-    </Suspense>
-  );
-}
-
-// Allow `?next=/some/path` (relative only — never an absolute URL) so the
-// invite-acceptance page can deep-link sign-in and resume.
 function safeNext(raw: string | null): string | null {
   if (!raw) return null;
   if (!raw.startsWith("/") || raw.startsWith("//")) return null;
   return raw;
 }
 
-function LoginInner() {
+export default function AcceptInviteSignupPage() {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-background p-4">
+      <Suspense fallback={null}>
+        <SignupInner />
+      </Suspense>
+    </div>
+  );
+}
+
+function SignupInner() {
   const router = useRouter();
   const params = useSearchParams();
-  const next = safeNext(params.get("next"));
+  const next = safeNext(params.get("next")) ?? "/accept-invite";
   const [submitError, setSubmitError] = useState<string | null>(null);
 
   const form = useForm<FormValues>({
@@ -58,20 +66,31 @@ function LoginInner() {
     defaultValues: { email: "", password: "" },
   });
 
+  // Invite acceptance creates only the Firebase Auth user; the tenant already
+  // exists, so onSignup must NOT run (it would bootstrap a parallel tenant).
+  // After verification the invitee returns to /accept-invite which calls
+  // onAcceptInvite — that callable is what sets the tenantId/role claims.
   async function onSubmit(values: FormValues) {
     setSubmitError(null);
+    const auth = getClientAuth();
     try {
-      const cred = await signInWithEmailAndPassword(
-        getClientAuth(),
+      const cred = await createUserWithEmailAndPassword(
+        auth,
         values.email,
         values.password,
       );
-      const tokenResult = await cred.user.getIdTokenResult();
-      const claims: AuthClaims = {
-        tenantId: tokenResult.claims.tenantId as string | undefined,
-        email_verified: tokenResult.claims.email_verified as boolean | undefined,
-      };
-      router.replace(next ?? getPostLoginRoute(claims));
+      try {
+        await sendEmailVerification(cred.user, {
+          url: typeof window !== "undefined"
+            ? `${window.location.origin}${next}`
+            : next,
+          handleCodeInApp: false,
+        });
+      } catch {
+        // Verification email failures shouldn't block the flow — the user
+        // can request a resend on /verify-email.
+      }
+      router.replace(`/verify-email?next=${encodeURIComponent(next)}`);
     } catch (err) {
       setSubmitError(authErrorMessage(err));
     }
@@ -80,9 +99,12 @@ function LoginInner() {
   const submitting = form.formState.isSubmitting;
 
   return (
-    <Card>
+    <Card className="w-full max-w-sm">
       <CardHeader>
-        <CardTitle>Sign in to TechFlow</CardTitle>
+        <CardTitle>Create your account</CardTitle>
+        <CardDescription>
+          Use the email address the invitation was sent to.
+        </CardDescription>
       </CardHeader>
       <CardContent>
         <Form {...form}>
@@ -99,12 +121,7 @@ function LoginInner() {
                 <FormItem>
                   <FormLabel>Email</FormLabel>
                   <FormControl>
-                    <Input
-                      type="email"
-                      autoComplete="email"
-                      autoFocus
-                      {...field}
-                    />
+                    <Input type="email" autoComplete="email" autoFocus {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -115,19 +132,11 @@ function LoginInner() {
               name="password"
               render={({ field }) => (
                 <FormItem>
-                  <div className="flex items-center justify-between">
-                    <FormLabel>Password</FormLabel>
-                    <Link
-                      href="/forgot-password"
-                      className="text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
-                    >
-                      Forgot?
-                    </Link>
-                  </div>
+                  <FormLabel>Password</FormLabel>
                   <FormControl>
                     <Input
                       type="password"
-                      autoComplete="current-password"
+                      autoComplete="new-password"
                       {...field}
                     />
                   </FormControl>
@@ -136,17 +145,17 @@ function LoginInner() {
               )}
             />
             <Button type="submit" disabled={submitting}>
-              {submitting ? "Signing in…" : "Sign in"}
+              {submitting ? "Creating account…" : "Create account"}
             </Button>
           </form>
         </Form>
         <p className="mt-4 text-center text-sm text-muted-foreground">
-          New to TechFlow?{" "}
+          Already have an account?{" "}
           <Link
-            href="/signup"
+            href={`/login?next=${encodeURIComponent(next)}`}
             className="font-medium text-foreground underline-offset-4 hover:underline"
           >
-            Create an account
+            Sign in
           </Link>
         </p>
       </CardContent>

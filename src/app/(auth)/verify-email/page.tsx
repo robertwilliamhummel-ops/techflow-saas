@@ -1,7 +1,7 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
 import { sendEmailVerification } from "firebase/auth";
 
 import { getClientAuth } from "@/lib/firebase/client";
@@ -13,8 +13,24 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 const POLL_INTERVAL_MS = 3000;
 
+function safeNext(raw: string | null): string | null {
+  if (!raw) return null;
+  if (!raw.startsWith("/") || raw.startsWith("//")) return null;
+  return raw;
+}
+
 export default function VerifyEmailPage() {
+  return (
+    <Suspense fallback={null}>
+      <VerifyEmailInner />
+    </Suspense>
+  );
+}
+
+function VerifyEmailInner() {
   const router = useRouter();
+  const params = useSearchParams();
+  const next = safeNext(params.get("next")) ?? "/dashboard";
   const { user, loading, signOut } = useAuth();
 
   const [resendError, setResendError] = useState<string | null>(null);
@@ -36,11 +52,11 @@ export default function VerifyEmailPage() {
       await current.reload().catch(() => {});
       if (current.emailVerified) {
         clearInterval(interval);
-        router.replace("/dashboard");
+        router.replace(next);
       }
     }, POLL_INTERVAL_MS);
     return () => clearInterval(interval);
-  }, [user, router]);
+  }, [user, router, next]);
 
   async function handleResend() {
     const current = getClientAuth().currentUser;
