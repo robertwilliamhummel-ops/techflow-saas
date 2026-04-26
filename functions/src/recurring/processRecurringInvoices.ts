@@ -24,7 +24,7 @@ import {
   computeInvoiceTotals,
   computeLineItems,
   buildTenantSnapshot,
-  inlineLogoOrNull,
+  inlineLogoOrThrow,
   type LineItemInput,
 } from "../shared/invoice";
 import { computeNextRunAt, addDaysToISODate } from "../shared/recurring";
@@ -161,11 +161,21 @@ async function processOneTemplate(
   }
   const meta = metaSnap.data()!;
 
-  // Build fresh tenantSnapshot for the generated invoice.
+  // Build fresh tenantSnapshot for the generated invoice. A broken logo
+  // surfaces as a recordFailure (try/catch around processOneTemplate's caller
+  // path treats it as a per-template failure — auto-pauses after 3 misses).
   const tenantSnapshot = buildTenantSnapshot(meta);
-  tenantSnapshot.logo = await inlineLogoOrNull(
-    meta.logoUrl as string | null,
-  );
+  const logoUrl = (meta.logoUrl as string | null) ?? null;
+  try {
+    tenantSnapshot.logo = logoUrl ? await inlineLogoOrThrow(logoUrl) : null;
+  } catch (err) {
+    await recordFailure(
+      recurringRef,
+      data,
+      `Logo inline failed: ${String(err)}`,
+    );
+    return;
+  }
 
   // Recompute totals from template line items + current meta taxRate.
   const rawLineItems = (data.lineItems as LineItemInput[]) ?? [];

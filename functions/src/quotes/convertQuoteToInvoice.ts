@@ -23,7 +23,7 @@ import {
   computeInvoiceTotals,
   computeLineItems,
   buildTenantSnapshot,
-  inlineLogoOrNull,
+  inlineLogoOrThrow,
   type LineItemInput,
 } from "../shared/invoice";
 
@@ -67,7 +67,8 @@ export async function convertQuoteToInvoiceHandler(
   }
   const meta = metaSnap.data()!;
   const snapshot = buildTenantSnapshot(meta);
-  snapshot.logo = await inlineLogoOrNull(meta.logoUrl as string | null);
+  const logoUrl = (meta.logoUrl as string | null) ?? null;
+  snapshot.logo = logoUrl ? await inlineLogoOrThrow(logoUrl) : null;
 
   // Recompute totals from quote line items + current meta taxRate.
   const rawLineItems = (quote.lineItems as LineItemInput[]) ?? [];

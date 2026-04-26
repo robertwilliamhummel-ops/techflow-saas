@@ -13,7 +13,8 @@
     "lint": "eslint --ext .ts src",
     "test:rules": "vitest run test/rules",
     "test:callables": "vitest run test/callables",
-    "test:emails": "vitest run test/emails"
+    "test:emails": "vitest run test/emails",
+    "test:shared": "vitest run test/shared"
   },
   "dependencies": {
     "@react-email/components": "^1.0.12",

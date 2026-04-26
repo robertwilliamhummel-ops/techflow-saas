@@ -12,7 +12,7 @@ import {
   computeInvoiceTotals,
   computeLineItems,
   buildTenantSnapshot,
-  inlineLogoOrNull,
+  inlineLogoOrThrow,
 } from "../shared/invoice";
 import { validateQuoteInput } from "../shared/quote";
 
@@ -34,7 +34,8 @@ export async function createQuoteHandler(
   const meta = metaSnap.data()!;
 
   const snapshot = buildTenantSnapshot(meta);
-  snapshot.logo = await inlineLogoOrNull(meta.logoUrl as string | null);
+  const logoUrl = (meta.logoUrl as string | null) ?? null;
+  snapshot.logo = logoUrl ? await inlineLogoOrThrow(logoUrl) : null;
 
   const lineItems = computeLineItems(input.lineItems);
   const totals = computeInvoiceTotals(

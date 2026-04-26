@@ -4,7 +4,6 @@
 // mandatory — client math is never trusted (blueprint Phase 2).
 
 import { HttpsError } from "firebase-functions/v2/https";
-import * as logger from "firebase-functions/logger";
 import type { Timestamp, FieldValue } from "firebase-admin/firestore";
 
 // ---------------------------------------------------------------------------
@@ -269,7 +268,7 @@ export function buildTenantSnapshot(
   return {
     version: 1,
     name: String(meta.name ?? ""),
-    logo: null, // Phase 6: inlineLogoOrThrow — logo inlining deferred until Cloud Run exists
+    logo: null, // Caller fills via inlineLogoOrThrow when meta.logoUrl is set.
     address: meta.address != null ? String(meta.address) : null,
     primaryColor: String(meta.primaryColor ?? "#667eea"),
     secondaryColor: String(meta.secondaryColor ?? "#764ba2"),
@@ -290,33 +289,42 @@ export function buildTenantSnapshot(
 
 // ---------------------------------------------------------------------------
 // Logo inlining — fetches the logo URL and converts to a base64 data URL
-// so the invoice survives future logo rotations/deletions.
-// Phase 6 will move this to a more robust implementation once Cloud Run exists.
+// so the invoice survives future logo rotations/deletions (frozen-document
+// model). Phase 6: throws on any failure so the caller (createInvoice etc.)
+// fails atomically rather than persisting a snapshot with a missing logo.
 // ---------------------------------------------------------------------------
 
-export async function inlineLogoOrNull(
-  logoUrl: string | null | undefined,
-): Promise<string | null> {
-  if (!logoUrl) return null;
-  try {
-    const res = await fetch(logoUrl, { signal: AbortSignal.timeout(5000) });
-    if (!res.ok) {
-      logger.warn("Logo fetch failed", { logoUrl, status: res.status });
-      return null;
-    }
-    const contentType = res.headers.get("content-type") ?? "image/png";
-    const buffer = Buffer.from(await res.arrayBuffer());
-    // Cap at 500KB — anything larger is an unreasonable logo
-    if (buffer.byteLength > 500_000) {
-      logger.warn("Logo too large, skipping inline", {
-        logoUrl,
-        bytes: buffer.byteLength,
-      });
-      return null;
-    }
-    return `data:${contentType};base64,${buffer.toString("base64")}`;
-  } catch (err) {
-    logger.warn("Logo inline failed", { logoUrl, error: String(err) });
-    return null;
+export const LOGO_MAX_BYTES = 500 * 1024;
+
+export async function inlineLogoOrThrow(logoUrl: string): Promise<string> {
+  if (!/^https:\/\//i.test(logoUrl)) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Logo URL must use https://. Re-upload the logo in settings.",
+    );
   }
+  let res: Response;
+  try {
+    res = await fetch(logoUrl, { signal: AbortSignal.timeout(5000) });
+  } catch (err) {
+    throw new HttpsError(
+      "failed-precondition",
+      `Logo fetch failed: ${String(err)}`,
+    );
+  }
+  if (!res.ok) {
+    throw new HttpsError(
+      "failed-precondition",
+      `Logo fetch returned status ${res.status}.`,
+    );
+  }
+  const contentType = res.headers.get("content-type") ?? "image/png";
+  const buffer = Buffer.from(await res.arrayBuffer());
+  if (buffer.byteLength > LOGO_MAX_BYTES) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Logo exceeds 500KB. Re-upload a smaller version in settings.",
+    );
+  }
+  return `data:${contentType};base64,${buffer.toString("base64")}`;
 }
