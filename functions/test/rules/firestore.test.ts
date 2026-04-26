@@ -281,6 +281,243 @@ describe("platformAdmins/{uid}", () => {
   });
 });
 
+describe("tenants/{tenantId}/entitlements (write-lock)", () => {
+  beforeEach(async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "tenants/t1/entitlements/current"), {
+        plan: "free",
+        features: { invoices: true },
+      });
+    });
+  });
+
+  it("tenant member reads own entitlements", async () => {
+    await assertSucceeds(
+      getDoc(
+        doc(authed("alice", { tenantId: "t1" }), "tenants/t1/entitlements/current"),
+      ),
+    );
+  });
+
+  it("non-member tenant cannot read entitlements", async () => {
+    await assertFails(
+      getDoc(
+        doc(authed("eve", { tenantId: "t2" }), "tenants/t1/entitlements/current"),
+      ),
+    );
+  });
+
+  it("tenant member cannot write own entitlements (admin-SDK / platform-admin only)", async () => {
+    await assertFails(
+      setDoc(
+        doc(authed("alice", { tenantId: "t1" }), "tenants/t1/entitlements/current"),
+        { plan: "pro", features: { recurringInvoices: true } },
+      ),
+    );
+  });
+
+  it("tenant owner cannot write entitlements either", async () => {
+    await assertFails(
+      setDoc(
+        doc(
+          authed("alice", { tenantId: "t1", role: "owner" }),
+          "tenants/t1/entitlements/current",
+        ),
+        { plan: "pro" },
+      ),
+    );
+  });
+});
+
+describe("tenants/{tenantId} cross-tenant isolation (every subcollection)", () => {
+  beforeEach(async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const fs = ctx.firestore();
+      await setDoc(doc(fs, "tenants/t1/counters/invoiceCounter"), { last: 5 });
+      await setDoc(doc(fs, "tenants/t1/customers/c1"), {
+        name: "Bob",
+        email: "bob@example.com",
+      });
+      await setDoc(doc(fs, "tenants/t1/recurringInvoices/r1"), {
+        name: "Monthly",
+      });
+      await setDoc(doc(fs, "tenants/t1/invitations/i1"), {
+        email: "staff@example.com",
+        role: "staff",
+      });
+      await setDoc(
+        doc(fs, "tenants/t1/invoices/inv1/paymentIncidents/inc1"),
+        { kind: "auto-refund-version-mismatch", at: Timestamp.now() },
+      );
+    });
+  });
+
+  const t2Member = () => authed("eve", { tenantId: "t2" });
+  const noTenant = () => authed("ghost", {});
+
+  it("t2 member cannot read t1 counters", async () => {
+    await assertFails(
+      getDoc(doc(t2Member(), "tenants/t1/counters/invoiceCounter")),
+    );
+  });
+
+  it("t2 member cannot read t1 customers", async () => {
+    await assertFails(getDoc(doc(t2Member(), "tenants/t1/customers/c1")));
+  });
+
+  it("t2 member cannot read t1 recurringInvoices", async () => {
+    await assertFails(
+      getDoc(doc(t2Member(), "tenants/t1/recurringInvoices/r1")),
+    );
+  });
+
+  it("t2 member cannot read t1 invitations", async () => {
+    await assertFails(getDoc(doc(t2Member(), "tenants/t1/invitations/i1")));
+  });
+
+  it("t2 member cannot read t1 paymentIncidents", async () => {
+    await assertFails(
+      getDoc(
+        doc(t2Member(), "tenants/t1/invoices/inv1/paymentIncidents/inc1"),
+      ),
+    );
+  });
+
+  it("user with NO tenantId claim cannot read t1 meta", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "tenants/t1/meta/settings"), {
+        name: "Acme",
+      });
+    });
+    await assertFails(getDoc(doc(noTenant(), "tenants/t1/meta/settings")));
+  });
+
+  it("user with NO tenantId claim cannot read t1 invoices (tenant path)", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "tenants/t1/invoices/inv-x"), {
+        customer: { email: "someone@example.com" },
+      });
+    });
+    await assertFails(getDoc(doc(noTenant(), "tenants/t1/invoices/inv-x")));
+  });
+
+  it("t2 member cannot write any t1 subcollection (counters)", async () => {
+    await assertFails(
+      setDoc(doc(t2Member(), "tenants/t1/counters/invoiceCounter"), {
+        last: 999,
+      }),
+    );
+  });
+
+  it("t2 member cannot write any t1 subcollection (customers)", async () => {
+    await assertFails(
+      setDoc(doc(t2Member(), "tenants/t1/customers/c1"), { name: "hacked" }),
+    );
+  });
+});
+
+describe("customer cannot write invoices or quotes (read-only via email-match)", () => {
+  const customer = () =>
+    authed("cust1", { email: "customer@example.com", email_verified: true });
+
+  it("customer cannot create an invoice", async () => {
+    await assertFails(
+      setDoc(doc(customer(), "tenants/t1/invoices/new-inv"), {
+        customer: { email: "customer@example.com" },
+        total: 100,
+      }),
+    );
+  });
+
+  it("customer cannot update an existing invoice (e.g. flip status to paid)", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "tenants/t1/invoices/inv1"), {
+        customer: { email: "customer@example.com" },
+        status: "sent",
+        total: 100,
+      });
+    });
+    await assertFails(
+      setDoc(
+        doc(customer(), "tenants/t1/invoices/inv1"),
+        { status: "paid" },
+        { merge: true },
+      ),
+    );
+  });
+
+  it("customer cannot read paymentIncidents (tenant-staff-only)", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "tenants/t1/invoices/inv1"), {
+        customer: { email: "customer@example.com" },
+      });
+      await setDoc(
+        doc(ctx.firestore(), "tenants/t1/invoices/inv1/paymentIncidents/i1"),
+        { kind: "dispute" },
+      );
+    });
+    await assertFails(
+      getDoc(
+        doc(customer(), "tenants/t1/invoices/inv1/paymentIncidents/i1"),
+      ),
+    );
+  });
+});
+
+describe("admin-SDK-only collections (clients fully blocked)", () => {
+  const member = () => authed("alice", { tenantId: "t1" });
+  const platformAdmin = () => authed("root", { platformAdmin: true });
+
+  it("customDomains denies read for member, platform admin, unauth", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "customDomains/foo.example.com"), {
+        tenantId: "t1",
+      });
+    });
+    await assertFails(getDoc(doc(member(), "customDomains/foo.example.com")));
+    await assertFails(
+      getDoc(doc(platformAdmin(), "customDomains/foo.example.com")),
+    );
+    await assertFails(
+      getDoc(doc(unauthed(), "customDomains/foo.example.com")),
+    );
+  });
+
+  it("stripeAccounts denies read for everyone", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "stripeAccounts/acct_x"), {
+        tenantId: "t1",
+      });
+    });
+    await assertFails(getDoc(doc(member(), "stripeAccounts/acct_x")));
+    await assertFails(getDoc(doc(platformAdmin(), "stripeAccounts/acct_x")));
+  });
+
+  it("stripeEvents denies read/write for everyone (idempotency sentinel)", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "stripeEvents/evt_1"), {
+        type: "checkout.session.completed",
+      });
+    });
+    await assertFails(getDoc(doc(member(), "stripeEvents/evt_1")));
+    await assertFails(
+      setDoc(doc(member(), "stripeEvents/evt_2"), { type: "x" }),
+    );
+  });
+
+  it("payAttempts (subcollection) denies read for tenant member", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(
+        doc(ctx.firestore(), "tenants/t1/invoices/inv1/payAttempts/a1"),
+        { ip: "1.2.3.4", at: Timestamp.now() },
+      );
+    });
+    await assertFails(
+      getDoc(doc(member(), "tenants/t1/invoices/inv1/payAttempts/a1")),
+    );
+  });
+});
+
 describe("default deny", () => {
   it("random path is denied for reads", async () => {
     await assertFails(
