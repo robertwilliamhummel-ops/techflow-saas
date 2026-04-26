@@ -91,11 +91,11 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
 if (require.main === module) {
   const server = app.listen(PORT, () => {
     // eslint-disable-next-line no-console
-    console.log(`pdf-service listening on ${PORT}`);
+    console.info(`pdf-service listening on ${PORT}`);
   });
   const shutdown = async (signal: string): Promise<void> => {
     // eslint-disable-next-line no-console
-    console.log(`Received ${signal}, shutting down.`);
+    console.info(`Received ${signal}, shutting down.`);
     server.close();
     await closeBrowser();
     process.exit(0);
