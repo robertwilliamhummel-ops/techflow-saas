@@ -147,6 +147,14 @@ vi.mock("@/lib/stripe/admin", () => ({
   }),
 }));
 
+// Tenant owner notifier — Phase 7 Bundle C. Stub so tests assert the call
+// shape without hitting Resend.
+const notifyTenantOfIncident = vi.fn().mockResolvedValue(undefined);
+vi.mock("@/lib/emails/paymentIncidentNotify", () => ({
+  notifyTenantOfIncident: (...args: unknown[]) =>
+    notifyTenantOfIncident(...args),
+}));
+
 import {
   handleChargeRefunded,
   handleCheckoutCompleted,
@@ -159,6 +167,7 @@ function resetState(): void {
   docs.clear();
   collections.clear();
   refundsCreate.mockReset();
+  notifyTenantOfIncident.mockClear();
 }
 
 beforeEach(() => {
@@ -277,6 +286,14 @@ describe("handleCheckoutCompleted", () => {
       currentVersion: 5,
       refundId: "re_refund_777",
     });
+
+    expect(notifyTenantOfIncident).toHaveBeenCalledTimes(1);
+    expect(notifyTenantOfIncident).toHaveBeenCalledWith({
+      tenantId: TENANT,
+      invoiceId: INVOICE,
+      kind: "auto-refund-version-mismatch",
+      details: { refundId: "re_refund_777", refundError: null },
+    });
   });
 
   it("C2 version mismatch — refund failure still writes incident with error", async () => {
@@ -306,7 +323,30 @@ describe("handleCheckoutCompleted", () => {
       refundId: null,
       refundError: "card_declined",
     });
+    expect(notifyTenantOfIncident).toHaveBeenCalledWith({
+      tenantId: TENANT,
+      invoiceId: INVOICE,
+      kind: "auto-refund-version-mismatch",
+      details: { refundId: null, refundError: "card_declined" },
+    });
     err.mockRestore();
+  });
+
+  it("matches version → does NOT notify (only incidents notify)", async () => {
+    seedInvoice();
+    await handleCheckoutCompleted(
+      TENANT,
+      event(
+        session({
+          invoiceId: INVOICE,
+          tenantId: TENANT,
+          payTokenVersion: "3",
+          basePaidCents: "11300",
+          surchargeCents: "0",
+        }),
+      ),
+    );
+    expect(notifyTenantOfIncident).not.toHaveBeenCalled();
   });
 
   it("is a no-op when the invoice is already paid (duplicate-safety net)", async () => {
@@ -457,6 +497,9 @@ describe("handleDisputeCreated", () => {
       stripeChargeId: "ch_disputed",
     });
 
+    // due_by epoch seconds → 2026-05-15
+    const dueBySec = Math.floor(new Date("2026-05-15T00:00:00Z").getTime() / 1000);
+
     const event = {
       id: "evt_d",
       type: "charge.dispute.created",
@@ -467,6 +510,7 @@ describe("handleDisputeCreated", () => {
           charge: "ch_disputed",
           reason: "fraudulent",
           amount: 11300,
+          evidence_details: { due_by: dueBySec },
         },
       },
     } as unknown as Stripe.Event;
@@ -480,6 +524,41 @@ describe("handleDisputeCreated", () => {
     expect(inv?.disputeOutcome).toBeNull();
     // status stays 'paid' — dispute isn't resolved yet
     expect(inv?.status).toBe("paid");
+
+    expect(notifyTenantOfIncident).toHaveBeenCalledTimes(1);
+    expect(notifyTenantOfIncident).toHaveBeenCalledWith({
+      tenantId: TENANT,
+      invoiceId: "INV-3",
+      kind: "dispute-created",
+      details: {
+        reason: "fraudulent",
+        evidenceDueBy: "2026-05-15",
+        disputeId: "dp_1",
+      },
+    });
+  });
+
+  it("notifies even when reason is missing (defaults to 'unspecified')", async () => {
+    docs.set(`tenants/${TENANT}/invoices/INV-3b`, {
+      status: "paid",
+      stripeChargeId: "ch_disputed_b",
+    });
+
+    await handleDisputeCreated(TENANT, {
+      id: "evt_db",
+      type: "charge.dispute.created",
+      account: "acct_x",
+      data: {
+        object: { id: "dp_2", charge: "ch_disputed_b", amount: 5000 },
+      },
+    } as unknown as Stripe.Event);
+
+    expect(notifyTenantOfIncident).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "dispute-created",
+        details: expect.objectContaining({ reason: "unspecified" }),
+      }),
+    );
   });
 });
 
@@ -516,6 +595,7 @@ describe("handleDisputeClosed", () => {
     expect(inv?.disputed).toBe(false);
     expect(inv?.disputeOutcome).toBe("won");
     expect(inv?.status).toBe("paid");
+    expect(notifyTenantOfIncident).not.toHaveBeenCalled();
   });
 
   it("status='lost' → clears disputed, sets outcome=lost, flips status to refunded", async () => {
@@ -533,6 +613,17 @@ describe("handleDisputeClosed", () => {
     expect(inv?.status).toBe("refunded");
     expect(inv?.refundedAmountCents).toBe(11300);
     expect(inv?.refundedAt).toBeDefined();
+    expect(notifyTenantOfIncident).toHaveBeenCalledTimes(1);
+    expect(notifyTenantOfIncident).toHaveBeenCalledWith({
+      tenantId: TENANT,
+      invoiceId: "INV-5",
+      kind: "dispute-lost",
+      details: {
+        amountCents: 11300,
+        disputeId: "dp_1",
+        outcomeStatus: "lost",
+      },
+    });
   });
 
   it("status='charge_refunded' is also treated as lost (chargeback went through)", async () => {
@@ -547,6 +638,16 @@ describe("handleDisputeClosed", () => {
     const inv = docs.get(`tenants/${TENANT}/invoices/INV-6`);
     expect(inv?.status).toBe("refunded");
     expect(inv?.disputeOutcome).toBe("lost");
+    expect(notifyTenantOfIncident).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "dispute-lost",
+        details: expect.objectContaining({
+          outcomeStatus: "charge_refunded",
+          amountCents: 11300,
+          disputeId: "dp_1",
+        }),
+      }),
+    );
   });
 });
 

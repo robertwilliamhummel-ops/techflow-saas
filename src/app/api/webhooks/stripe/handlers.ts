@@ -16,6 +16,7 @@ import type Stripe from "stripe";
 import { FieldValue } from "firebase-admin/firestore";
 import { getAdminDb } from "@/lib/firebase/admin";
 import { getStripeClient } from "@/lib/stripe/admin";
+import { notifyTenantOfIncident } from "@/lib/emails/paymentIncidentNotify";
 
 // ---------------------------------------------------------------------------
 // Shared lookup helpers
@@ -201,6 +202,13 @@ async function autoRefundVersionMismatch(args: {
     refundId,
     refundError,
   });
+
+  await notifyTenantOfIncident({
+    tenantId,
+    invoiceId,
+    kind: "auto-refund-version-mismatch",
+    details: { refundId, refundError },
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -272,6 +280,24 @@ export async function handleDisputeCreated(
     },
     { merge: true },
   );
+
+  const evidenceDueBy =
+    typeof dispute.evidence_details?.due_by === "number"
+      ? new Date(dispute.evidence_details.due_by * 1000)
+          .toISOString()
+          .slice(0, 10)
+      : undefined;
+
+  await notifyTenantOfIncident({
+    tenantId,
+    invoiceId: match.ref.id,
+    kind: "dispute-created",
+    details: {
+      reason: dispute.reason ?? "unspecified",
+      evidenceDueBy,
+      disputeId: dispute.id,
+    },
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -308,6 +334,17 @@ export async function handleDisputeClosed(
       },
       { merge: true },
     );
+
+    await notifyTenantOfIncident({
+      tenantId,
+      invoiceId: match.ref.id,
+      kind: "dispute-lost",
+      details: {
+        amountCents: dispute.amount ?? null,
+        disputeId: dispute.id,
+        outcomeStatus: dispute.status,
+      },
+    });
   }
 }
 
