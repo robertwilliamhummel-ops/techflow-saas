@@ -39,6 +39,10 @@ export { regenerateInvoicePayLink } from "./invoices/regenerateInvoicePayLink";
 export { sendInvoiceEmail } from "./invoices/sendInvoiceEmail";
 export { sendQuoteEmail } from "./quotes/sendQuoteEmail";
 
+// Phase 6 Bundle D — PDF preview callables (deferred from Phase 2).
+export { previewInvoicePDF } from "./invoices/previewInvoicePDF";
+export { previewQuotePDF } from "./quotes/previewQuotePDF";
+
 // Bundle H — Infrastructure (Phase 2).
 export { scheduledFirestoreExport } from "./scheduled/firestoreExport";
 
