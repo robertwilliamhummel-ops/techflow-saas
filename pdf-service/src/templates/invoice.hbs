@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="{{csp}}" />
+  <title>Invoice {{data.invoiceId}}</title>
+  <style>
+    :root { {{{cssVars}}} }
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: #fff; color: #111; }
+    body {
+      font-family: var(--font-body);
+      font-size: 11pt;
+      line-height: 1.45;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    .page { padding: 0; }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      border-bottom: 3px solid var(--accent);
+      padding-bottom: 14px;
+      margin-bottom: 24px;
+    }
+    .brand { display: flex; align-items: center; gap: 14px; }
+    .brand img { max-height: 60px; max-width: 200px; object-fit: contain; }
+    .brand .name { font-size: 18pt; font-weight: 700; letter-spacing: -0.01em; }
+    .docmeta { text-align: right; }
+    .docmeta .doctype { text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; font-size: 11pt; color: #555; }
+    .docmeta .docid { font-size: 14pt; font-weight: 600; }
+    .docmeta .row { margin-top: 4px; font-size: 10pt; color: #444; }
+
+    .parties { display: flex; justify-content: space-between; gap: 48px; margin-bottom: 28px; }
+    .party { flex: 1; }
+    .party h3 { margin: 0 0 4px; font-size: 9pt; text-transform: uppercase; letter-spacing: 0.08em; color: #555; }
+    .party .name { font-weight: 600; }
+    .party .line { font-size: 10pt; color: #333; }
+
+    table.items { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
+    table.items th {
+      text-align: left;
+      font-size: 9pt;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #555;
+      padding: 10px 8px;
+      border-bottom: 1px solid #ddd;
+    }
+    table.items td {
+      padding: 10px 8px;
+      border-bottom: 1px solid #f0f0f0;
+      vertical-align: top;
+    }
+    table.items tr:nth-child(even) td { background: #fafafa; }
+    table.items td.qty, table.items td.rate, table.items td.amt,
+    table.items th.qty, table.items th.rate, table.items th.amt {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    }
+
+    .totals { display: flex; justify-content: flex-end; margin-bottom: 28px; }
+    .totals table { min-width: 280px; border-collapse: collapse; }
+    .totals td { padding: 6px 0; font-size: 11pt; }
+    .totals td.label { padding-right: 32px; color: #555; }
+    .totals td.value {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    }
+    .totals .grand td { border-top: 2px solid #111; padding-top: 10px; font-weight: 700; font-size: 13pt; }
+    .totals .grand td.value { color: var(--accent); }
+    .totals .charged td { padding-top: 6px; }
+    .totals .paid-via td { padding-top: 8px; font-size: 10pt; color: #555; }
+
+    .notes { border-top: 1px solid #eee; padding-top: 16px; margin-bottom: 24px; }
+    .notes h3 { margin: 0 0 6px; font-size: 9pt; text-transform: uppercase; letter-spacing: 0.08em; color: #555; }
+    .notes p { margin: 0; white-space: pre-wrap; font-size: 10pt; color: #333; }
+
+    .pay { border-top: 2px solid #111; padding-top: 16px; }
+    .pay h2 { margin: 0 0 12px; font-size: 12pt; text-transform: uppercase; letter-spacing: 0.08em; }
+    .pay .method { display: flex; gap: 16px; margin-bottom: 14px; }
+    .pay .method .num {
+      flex: 0 0 22px; height: 22px; line-height: 22px;
+      border-radius: 50%; background: var(--accent); color: #fff; text-align: center;
+      font-size: 11pt; font-weight: 700;
+    }
+    .pay .method .body { flex: 1; font-size: 10pt; color: #333; }
+    .pay .method .body strong { color: #111; }
+    .pay .method .body .label { color: #555; display: inline-block; min-width: 64px; }
+    .pay .method .qr { flex: 0 0 120px; }
+    .pay .method .qr img { width: 120px; height: 120px; }
+
+    .footer-meta { margin-top: 28px; padding-top: 14px; border-top: 1px solid #eee; font-size: 9pt; color: #777; text-align: center; }
+    .footer-meta p { margin: 2px 0; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <div class="page">
+
+    <header class="header">
+      <div class="brand">
+        {{#if snapshot.logo}}<img src="{{snapshot.logo}}" alt="" />{{/if}}
+        <div class="name">{{snapshot.name}}</div>
+      </div>
+      <div class="docmeta">
+        <div class="doctype">Invoice</div>
+        <div class="docid">{{data.invoiceId}}</div>
+        <div class="row">Issued: {{data.issueDate}}</div>
+        <div class="row">Due: {{data.dueDate}}</div>
+        {{#if snapshot.businessNumber}}<div class="row">Business #: {{snapshot.businessNumber}}</div>{{/if}}
+      </div>
+    </header>
+
+    <section class="parties">
+      <div class="party">
+        <h3>From</h3>
+        <div class="name">{{snapshot.name}}</div>
+        {{#if snapshot.address}}<div class="line">{{snapshot.address}}</div>{{/if}}
+      </div>
+      <div class="party">
+        <h3>Bill To</h3>
+        <div class="name">{{data.customer.name}}</div>
+        <div class="line">{{data.customer.email}}</div>
+        {{#if data.customer.phone}}<div class="line">{{data.customer.phone}}</div>{{/if}}
+      </div>
+    </section>
+
+    <table class="items">
+      <thead>
+        <tr>
+          <th>Description</th>
+          <th class="qty">Qty</th>
+          <th class="rate">Rate</th>
+          <th class="amt">Amount</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{#each data.lineItems}}
+          <tr>
+            <td>{{this.description}}</td>
+            <td class="qty">{{this.quantity}}</td>
+            <td class="rate">{{money this.rate ../snapshot.currency}}</td>
+            <td class="amt">{{money this.amount ../snapshot.currency}}</td>
+          </tr>
+        {{/each}}
+      </tbody>
+    </table>
+
+    <div class="totals">
+      <table>
+        <tr>
+          <td class="label">Subtotal</td>
+          <td class="value">{{money data.totals.subtotal snapshot.currency}}</td>
+        </tr>
+        {{#if data.totals.taxAmount}}
+          <tr>
+            <td class="label">{{snapshot.taxName}} ({{percent data.totals.taxRate}})</td>
+            <td class="value">{{money data.totals.taxAmount snapshot.currency}}</td>
+          </tr>
+        {{/if}}
+        <tr class="grand">
+          <td class="label">{{#if sections.surchargeRow}}Invoice Total{{else}}Total{{/if}}</td>
+          <td class="value">{{money data.totals.total snapshot.currency}}</td>
+        </tr>
+        {{#if sections.surchargeRow}}
+          <tr class="charged">
+            <td class="label">Credit card fee ({{percent surcharge.percentEffective}})</td>
+            <td class="value">{{money surcharge.amount snapshot.currency}}</td>
+          </tr>
+          <tr class="grand">
+            <td class="label">Total charged</td>
+            <td class="value">{{money surcharge.totalCharged snapshot.currency}}</td>
+          </tr>
+        {{/if}}
+        {{#if data.paidAt}}
+          <tr class="paid-via"><td class="label">Paid {{#if data.paidVia}}via {{data.paidVia}}{{/if}}</td><td class="value">{{data.paidAt}}</td></tr>
+        {{/if}}
+      </table>
+    </div>
+
+    {{#if data.notes}}
+      <section class="notes">
+        <h3>Notes</h3>
+        <p>{{data.notes}}</p>
+      </section>
+    {{/if}}
+
+    {{#if (or sections.etransfer sections.card)}}
+      <section class="pay">
+        <h2>How to pay</h2>
+
+        {{#if sections.etransfer}}
+          <div class="method">
+            <div class="num">1</div>
+            <div class="body">
+              <div><strong>Interac e-Transfer</strong> (preferred — no fees)</div>
+              <div><span class="label">Send to:</span>{{snapshot.etransferEmail}}</div>
+              <div><span class="label">Memo:</span>{{data.invoiceId}}</div>
+            </div>
+          </div>
+        {{/if}}
+
+        {{#if sections.card}}
+          <div class="method">
+            <div class="num">{{#if sections.etransfer}}2{{else}}1{{/if}}</div>
+            <div class="body">
+              <div><strong>Credit card</strong></div>
+              <div>Scan the QR code or visit:</div>
+              <div>{{data.payUrl}}</div>
+              {{#if sections.surchargeNote}}
+                <div style="margin-top:6px;color:#555;">A {{percent surcharge.cardFeeFraction}} processing fee applies to credit card payments.</div>
+              {{/if}}
+            </div>
+            {{#if qrDataUrl}}<div class="qr"><img src="{{qrDataUrl}}" alt="" /></div>{{/if}}
+          </div>
+        {{/if}}
+      </section>
+    {{/if}}
+
+    {{#if snapshot.emailFooter}}
+      <div class="footer-meta">
+        <p>{{snapshot.emailFooter}}</p>
+      </div>
+    {{/if}}
+  </div>
+</body>
+</html>
