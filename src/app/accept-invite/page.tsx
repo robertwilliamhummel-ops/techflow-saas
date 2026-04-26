@@ -8,7 +8,7 @@ import { httpsCallable } from "firebase/functions";
 import { getClientFunctions } from "@/lib/firebase/client";
 import { useAuth } from "@/lib/auth/useAuth";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -117,12 +117,15 @@ function AcceptInviteFlow() {
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3">
-          <Button asChild>
-            <Link href={loginHref}>Sign in</Link>
-          </Button>
-          <Button asChild variant="outline">
-            <Link href={signupHref}>Create account</Link>
-          </Button>
+          <Link href={loginHref} className={buttonVariants({})}>
+            Sign in
+          </Link>
+          <Link
+            href={signupHref}
+            className={buttonVariants({ variant: "outline" })}
+          >
+            Create account
+          </Link>
           <p className="text-xs text-muted-foreground">
             Use the email address the invitation was sent to.
           </p>
@@ -142,11 +145,12 @@ function AcceptInviteFlow() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <Button asChild className="w-full">
-            <Link href={`/verify-email?next=${encodeURIComponent(inviteHref)}`}>
-              Continue to verification
-            </Link>
-          </Button>
+          <Link
+            href={`/verify-email?next=${encodeURIComponent(inviteHref)}`}
+            className={buttonVariants({ className: "w-full" })}
+          >
+            Continue to verification
+          </Link>
         </CardContent>
       </Card>
     );
@@ -192,9 +196,9 @@ function AcceptInviteFlow() {
           <Alert variant="destructive">
             <AlertDescription>{status.message}</AlertDescription>
           </Alert>
-          <Button asChild variant="outline">
-            <Link href="/login">Back to sign in</Link>
-          </Button>
+          <Link href="/login" className={buttonVariants({ variant: "outline" })}>
+            Back to sign in
+          </Link>
         </CardContent>
       </Card>
     );
