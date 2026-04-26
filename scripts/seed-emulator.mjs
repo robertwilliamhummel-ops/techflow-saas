@@ -116,7 +116,11 @@ async function seedTenantDocs() {
   batch.set(db.doc(`tenants/${TENANT_ID}/entitlements/current`), {
     plan: "pro",
     maxInvoicesPerMonth: null,
-    features: { stripePayments: true, recurringInvoices: true },
+    features: {
+      stripePayments: true,
+      recurringInvoices: true,
+      customDomain: true,
+    },
     updatedAt: FieldValue.serverTimestamp(),
   });
 

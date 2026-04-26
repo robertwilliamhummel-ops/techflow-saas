@@ -9,6 +9,7 @@ import { readClaims, requireRole, requireTenant } from "../shared/auth";
 import type { MembershipRole } from "../shared/auth";
 import { isValidEmail, lowerEmail } from "../shared/email";
 import { generateOpaqueToken } from "../shared/tokens";
+import * as logger from "firebase-functions/logger";
 import { sendInvitationEmail } from "../emails/send";
 import type { TenantSnapshotForEmail } from "../emails/send";
 
@@ -105,6 +106,10 @@ export async function createInvitationHandler(
     invitationRef.id,
     token.raw,
   );
+
+  if (process.env.FUNCTIONS_EMULATOR === "true") {
+    logger.info("[emulator] invitation accept URL", { acceptUrl });
+  }
 
   await sendInvitationEmail({
     to: email,
