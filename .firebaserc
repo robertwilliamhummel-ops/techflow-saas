@@ -1,8 +1,8 @@
 {
   "projects": {
-    "default": "techflow-dev",
-    "dev": "techflow-dev",
-    "staging": "techflow-staging",
-    "prod": "techflow-prod"
+    "default": "techflow-saas-dev",
+    "dev": "techflow-saas-dev",
+    "staging": "techflow-saas-staging",
+    "prod": "techflow-saas-prod"
   }
 }
