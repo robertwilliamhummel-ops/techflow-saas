@@ -10,7 +10,7 @@ import { initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 
-const PROJECT_ID = "techflow-dev";
+const PROJECT_ID = "techflow-saas-dev";
 const OWNER_EMAIL = "owner@bobs-plumbing.test";
 const OWNER_PASSWORD = "techflow-dev-12345";
 const OWNER_UID = "seed-owner-uid";
