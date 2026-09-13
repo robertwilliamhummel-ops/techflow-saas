@@ -46,6 +46,8 @@ export async function markInvoicePaidHandler(
       `paymentMethod must be one of: ${ALLOWED_METHODS.join(", ")}.`,
     );
   }
+  // E-01: onInvoicePaid emails the customer a receipt only when asked.
+  const receiptRequested = data?.sendReceipt === true;
 
   const invoiceRef = db.doc(
     `tenants/${tenantId}/invoices/${invoiceId}`,
@@ -81,6 +83,7 @@ export async function markInvoicePaidHandler(
       status: "paid",
       paidAt: FieldValue.serverTimestamp(),
       paymentMethod: method,
+      receiptRequested,
       updatedAt: FieldValue.serverTimestamp(),
     });
   });

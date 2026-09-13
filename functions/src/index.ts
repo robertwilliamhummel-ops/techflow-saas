@@ -67,6 +67,9 @@ export { completeConnectOnboarding } from "./stripe/completeConnectOnboarding";
 export { onPaymentIncidentCreated } from "./stripe/onPaymentIncidentCreated";
 export { sesEventsWebhook } from "./emails/sesEvents";
 
+// E-01 — customer payment receipts.
+export { onInvoicePaid } from "./invoices/onInvoicePaid";
+
 // Phase 5 Bundle E — Custom domains + Vercel/Edge Config provisioning.
 export {
   setupCustomDomain,

@@ -59,7 +59,8 @@ export type EmailCategory =
   | "quote"
   | "recurring-invoice"
   | "staff-invite"
-  | "payment-incident";
+  | "payment-incident"
+  | "payment-receipt";
 
 export interface SendEmailInput {
   to: string;

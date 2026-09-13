@@ -65,7 +65,7 @@
 |---|---|---|
 | 1 Schema, rules, claims | Done — 60 Firestore + 18 Storage rules tests; indexes and TTL policies in `firestore.indexes.json`, pinned to their queries by tests; customer + recurring-management callables (A-10) | — |
 | 1.5 Design system | Done | — |
-| 2 Cloud Functions | Mostly done — 364 callable, 55 email, 90 shared tests | MagicLinkSignIn + PaymentReceipt templates, App Check + send rate limits (R4), Sentry in functions |
+| 2 Cloud Functions | Mostly done — 364 callable, 55 email, 90 shared tests; PaymentReceipt emails via `onInvoicePaid` (E-01) | MagicLinkSignIn template, App Check + send rate limits (R4), Sentry in functions |
 | 3 Frontend architecture | Contexts, guards, auth recovery done | 12 placeholder pages: `/dashboard`, `/invoices`, `/invoices/new`, `/invoices/[id]`, `/customers`, `/quotes/[id]`, `/portal`, `/portal/invoices/[id]`, `/portal/quotes/[id]`, `/pay/[token]`, `/pay/[token]/success`, `/pay/[token]/cancelled`; dashboard navigation |
 | 4 Stripe Connect | Backend done (D1 applied); webhook money bugs A-02, A-03, A-08 fixed | Public pay page UI |
 | 5 Onboarding & domains | Signup, login, settings, team, domain, billing UI done; host-routing proxy loads | Customer magic-link sign-in (portal login is password-only today) |
@@ -895,6 +895,7 @@ There is intentionally no `payInvoice` callable. The portal's "Pay Now" redirect
 | `scheduledFirestoreExport` | schedule, daily 03:00 UTC | `gs://{projectId}-firestore-backups/daily/{YYYY-MM-DD}` |
 | `recheckPendingDomains` | schedule, every 5 minutes | Vercel domain status for tenants in `dns_pending` / `ssl_pending` |
 | `onPaymentIncidentCreated` | Firestore create on `tenants/{t}/invoices/{i}/paymentIncidents/{id}` | emails active owners (D5) |
+| `onInvoicePaid` | Firestore update on `tenants/{t}/invoices/{i}` | emails the customer a PaymentReceipt when the invoice becomes paid — always for card payments, for recorded payments only when `receiptRequested` — keyed on the invoice and `paidAt` so a redelivery sends once (E-01) |
 | `sesEventsWebhook` | HTTPS (SNS subscription) | SES delivery/bounce/complaint events → `lastEmailStatus` (D5) |
 
 Stripe webhooks are Next.js routes, not Cloud Functions — see Phase 4.
@@ -917,7 +918,7 @@ All invoice and quote mutations go through dedicated callables; direct client wr
 
 **`voidInvoice`** — owner/admin; `{ invoiceId, reason? }` (reason ≤ 500 characters). Cancels a `sent | unpaid | overdue` invoice and keeps the record: `status: 'void'`, `voidedAt`, `voidedBy`, `voidReason`. Final; repeating it is a no-op. Refuses drafts (delete them) and anything with a recorded payment (refund it). The CRA expects sales invoices kept for six years, and Stripe draws the same line: drafts are deleted, finalized invoices voided. A void invoice can't be marked paid, edited, sent, or given a new pay link. Its pay link answers `void`, the portal still lists it so the customer knows not to pay, its PDF says "Void — do not pay" with no payment section, and a checkout that completes on it is refunded by the webhook (A-12).
 
-**`markInvoicePaid`** — owner/admin manual fallback for payments outside Stripe (`manual` | `etransfer` | `cash`). Accepts only `sent | unpaid | overdue | partial` (`functions/src/shared/invoiceStatus.ts`), checked in a transaction, so drafts, void, paid, and refunded invoices are refused. The pay token is implicitly dead afterwards because verify and checkout accept the same statuses.
+**`markInvoicePaid`** — owner/admin manual fallback for payments outside Stripe (`manual` | `etransfer` | `cash`). Accepts only `sent | unpaid | overdue | partial` (`functions/src/shared/invoiceStatus.ts`), checked in a transaction, so drafts, void, paid, and refunded invoices are refused. The pay token is implicitly dead afterwards because verify and checkout accept the same statuses. `sendReceipt: true` stores `receiptRequested` so `onInvoicePaid` emails the customer a receipt; without it no email goes out (E-01).
 
 Quotes mirror this (`createQuote`, `updateQuote`, `deleteQuote`; no pay token). `convertQuoteToInvoice` reuses the snapshot and counter logic and carries per-line taxability through.
 
@@ -1056,7 +1057,8 @@ functions/src/emails/
     QuoteSent.tsx            ← "View Quote" → portal
     RecurringInvoiceSent.tsx
     StaffInvite.tsx
-                             ← not built yet: PaymentReceipt.tsx, MagicLinkSignIn.tsx
+    PaymentReceipt.tsx       ← "Payment received"; sent by the onInvoicePaid trigger (E-01)
+                             ← not built yet: MagicLinkSignIn.tsx
   send.ts                    ← SES transport: sendEmail, sendInvitationEmail, pickReplyTo, formatFromHeader
   sanitize.ts                ← sanitizeEmailField / sanitizeHeaderValue (R4)
   format.ts                  ← formatCurrency
@@ -1068,7 +1070,7 @@ functions/src/emails/
 
 - **From** `"{Tenant name}" <EMAIL_FROM_ADDRESS>` (default `notifications@techflowsolutions.ca`). Sending from the verified platform identity keeps SPF/DKIM/DMARC aligned. Printable-ASCII names are quoted; others use RFC 2047 encoding. Owner incident alerts send as `"TechFlow"`.
 - **Reply-To** `pickReplyTo(meta.contactEmail, meta.etransferEmail)` — customer replies reach the contractor, not TechFlow. Non-negotiable for the bundled-website offering.
-- **Tags** `category` (`invoice` | `quote` | `recurring-invoice` | `staff-invite` | `payment-incident`), `tenantId`, `documentId` — SES events use them to find the document.
+- **Tags** `category` (`invoice` | `quote` | `recurring-invoice` | `staff-invite` | `payment-incident` | `payment-receipt`), `tenantId`, `documentId` — SES events use them to find the invoice or quote. Only `invoice`, `recurring-invoice`, and `quote` events are recorded, so a bounced receipt never overwrites the invoice email's status.
 - **Configuration set** `SES_CONFIGURATION_SET` (required for bounce/complaint events). **SES tenants**: `SES_TENANTS_ENABLED=true` passes `TenantName = tenantId` once tenants are provisioned in SES — each TechFlow tenant then gets isolated reputation metrics and automatic pausing.
 - **Idempotency** — an `idempotencyKey` claims `emailSends/{sha256(key)}` in a transaction before sending (`sending` → `sent`, released on failure, stale claims taken over after 10 minutes, 30-day TTL). Automated senders use it: recurring invoices per generated invoice, invitations per invite, incident alerts per incident and owner. Manual "Send" clicks don't — resending an invoice is a legitimate action.
 - Recipient addresses are never logged; category, tenant, document id, and SES message id are.
@@ -1628,6 +1630,7 @@ Incidents are written to `tenants/{t}/invoices/{i}/paymentIncidents/{kind}_{stri
 
 - Complete the Connect platform profile in the Stripe Dashboard, in both test and live mode.
 - Register both webhook endpoints per environment (Deploy Runbook).
+- Tell each contractor to leave **Settings → Business → Customer emails → Successful payments** off in their Stripe Dashboard. Direct charges use the connected account's customer email settings, so turning it on sends Stripe's receipt alongside the branded PaymentReceipt from `onInvoicePaid` (E-01).
 - `/billing` onboarding UI — built. Public pay page — not built.
 
 ### Credit card surcharge — line-item application
