@@ -1,3 +1,7 @@
+// MUST stay the first import — sets the default region (D2) before any
+// function module below is evaluated. See shared/globalOptions.ts.
+import "./shared/globalOptions";
+
 // Shared admin-app init lives in shared/admin.ts and self-guards against
 // double init. Every callable imports from there, so no initialization code
 // is needed here.

@@ -28,6 +28,7 @@ import {
   type LineItemInput,
 } from "../shared/invoice";
 import { computeNextRunAt, addDaysToISODate } from "../shared/recurring";
+import { SCHEDULER_REGION } from "../shared/globalOptions";
 import { sanitizeEmailField, sanitizeHeaderValue } from "../emails/sanitize";
 import { isValidEmail } from "../shared/email";
 import {
@@ -453,6 +454,7 @@ export const processRecurringInvoices = onSchedule(
   {
     schedule: "every day 06:00",
     timeZone: "UTC",
+    region: SCHEDULER_REGION,
     secrets: [PAY_TOKEN_SECRET, RESEND_API_KEY],
   },
   processRecurringInvoicesHandler,

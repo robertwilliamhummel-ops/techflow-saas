@@ -14,6 +14,7 @@ import * as logger from "firebase-functions/logger";
 import { db } from "../shared/admin";
 import { checkAndUpdateDomainStatus } from "../domain/setupCustomDomain";
 import { VERCEL_SECRETS } from "../shared/vercel";
+import { SCHEDULER_REGION } from "../shared/globalOptions";
 
 export async function recheckPendingDomainsHandler(): Promise<void> {
   // Collection-group query across every tenant's meta/settings doc filtered
@@ -56,7 +57,7 @@ export const recheckPendingDomains = onSchedule(
   {
     schedule: "every 5 minutes",
     timeZone: "UTC",
-    region: "us-central1",
+    region: SCHEDULER_REGION,
     secrets: [...VERCEL_SECRETS],
   },
   recheckPendingDomainsHandler,

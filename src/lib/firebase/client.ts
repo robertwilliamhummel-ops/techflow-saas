@@ -27,6 +27,10 @@ const firebaseConfig = {
 
 const USE_EMULATORS = process.env.NEXT_PUBLIC_USE_EMULATORS === "1";
 
+// Callable region — must match functions/src/shared/globalOptions.ts (D2).
+const FUNCTIONS_REGION =
+  process.env.NEXT_PUBLIC_FIREBASE_FUNCTIONS_REGION ?? "northamerica-northeast2";
+
 function getOrCreateApp(): FirebaseApp {
   if (getApps().length) return getApp();
   return initializeApp(firebaseConfig);
@@ -68,10 +72,10 @@ export function getClientDb(): Firestore {
   return _db;
 }
 
-/** Cloud Functions client (default region us-central1). */
+/** Cloud Functions client, pinned to the Toronto callable region (D2). */
 export function getClientFunctions(): Functions {
   if (!_functions) {
-    _functions = getFunctions(getClientApp());
+    _functions = getFunctions(getClientApp(), FUNCTIONS_REGION);
     if (USE_EMULATORS) {
       connectFunctionsEmulator(_functions, "127.0.0.1", 5001);
     }
