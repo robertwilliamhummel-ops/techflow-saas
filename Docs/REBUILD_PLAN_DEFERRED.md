@@ -22,7 +22,7 @@
 | P3 Cloud Run `min-instances: 1` in prod | Deploy Runbook item |
 | P4 Secret rotation runbook | Done — REBUILD_PLAN Deploy Runbook → Secret rotation |
 | P5 CSP / security headers | Partial — `/pay/*` privacy headers and the PDF render CSP; no site-wide CSP |
-| P6 `getCustomerQuotes` | Open — not built |
+| P6 `getCustomerQuotes` | Done 2026-09-13 — `getCustomerQuotes` + `getCustomerQuoteDetail`, same visibility rules as invoices; REBUILD_PLAN function inventory |
 | P7 Multi-tenant memberships | Done — `userTenantMemberships` |
 | P8 Multi-project secret push helper | Open |
 | P9 Concurrency / load test | Open |

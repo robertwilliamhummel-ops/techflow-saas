@@ -81,6 +81,21 @@ const COMPOSITE_INDEXES: Array<{
       { fieldPath: "createdAt", order: "DESCENDING" },
     ],
   },
+  {
+    query: "getCustomerQuotes — a customer's quotes across tenants, newest first (P-06)",
+    file: "functions/src/portal/getCustomerQuotes.ts",
+    mustContain: [
+      /\.collectionGroup\("quotes"\)/,
+      /\.where\("customer\.email", "==",/,
+      /\.orderBy\("createdAt", "desc"\)/,
+    ],
+    collectionGroup: "quotes",
+    queryScope: "COLLECTION_GROUP",
+    fields: [
+      { fieldPath: "customer.email", order: "ASCENDING" },
+      { fieldPath: "createdAt", order: "DESCENDING" },
+    ],
+  },
 ];
 
 // Collection-group single-field indexes aren't maintained by default, so even a

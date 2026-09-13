@@ -63,9 +63,9 @@
 
 | Phase | Status | Remaining |
 |---|---|---|
-| 1 Schema, rules, claims | Done — 58 Firestore + 18 Storage rules tests; indexes and TTL policies in `firestore.indexes.json`, pinned to their queries by tests; customer + recurring-management callables (A-10) | — |
+| 1 Schema, rules, claims | Done — 60 Firestore + 18 Storage rules tests; indexes and TTL policies in `firestore.indexes.json`, pinned to their queries by tests; customer + recurring-management callables (A-10) | — |
 | 1.5 Design system | Done | — |
-| 2 Cloud Functions | Mostly done — 312 callable, 55 email, 85 shared tests | `getCustomerQuotes` (P6), MagicLinkSignIn + PaymentReceipt templates, App Check + send rate limits (R4), Sentry in functions |
+| 2 Cloud Functions | Mostly done — 364 callable, 55 email, 90 shared tests | MagicLinkSignIn + PaymentReceipt templates, App Check + send rate limits (R4), Sentry in functions |
 | 3 Frontend architecture | Contexts, guards, auth recovery done | 12 placeholder pages: `/dashboard`, `/invoices`, `/invoices/new`, `/invoices/[id]`, `/customers`, `/quotes/[id]`, `/portal`, `/portal/invoices/[id]`, `/portal/quotes/[id]`, `/pay/[token]`, `/pay/[token]/success`, `/pay/[token]/cancelled`; dashboard navigation |
 | 4 Stripe Connect | Backend done (D1 applied); webhook money bugs A-02, A-03, A-08 fixed | Public pay page UI |
 | 5 Onboarding & domains | Signup, login, settings, team, domain, billing UI done; host-routing proxy loads | Customer magic-link sign-in (portal login is password-only today) |
@@ -505,7 +505,7 @@ Platform admins have no `tenantId` claim. No rule lets any client — platform a
 
 ### Security rules (as built)
 
-`firestore.rules` is authoritative, verified by 58 emulator tests in `functions/test/rules/firestore.test.ts`. The April sketch that used to live here allowed client writes to `meta`, `customers`, `recurringInvoices`, and `invitations`; the build tightened every one of them to callable-only writes.
+`firestore.rules` is authoritative, verified by 60 emulator tests in `functions/test/rules/firestore.test.ts`. The April sketch that used to live here allowed client writes to `meta`, `customers`, `recurringInvoices`, and `invitations`; the build tightened every one of them to callable-only writes.
 
 Two identity patterns are enforced:
 
@@ -574,7 +574,7 @@ A simpler fallback if the `request.query` pattern proves fragile: have a Cloud F
 
 **Decision deferred to Phase 1 implementation:** start with the Cloud Function approach (`getCustomerInvoices`), migrate to `collectionGroup` + rules if the function hits latency issues.
 
-**As built:** the Cloud Function approach. `getCustomerInvoices` pages through the `(customer.email, createdAt desc)` collection-group index, keeps only customer-visible statuses (drafts are never listed, A-05), stops at 100 rows with at most 10 pages scanned, and returns each row's `tenantSnapshot.logoUrl`, never the inlined base64 logo. `getCustomerInvoiceDetail` answers not-found for drafts. No client-side collection-group rule exists.
+**As built:** the Cloud Function approach. `getCustomerInvoices` pages through the `(customer.email, createdAt desc)` collection-group index, keeps only customer-visible statuses (drafts are never listed, A-05), stops at 100 rows with at most 10 pages scanned, and returns each row's `tenantSnapshot.logoUrl`, never the inlined base64 logo. `getCustomerInvoiceDetail` answers not-found for drafts. `getCustomerQuotes` and `getCustomerQuoteDetail` apply the same rules to quotes over the `(customer.email, createdAt desc)` quotes index (P6), and `CustomerPortalContext` loads both lists together. No client-side collection-group rule exists.
 
 ### Data migration
 No migration needed. Existing Firestore data is 73 test invoices — discarded. Fresh start in the new Firebase project.
@@ -873,8 +873,10 @@ Caller-supplied document ids go through `requireDocId` (`functions/src/shared/do
 |---|---|
 | `getCustomerInvoices` | collection-group query on the lowercased email, max 100 (drafts + logo size A-05; pagination R8) |
 | `getCustomerInvoiceDetail` | email must match `customer.email`; strips `payToken` |
+| `getCustomerQuotes` | the quote companion (P6): same paging, visibility, and logo-URL rules over the `(customer.email, createdAt desc)` quotes index, max 100 |
+| `getCustomerQuoteDetail` | `{ tenantId, quoteId }`; email must match `customer.email`; drafts answer not-found (P6) |
 
-Not built: `getCustomerQuotes` (P6). Customer PDF download is the Next.js route `GET /api/pdf/invoice` (and `/api/pdf/quote`) with a Firebase ID token and dual auth — tenant claim or verified matching email — replacing the planned `downloadInvoicePDF` callable.
+Customer PDF download is the Next.js route `GET /api/pdf/invoice` (and `/api/pdf/quote`) with a Firebase ID token and dual auth — tenant claim or verified matching email — replacing the planned `downloadInvoicePDF` callable.
 
 **Token-authenticated callables** (no Firebase auth — the signed pay token is the auth)
 

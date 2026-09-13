@@ -43,6 +43,9 @@ export { updateRecurringInvoice } from "./recurring/updateRecurringInvoice";
 // Bundle F — Customer-facing + send callables (Phase 2).
 export { getCustomerInvoices } from "./portal/getCustomerInvoices";
 export { getCustomerInvoiceDetail } from "./portal/getCustomerInvoiceDetail";
+// P-06 — the quote companions for the customer portal.
+export { getCustomerQuotes } from "./portal/getCustomerQuotes";
+export { getCustomerQuoteDetail } from "./portal/getCustomerQuoteDetail";
 export { verifyInvoicePayToken } from "./portal/verifyInvoicePayToken";
 export { createPayTokenCheckoutSession } from "./portal/createPayTokenCheckoutSession";
 export { regenerateInvoicePayLink } from "./invoices/regenerateInvoicePayLink";
