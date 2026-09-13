@@ -206,8 +206,8 @@ export async function createPayTokenCheckoutSessionHandler(
     { stripeAccount: meta.stripeAccountId as string },
   );
 
-  // 6. Record pay attempt for rate limiting. TTL policy on expireAt handles
-  //    cleanup (R2 from deferred — Firestore TTL configured per-project).
+  // 6. Record pay attempt for rate limiting. The TTL policy on expireAt
+  //    (firestore.indexes.json, A-04) deletes it after 48h.
   await attemptsRef.add({
     createdAt: FieldValue.serverTimestamp(),
     expireAt: Timestamp.fromMillis(Date.now() + 48 * 60 * 60 * 1000),

@@ -63,7 +63,7 @@
 
 | Phase | Status | Remaining |
 |---|---|---|
-| 1 Schema, rules, claims | Mostly done — 42 Firestore + 18 Storage rules tests | Recurring collection-group index (A-04); customer + recurring-management callables (A-10) |
+| 1 Schema, rules, claims | Mostly done — 42 Firestore + 18 Storage rules tests; indexes and TTL policies in `firestore.indexes.json`, pinned to their queries by tests | Customer + recurring-management callables (A-10) |
 | 1.5 Design system | Done | — |
 | 2 Cloud Functions | Mostly done — 246 callable, 55 email, 54 shared tests | `getCustomerQuotes` (P6), MagicLinkSignIn + PaymentReceipt templates, App Check + send rate limits (R4), Sentry in functions |
 | 3 Frontend architecture | Contexts, guards, auth recovery done | 12 placeholder pages: `/dashboard`, `/invoices`, `/invoices/new`, `/invoices/[id]`, `/customers`, `/quotes/[id]`, `/portal`, `/portal/invoices/[id]`, `/portal/quotes/[id]`, `/pay/[token]`, `/pay/[token]/success`, `/pay/[token]/cancelled`; dashboard navigation |
@@ -77,7 +77,6 @@
 
 | Ref | Bug | Where | Fix |
 |---|---|---|---|
-| A-04 | `processRecurringInvoices` collection-group query (`status ==` + `nextRunAt <=`) has no composite index — fails in production (the emulator doesn't enforce indexes) | `firestore.indexes.json` | Add the `recurringInvoices` COLLECTION_GROUP index |
 | A-05 | `getCustomerInvoices` (and the customer rule branch) include drafts; list rows carry full base64 logos (callable 10 MB limit at ~20 rows) | `functions/src/portal/getCustomerInvoices.ts`, `firestore.rules` | Exclude `draft`; project a small logo URL |
 | A-06 | Emails embed the snapshot's base64 `data:` logo, which Gmail web and Outlook block | `sendInvoiceEmail.ts`, `sendQuoteEmail.ts`, `processRecurringInvoices.ts` | Copy the logo to an immutable public Storage path at snapshot time; use that https URL in email |
 | A-07 | Edge Config keys `domain:{host}` contain `:` and `.`, but keys must match `^[\w-]+$` — every write fails silently | `src/proxy.ts`, `functions/src/domain/setupCustomDomain.ts` | Encode the host into a valid key in one shared helper |
@@ -95,6 +94,8 @@ Fixed: A-03 (2026-09-13) — the event marker was written before the handler ran
 Fixed: A-02 (2026-09-13) — checkout saved the PaymentIntent id (`pi_…`) as `stripeChargeId` while refunds and disputes looked up the charge id (`ch_…`), so no refund or dispute ever reached an invoice. Payments now record `stripePaymentIntentId` (plus `stripeCheckoutSessionId`); refunds match `charge.payment_intent`, disputes `dispute.payment_intent` with a charge lookup fallback. Checkout also labels the PaymentIntent with the invoice for the contractor's Stripe Dashboard. Covered by `src/app/api/webhooks/stripe/__tests__/handlers.test.ts` (checkout then refund end-to-end).
 
 Fixed: A-08 (2026-09-13) — a sent invoice could be edited without invalidating its pay link, and the webhook marked invoices paid without checking what Stripe charged. `updateInvoice` (now transactional) re-issues the pay link when a sent invoice's total or customer email changes and returns `payLinkRegenerated`. `checkout.session.completed` records a payment in one transaction only if the invoice is payable, the link version matches (C2), and base, surcharge, `amount_total`, and currency all match; otherwise it refunds and emails owners. The same pass closed two adjacent gaps: a second payment on an already-paid invoice (two open checkouts) was silently kept, and a redelivered checkout event could flip a refunded invoice back to paid. Covered by `handlers.test.ts`, `functions/test/callables/invoices.test.ts`, and `paymentIncident.test.ts`.
+
+Fixed: A-04 (2026-09-13) — `processRecurringInvoices` queries `collectionGroup('recurringInvoices')` with `status ==` and `nextRunAt <=` but had no composite index, so it would fail on its first production run (the emulator never enforces indexes). Added the COLLECTION_GROUP index (`status` ASC, `nextRunAt` ASC). An audit of every query found no other gap. The three TTL policies (`stripeEvents`, `payAttempts`, `emailSends` on `expireAt`) moved from a manual runbook step into `firestore.indexes.json` field overrides (`ttl: true`, indexing disabled per Google's hotspot guidance), so the indexes deploy creates them. `functions/test/shared/firestoreIndexes.test.ts` pins each query and each `expireAt` writer to its index or TTL entry.
 
 ### Platform deadlines
 
@@ -563,7 +564,10 @@ No migration needed. Existing Firestore data is 73 test invoices — discarded. 
 - **Firestore indexes deployed (`firestore.indexes.json`)** — required from day one. The `getCustomerInvoices` query uses a `collectionGroup('invoices')` query with `.where('customer.email', '==', email).orderBy('createdAt', 'desc')`. Without a composite index defined for this collection group, Firestore throws a runtime error on the first customer portal query. Known required indexes:
   - Collection group `invoices`: `customer.email` (ASC) + `createdAt` (DESC)
   - Collection group `quotes`: `customer.email` (ASC) + `createdAt` (DESC) (same pattern for customer quote access)
-  - Add additional indexes as queries are finalized in Phase 2. The `firestore.indexes.json` file lives in the repo and is deployed alongside rules via `firebase deploy --only firestore`.
+  - Collection group `recurringInvoices`: `status` (ASC) + `nextRunAt` (ASC) — the daily recurring processor (A-04)
+  - Field override, collection group `meta`: `customDomainStatus.stage` (collection-group single-field indexes aren't maintained by default) — `recheckPendingDomains`
+  - TTL field overrides (`ttl: true`, indexing disabled): `stripeEvents.expireAt`, `payAttempts.expireAt`, `emailSends.expireAt`
+  - The `firestore.indexes.json` file lives in the repo and is deployed alongside rules via `firebase deploy --only firestore`. `functions/test/shared/firestoreIndexes.test.ts` pins each query to its index — add an entry there with every new index-requiring query.
   - **Note:** the Stripe webhook does NOT require a `collectionGroup('meta')` index because we use the `stripeAccounts/{stripeAccountId}` reverse lookup collection instead. Direct doc read, no composite index needed.
 - **Firebase Storage rules deployed (`storage.rules`)** — separate from Firestore rules. Firebase Storage has its own rules file. Required rules:
   - Tenant users can read files under `tenants/{tenantId}/` where their token's `tenantId` matches. As built, client writes are limited to owner/admin logo and favicon uploads; everything else is Admin SDK only (see "Security Rules (as built)" → Storage)
@@ -1692,7 +1696,7 @@ const session = await stripe.checkout.sessions.create({
 
 1. Verify the JWT signature with `PAY_TOKEN_SECRET`.
 2. Read the invoice doc; verify `payTokenVersion` matches and `status !== 'paid'`.
-3. Check a rate-limit counter at `tenants/{tenantId}/invoices/{invoiceId}/payAttempts` — if more than 10 checkout sessions have been created in the last 24h, reject with `resource-exhausted`. Prevents abuse of the public endpoint. **R2 — auto-cleanup:** each `payAttempts` doc carries an `expireAt: Timestamp` field set to `createdAt + 48h`. A Firestore TTL policy on the `payAttempts` subcollection with `expireAt` as the TTL field deletes expired attempts automatically (configured once per project in Firebase Console → Firestore → TTL policies). No scheduled cleanup function needed. Prevents storage bloat at scale (without this, every invoice accumulates 10 attempt docs forever).
+3. Check a rate-limit counter at `tenants/{tenantId}/invoices/{invoiceId}/payAttempts` — if more than 10 checkout sessions have been created in the last 24h, reject with `resource-exhausted`. Prevents abuse of the public endpoint. **R2 — auto-cleanup:** each `payAttempts` doc carries an `expireAt: Timestamp` field set to `createdAt + 48h`. A Firestore TTL policy on the `payAttempts` subcollection with `expireAt` as the TTL field deletes expired attempts automatically (declared in `firestore.indexes.json` and created by the indexes deploy — A-04). No scheduled cleanup function needed. Prevents storage bloat at scale (without this, every invoice accumulates 10 attempt docs forever).
 4. Read tenant meta for `stripeAccountId`, `chargeCustomerCardFees`, `cardFeePercent`, `currency`.
 5. Build the Checkout session with the surcharge logic above. `payment_intent_data` sets the description `Invoice {invoiceId}` and `invoiceId`/`tenantId` metadata on the PaymentIntent, so contractors can tell which invoice a payment belongs to in their own Stripe Dashboard, where they handle refunds and disputes.
 6. Return `{ url: session.url }` — client redirects.
@@ -2450,8 +2454,8 @@ Vercel env vars and Cloud Functions secrets are parallel systems — both must b
 - Enable APIs: Cloud Functions, Cloud Run, Cloud Build, Artifact Registry, Eventarc, Cloud Scheduler, Secret Manager, Identity Toolkit.
 - Prod: enable Firestore PITR and delete protection.
 - Backups: create `{projectId}-firestore-backups` in the same region with a 30-day lifecycle rule; grant the functions service account `datastore.databases.export` and object create on the bucket.
-- Firestore TTL policies: collection group `payAttempts` on `expireAt`; `stripeEvents` on `expireAt`; `emailSends` on `expireAt`.
-- Run the emulator suites, take a manual export, then `firebase deploy --only firestore:rules,firestore:indexes,storage --project <projectId>` (fix A-04 first).
+- Firestore TTL policies (`payAttempts`, `stripeEvents`, `emailSends` on `expireAt`) are declared in `firestore.indexes.json` and created by the indexes deploy below — nothing to set by hand. Expired documents are typically deleted within 24 hours.
+- Run the emulator suites, take a manual export, then `firebase deploy --only firestore:rules,firestore:indexes,storage --project <projectId>`. New composite indexes take a few minutes to build; check they show "Enabled" in the Firebase Console before relying on the queries.
 - Set the functions secrets and `functions/.env.<projectId>`, then `firebase deploy --only functions --project <projectId>`.
 - Firebase Auth: authorized domains include the portal domain (custom domains are added by `setupCustomDomain`); password-reset and verification email action URL → `https://<portal-domain>/auth/action`; **SMTP settings → SES SMTP credentials**, so auth emails send from the platform domain instead of `*.firebaseapp.com`.
 - Platform admin: `npx ts-node functions/src/scripts/setPlatformAdmin.ts <uid> <email>` with application default credentials.
