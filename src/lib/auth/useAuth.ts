@@ -8,10 +8,16 @@ import {
   type IdTokenResult,
 } from "firebase/auth";
 import { getClientAuth } from "@/lib/firebase/client";
+import type { MembershipRole } from "@/lib/schema/tenant";
+
+// The roles Cloud Functions put in claims (functions/src/shared/auth.ts).
+// Platform admins carry a separate `platformAdmin: true` claim, not a role.
+const MEMBERSHIP_ROLES: readonly MembershipRole[] = ["owner", "admin", "staff"];
 
 export interface AuthClaims {
   tenantId?: string;
-  role?: "owner" | "admin" | "member" | "platform_admin";
+  role?: MembershipRole;
+  platformAdmin?: boolean;
   email_verified?: boolean;
 }
 
@@ -32,13 +38,18 @@ export interface AuthState {
   refreshClaims: () => Promise<AuthClaims>;
 }
 
-function extractClaims(tokenResult: IdTokenResult | null): AuthClaims {
+/** Reads our custom claims, dropping any value that isn't a known shape. */
+export function extractClaims(tokenResult: IdTokenResult | null): AuthClaims {
   if (!tokenResult) return {};
   const c = tokenResult.claims;
   return {
-    tenantId: c.tenantId as string | undefined,
-    role: c.role as AuthClaims["role"],
-    email_verified: c.email_verified as boolean | undefined,
+    tenantId: typeof c.tenantId === "string" ? c.tenantId : undefined,
+    role: MEMBERSHIP_ROLES.includes(c.role as MembershipRole)
+      ? (c.role as MembershipRole)
+      : undefined,
+    platformAdmin: c.platformAdmin === true,
+    email_verified:
+      typeof c.email_verified === "boolean" ? c.email_verified : undefined,
   };
 }
 
