@@ -47,7 +47,7 @@
 | Tenant settings doc | `tenants/{tenantId}/meta/settings` (not `tenants/{id}/meta`) |
 | Entitlements doc | `tenants/{tenantId}/entitlements/current` — `{ plan, maxInvoicesPerMonth, features: {}, updatedAt }`; missing feature keys fall through to code defaults |
 | Counters | `tenants/{tenantId}/counters/invoice` and `counters/quote`, field `value` |
-| Document ids | Invoice id = invoice number (`{invoicePrefix}-0001`); quote id `QT-0001` (custom prefixes: A-12) |
+| Document ids | Invoice id = invoice number (`{invoicePrefix}-0001`); quote id `QT-0001` for the default `INV` prefix, otherwise `{invoicePrefix}-QT-0001` (`quotePrefixFor`, A-12). Quotes have their own counter, so a quote never shares an invoice's number |
 | Roles | `owner` \| `admin` \| `staff` (older text says `member`) |
 | Platform admin | Custom claim `platformAdmin: true` + `platformAdmins/{uid}`, granted by `functions/src/scripts/setPlatformAdmin.ts` (older text says `role: platform_admin`). No rule lets any client write entitlements; plans and feature overrides are edited in the Firebase Console. |
 | User doc | `users/{uid}` — `{ uid, email, displayName, defaultTenantId, createdAt }` (older text says `primaryTenantId`) |
@@ -77,7 +77,7 @@
 
 | Ref | Bug | Where | Fix |
 |---|---|---|---|
-| A-12 | Smaller: `deleteInvoice` hard-deletes sent invoices (should become `void`); `createQuote` prefix only maps `INV→QT`; the `onSignup` membership check isn't transactional | various | — |
+| A-12 | Smaller: `deleteInvoice` hard-deletes sent invoices (should become `void`); the `onSignup` membership check isn't transactional | various | — |
 
 Closed by the D-decisions: A-09 (surcharge shown vs charged — D3), A-11 (email sending duplicated in five places — D5), forced `business_type: "company"` on Stripe accounts (D1), P10 (email delivery feedback — D5).
 
@@ -102,6 +102,8 @@ Fixed: A-07 (2026-09-13) — the custom-domain cache keys `domain:{host}` contai
 Fixed: A-10 (2026-09-13) — rules block client writes to `customers` and `recurringInvoices`, but no callable could create, edit, or delete a customer or stop a recurring template (the only pause was the processor's automatic one after three failures). Added `upsertCustomer` (any role; not feature-gated because customers are part of every plan; emails aren't unique because one address can front several billing entities), `deleteCustomer` (owner/admin; hard delete — invoices, quotes, and templates carry their own customer copy), and `updateRecurringInvoice` with `pause` (any role), `resume` (any role, needs `recurringInvoices`), and `cancel` (owner/admin, final). Pause and cancel work with the feature off, so a tenant can always stop billing; repeating an action that already holds is a no-op. Resume never backfills: `computeResumeRunAt` advances from the stored slot on the same anchor to the first run strictly after now, and a template whose end date or count ran out while paused becomes `completed`. The helper it replaces counted weekly resumes as "now + 7 days", which would have moved a template off its weekday and off midnight UTC for good. Caller-supplied ids go through `requireDocId` (no `/`, no reserved `__…__` ids). Covered by `functions/test/callables/customers.test.ts` and `recurring.test.ts`.
 
 Fixed: A-12, part 1 (2026-09-13) — `useAuth.ts` typed roles as `member` / `platform_admin`, which Cloud Functions never write, and cast whatever the token held. `AuthClaims.role` now uses the schema's `MembershipRole` (`owner | admin | staff`); `extractClaims` drops unknown roles and wrongly typed values and reads platform admins from the separate `platformAdmin` claim. Covered by `src/lib/__tests__/authClaims.test.ts`.
+
+Fixed: A-12, part 2 (2026-09-13) — `createQuote` derived the quote prefix with `invoicePrefix.replace("INV", "QT")`, so any custom prefix (`ACME`) numbered quotes exactly like invoices (`ACME-0001` twice, from separate counters). `quotePrefixFor` keeps `QT` for the default `INV` and appends `-QT` to anything else (`ACME-QT-0001`), matching the common practice of giving quotes their own prefix. The settings page now shows both formats. Covered by `functions/test/callables/quotes.test.ts`.
 
 ### Platform deadlines
 

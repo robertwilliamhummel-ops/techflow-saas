@@ -19,7 +19,7 @@ vi.mock("firebase-functions/logger", () => ({
 import { clearFirestore, fakeRequest, testDb } from "./_setup";
 import { FieldValue } from "firebase-admin/firestore";
 
-import { createQuoteHandler } from "../../src/quotes/createQuote";
+import { createQuoteHandler, quotePrefixFor } from "../../src/quotes/createQuote";
 import { updateQuoteHandler } from "../../src/quotes/updateQuote";
 import { deleteQuoteHandler } from "../../src/quotes/deleteQuote";
 import { convertQuoteToInvoiceHandler } from "../../src/quotes/convertQuoteToInvoice";
@@ -182,6 +182,35 @@ describe("createQuote", () => {
       .doc(`tenants/${TENANT}/counters/quote`)
       .get();
     expect(counter.data()?.value).toBe(3);
+  });
+
+  it.each([
+    ["INV", "QT"],
+    ["ACME", "ACME-QT"],
+    ["ACMEINV", "ACMEINV-QT"],
+    ["QT", "QT-QT"],
+    [undefined, "QT"],
+    ["", "QT"],
+  ])("A-12: invoice prefix %j gives quote prefix %s", (invoicePrefix, expected) => {
+    expect(quotePrefixFor(invoicePrefix)).toBe(expected);
+  });
+
+  it("A-12: a custom prefix never gives a quote an invoice's number", async () => {
+    await testDb
+      .doc(`tenants/${TENANT}/meta/settings`)
+      .update({ invoicePrefix: "ACME" });
+
+    const { quoteId } = await createQuoteHandler(
+      fakeRequest(validQuoteData(), ownerAuth),
+    );
+
+    expect(quoteId).toBe("ACME-QT-0001");
+    expect(
+      (await testDb.doc(`tenants/${TENANT}/quotes/ACME-QT-0001`).get()).exists,
+    ).toBe(true);
+    expect(
+      (await testDb.doc(`tenants/${TENANT}/quotes/ACME-0001`).get()).exists,
+    ).toBe(false);
   });
 
   it("frozen snapshot preserves branding at creation time", async () => {

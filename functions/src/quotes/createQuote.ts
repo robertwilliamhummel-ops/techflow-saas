@@ -16,6 +16,14 @@ import {
 import { applyLogoToSnapshot } from "../shared/logo";
 import { validateQuoteInput } from "../shared/quote";
 
+// Quotes have their own counter, so they need their own prefix or a quote
+// would share its visible number with an invoice (ACME-0001 twice). The
+// default INV becomes QT; a custom prefix gets -QT (ACME → ACME-QT-0001).
+export function quotePrefixFor(invoicePrefix: unknown): string {
+  const prefix = String(invoicePrefix ?? "").trim() || "INV";
+  return prefix === "INV" ? "QT" : `${prefix}-QT`;
+}
+
 export async function createQuoteHandler(
   request: CallableRequest,
 ): Promise<{ quoteId: string }> {
@@ -47,7 +55,7 @@ export async function createQuoteHandler(
     name: String(meta.taxName ?? ""),
   });
 
-  const prefix = String(meta.invoicePrefix ?? "INV").replace("INV", "QT");
+  const prefix = quotePrefixFor(meta.invoicePrefix);
   const issueDate =
     input.issueDate ?? new Date().toISOString().slice(0, 10);
 

@@ -227,7 +227,10 @@ export default function SettingsBusinessPage() {
                     <FormControl>
                       <Input maxLength={10} {...field} />
                     </FormControl>
-                    <FormDescription>e.g. INV → INV-0001.</FormDescription>
+                    <FormDescription>
+                      INV numbers invoices INV-0001 and quotes QT-0001. A
+                      custom prefix like ACME gives ACME-0001 and ACME-QT-0001.
+                    </FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}
