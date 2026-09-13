@@ -7,6 +7,10 @@ import {
 } from "@firebase/rules-unit-testing";
 import { readFileSync } from "node:fs";
 import { doc, getDoc, setDoc, Timestamp } from "firebase/firestore";
+import {
+  CUSTOMER_VISIBLE_INVOICE_STATUSES,
+  CUSTOMER_VISIBLE_QUOTE_STATUSES,
+} from "../../src/shared/customerVisibility";
 
 const PROJECT_ID = "techflow-rules-test";
 
@@ -145,6 +149,7 @@ describe("tenants/{tenantId}/invoices", () => {
   const invoicePath = "tenants/t1/invoices/inv1";
   const invoiceData = {
     customer: { email: "customer@example.com" },
+    status: "sent",
     total: 100,
     createdAt: Timestamp.now(),
   };
@@ -222,6 +227,44 @@ describe("tenants/{tenantId}/invoices", () => {
       ),
     );
   });
+
+  // A-05 — customers never see drafts.
+  const verifiedCustomer = () =>
+    authed("cust1", { email: "customer@example.com", email_verified: true });
+
+  it("A-05: verified customer with a matching email cannot read a draft invoice", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), invoicePath), {
+        ...invoiceData,
+        status: "draft",
+      });
+    });
+    await assertFails(getDoc(doc(verifiedCustomer(), invoicePath)));
+  });
+
+  it("A-05: tenant member still reads a draft invoice", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), invoicePath), {
+        ...invoiceData,
+        status: "draft",
+      });
+    });
+    await assertSucceeds(
+      getDoc(doc(authed("alice", { tenantId: "t1" }), invoicePath)),
+    );
+  });
+
+  for (const status of CUSTOMER_VISIBLE_INVOICE_STATUSES) {
+    it(`A-05: verified customer reads a '${status}' invoice`, async () => {
+      await env.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), invoicePath), {
+          ...invoiceData,
+          status,
+        });
+      });
+      await assertSucceeds(getDoc(doc(verifiedCustomer(), invoicePath)));
+    });
+  }
 });
 
 describe("tenants/{tenantId}/quotes", () => {
@@ -252,6 +295,46 @@ describe("tenants/{tenantId}/quotes", () => {
       ),
     );
   });
+
+  // A-05 — customers never see draft quotes.
+  const verifiedCustomer = () =>
+    authed("cust1", { email: "customer@example.com", email_verified: true });
+
+  it("A-05: verified customer with a matching email cannot read a draft quote", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), quotePath), {
+        ...quoteData,
+        status: "draft",
+      });
+    });
+    await assertFails(getDoc(doc(verifiedCustomer(), quotePath)));
+  });
+
+  it("A-05: customer with a different email cannot read a sent quote", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), quotePath), {
+        ...quoteData,
+        status: "sent",
+      });
+    });
+    await assertFails(
+      getDoc(
+        doc(
+          authed("cust2", { email: "other@example.com", email_verified: true }),
+          quotePath,
+        ),
+      ),
+    );
+  });
+
+  for (const status of CUSTOMER_VISIBLE_QUOTE_STATUSES) {
+    it(`A-05: verified customer reads a '${status}' quote`, async () => {
+      await env.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), quotePath), { ...quoteData, status });
+      });
+      await assertSucceeds(getDoc(doc(verifiedCustomer(), quotePath)));
+    });
+  }
 });
 
 describe("platformAdmins/{uid}", () => {

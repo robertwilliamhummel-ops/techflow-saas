@@ -25,7 +25,9 @@ export interface CustomerInvoiceListItem {
   issueDate: string;
   tenantBranding: {
     name: string;
-    logo: string | null;
+    // Immutable https copy of the logo from the invoice snapshot (A-05/A-06);
+    // the list never carries the inlined base64 logo.
+    logoUrl: string | null;
     primaryColor: string;
   };
 }

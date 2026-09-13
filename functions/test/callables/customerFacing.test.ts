@@ -60,7 +60,11 @@ import {
   testDb,
 } from "./_setup";
 
-import { getCustomerInvoicesHandler } from "../../src/portal/getCustomerInvoices";
+import {
+  getCustomerInvoicesHandler,
+  listCustomerInvoices,
+} from "../../src/portal/getCustomerInvoices";
+import { Timestamp } from "firebase-admin/firestore";
 import { getCustomerInvoiceDetailHandler } from "../../src/portal/getCustomerInvoiceDetail";
 import { verifyInvoicePayTokenHandler } from "../../src/portal/verifyInvoicePayToken";
 import { createPayTokenCheckoutSessionHandler } from "../../src/portal/createPayTokenCheckoutSession";
@@ -253,6 +257,73 @@ describe("getCustomerInvoices", () => {
     expect(result.invoices).toHaveLength(0);
   });
 
+  // A-05 — drafts and inlined logos never reach the portal list.
+
+  async function seedCustomerInvoice(
+    id: string,
+    status: string,
+    createdAtMs: number,
+  ): Promise<void> {
+    await testDb.doc(`tenants/${TENANT}/invoices/${id}`).set({
+      customer: { name: "Jane Doe", email: CUSTOMER_EMAIL, phone: null },
+      totals: { subtotal: 10, taxAmount: 0, total: 10 },
+      tenantSnapshot: { name: "Acme Plumbing", logo: null, primaryColor: "#123456" },
+      status,
+      dueDate: "2026-05-15",
+      issueDate: "2026-04-15",
+      createdAt: Timestamp.fromMillis(createdAtMs),
+    });
+  }
+
+  it("A-05: never lists draft invoices", async () => {
+    await seedCustomerInvoice("INV-0002", "draft", Date.now() + 60_000);
+
+    const result = await getCustomerInvoicesHandler(
+      fakeRequest({}, customerAuth),
+    );
+
+    expect(result.invoices.map((invoice) => invoice.id)).toEqual(["INV-0001"]);
+  });
+
+  it("A-05: rows carry the snapshot logo URL, never the inlined base64 logo", async () => {
+    await testDb.doc(`tenants/${TENANT}/invoices/INV-0001`).update({
+      "tenantSnapshot.logo": "data:image/png;base64,iVBORw0KGgo=",
+      "tenantSnapshot.logoUrl": "https://storage.example.com/logo.png",
+    });
+
+    const result = await getCustomerInvoicesHandler(
+      fakeRequest({}, customerAuth),
+    );
+
+    expect(result.invoices[0].tenantBranding).toEqual({
+      name: "Acme Plumbing",
+      logoUrl: "https://storage.example.com/logo.png",
+      primaryColor: "#667eea",
+    });
+    expect(JSON.stringify(result)).not.toContain("base64");
+  });
+
+  it("A-05: keeps paging past drafts until the list is full", async () => {
+    const now = Date.now();
+    // Newest first: three drafts sit between the seeded invoice and two older
+    // visible ones, so a single page of two would come back almost empty.
+    await seedCustomerInvoice("INV-D1", "draft", now - 1_000);
+    await seedCustomerInvoice("INV-D2", "draft", now - 2_000);
+    await seedCustomerInvoice("INV-D3", "draft", now - 3_000);
+    await seedCustomerInvoice("INV-S1", "paid", now - 4_000);
+    await seedCustomerInvoice("INV-S2", "overdue", now - 5_000);
+    await testDb
+      .doc(`tenants/${TENANT}/invoices/INV-0001`)
+      .update({ createdAt: Timestamp.fromMillis(now) });
+
+    const items = await listCustomerInvoices(CUSTOMER_EMAIL, {
+      limit: 3,
+      pageSize: 2,
+    });
+
+    expect(items.map((item) => item.id)).toEqual(["INV-0001", "INV-S1", "INV-S2"]);
+  });
+
   it("rejects unauthenticated caller", async () => {
     await expect(
       getCustomerInvoicesHandler(fakeRequest({}, null)),
@@ -317,6 +388,18 @@ describe("getCustomerInvoiceDetail", () => {
           { tenantId: TENANT, invoiceId: "INV-9999" },
           customerAuth,
         ),
+      ),
+    ).rejects.toThrow(/Invoice not found/);
+  });
+
+  it("A-05: a draft invoice is not found, even for the matching customer", async () => {
+    await testDb
+      .doc(`tenants/${TENANT}/invoices/INV-0001`)
+      .update({ status: "draft" });
+
+    await expect(
+      getCustomerInvoiceDetailHandler(
+        fakeRequest({ tenantId: TENANT, invoiceId: "INV-0001" }, customerAuth),
       ),
     ).rejects.toThrow(/Invoice not found/);
   });

@@ -104,9 +104,13 @@ service cloud.firestore {
       }
 
       match /invoices/{invoiceId} {
+        // Customers read their own invoices once sent — never drafts (A-05).
+        // Same list as CUSTOMER_VISIBLE_INVOICE_STATUSES in
+        // functions/src/shared/customerVisibility.ts; the rules tests iterate it.
         allow read: if belongsToTenant(tenantId)
           || (emailVerified()
-              && resource.data.customer.email.lower() == authEmailLower());
+              && resource.data.customer.email.lower() == authEmailLower()
+              && resource.data.status in ['sent', 'unpaid', 'overdue', 'partial', 'paid', 'refunded', 'partially-refunded']);
         allow write: if false;
 
         // payAttempts — rate-limit ledger for createPayTokenCheckoutSession.
@@ -126,9 +130,13 @@ service cloud.firestore {
       }
 
       match /quotes/{quoteId} {
+        // Customers read their own quotes once sent — never drafts (A-05).
+        // Same list as CUSTOMER_VISIBLE_QUOTE_STATUSES in
+        // functions/src/shared/customerVisibility.ts; the rules tests iterate it.
         allow read: if belongsToTenant(tenantId)
           || (emailVerified()
-              && resource.data.customer.email.lower() == authEmailLower());
+              && resource.data.customer.email.lower() == authEmailLower()
+              && resource.data.status in ['sent', 'accepted', 'declined', 'expired', 'converted']);
         allow write: if false;
       }
 

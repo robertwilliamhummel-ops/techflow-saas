@@ -14,6 +14,7 @@ import {
 import { db } from "../shared/admin";
 import { readClaims, requireVerifiedCustomer } from "../shared/auth";
 import { lowerEmail } from "../shared/email";
+import { isCustomerVisibleInvoiceStatus } from "../shared/customerVisibility";
 
 export async function getCustomerInvoiceDetailHandler(
   request: CallableRequest,
@@ -44,6 +45,11 @@ export async function getCustomerInvoiceDetailHandler(
   // Verify caller email matches invoice's customer.email.
   if (lowerEmail(data.customer?.email) !== normalizedEmail) {
     throw new HttpsError("permission-denied", "Not your invoice.");
+  }
+
+  // A-05 — drafts aren't shown to customers; answer as if it didn't exist.
+  if (!isCustomerVisibleInvoiceStatus(data.status)) {
+    throw new HttpsError("not-found", "Invoice not found.");
   }
 
   // Strip sensitive fields — customer should not see the raw JWT token.

@@ -16,7 +16,7 @@
 | R5 Split webhook endpoints | Done — `/api/webhooks/stripe/platform` and `/connect` with separate secrets; event scopes corrected by D1 |
 | R6 Middleware Admin SDK singleton + Next version | Done — `src/proxy.ts` (module singleton; the Next 16 proxy is Node-only), Next 16.3.5; A-01 fixed 2026-09-13 |
 | R7 `deletedAt` without rule enforcement | Open — `deletedAt: null` is still written on meta and memberships; rules don't filter on it |
-| R8 Portal pagination / projection | Partial — list rows are projected, no cursor; drafts and base64 logos are returned (A-05) |
+| R8 Portal pagination / projection | Partial — list rows are projected (logo URL, never base64) and drafts are excluded (A-05); capped at 100 rows, no client-facing cursor yet |
 | P1 Null logo in PDF | Done — templates show the tenant name when `logo` is null |
 | P2 `tenantSnapshot.version` | Done (`version: 1`) |
 | P3 Cloud Run `min-instances: 1` in prod | Deploy Runbook item |

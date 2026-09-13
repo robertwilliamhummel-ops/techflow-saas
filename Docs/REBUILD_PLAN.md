@@ -77,7 +77,6 @@
 
 | Ref | Bug | Where | Fix |
 |---|---|---|---|
-| A-05 | `getCustomerInvoices` (and the customer rule branch) include drafts; list rows carry full base64 logos (callable 10 MB limit at ~20 rows) | `functions/src/portal/getCustomerInvoices.ts`, `firestore.rules` | Exclude `draft`; project a small logo URL |
 | A-06 | Emails embed the snapshot's base64 `data:` logo, which Gmail web and Outlook block | `sendInvoiceEmail.ts`, `sendQuoteEmail.ts`, `processRecurringInvoices.ts` | Copy the logo to an immutable public Storage path at snapshot time; use that https URL in email |
 | A-07 | Edge Config keys `domain:{host}` contain `:` and `.`, but keys must match `^[\w-]+$` — every write fails silently | `src/proxy.ts`, `functions/src/domain/setupCustomDomain.ts` | Encode the host into a valid key in one shared helper |
 | A-10 | No callables to create/update/delete customers or pause/resume/cancel recurring templates, while rules block client writes | `functions/src/index.ts`, `firestore.rules` | `upsertCustomer`, `deleteCustomer`, `updateRecurringInvoice` |
@@ -96,6 +95,8 @@ Fixed: A-02 (2026-09-13) — checkout saved the PaymentIntent id (`pi_…`) as `
 Fixed: A-08 (2026-09-13) — a sent invoice could be edited without invalidating its pay link, and the webhook marked invoices paid without checking what Stripe charged. `updateInvoice` (now transactional) re-issues the pay link when a sent invoice's total or customer email changes and returns `payLinkRegenerated`. `checkout.session.completed` records a payment in one transaction only if the invoice is payable, the link version matches (C2), and base, surcharge, `amount_total`, and currency all match; otherwise it refunds and emails owners. The same pass closed two adjacent gaps: a second payment on an already-paid invoice (two open checkouts) was silently kept, and a redelivered checkout event could flip a refunded invoice back to paid. Covered by `handlers.test.ts`, `functions/test/callables/invoices.test.ts`, and `paymentIncident.test.ts`.
 
 Fixed: A-04 (2026-09-13) — `processRecurringInvoices` queries `collectionGroup('recurringInvoices')` with `status ==` and `nextRunAt <=` but had no composite index, so it would fail on its first production run (the emulator never enforces indexes). Added the COLLECTION_GROUP index (`status` ASC, `nextRunAt` ASC). An audit of every query found no other gap. The three TTL policies (`stripeEvents`, `payAttempts`, `emailSends` on `expireAt`) moved from a manual runbook step into `firestore.indexes.json` field overrides (`ttl: true`, indexing disabled per Google's hotspot guidance), so the indexes deploy creates them. `functions/test/shared/firestoreIndexes.test.ts` pins each query and each `expireAt` writer to its index or TTL entry.
+
+Fixed: A-05 (2026-09-13) — customers could see draft invoices through `getCustomerInvoices`, `getCustomerInvoiceDetail`, and the Firestore customer branch, and list rows carried each invoice's full base64 logo (a callable response is capped at 10 MB). Customer-visible statuses now live in `functions/src/shared/customerVisibility.ts` as allow-lists (drafts and any future status stay hidden until listed); `firestore.rules` mirrors them for invoices and quotes. The list pages through the existing `(customer.email, createdAt)` index and filters while paging — no new composite index, still fills to 100 rows, at most 10 pages scanned — and returns `tenantBranding.logoUrl` instead of the base64 logo. The detail callable answers not-found for drafts. Covered by the rules tests (every visible status, drafts denied, members still read drafts) and `customerFacing.test.ts`.
 
 ### Platform deadlines
 
@@ -498,14 +499,14 @@ Two identity patterns are enforced:
 | `users/{uid}` | the user | none |
 | `userTenantMemberships/{uid}_{tenantId}` | the user (doc id prefix match) | none |
 | `tenants/{t}/meta/*`, `entitlements/*`, `counters/*`, `customers/*`, `recurringInvoices/*`, `invitations/*` | members of tenant `t` | none |
-| `tenants/{t}/invoices/{id}`, `tenants/{t}/quotes/{id}` | members of `t`, **or** an `email_verified` user whose lowercased email equals `customer.email` | none |
+| `tenants/{t}/invoices/{id}`, `tenants/{t}/quotes/{id}` | members of `t`, **or** an `email_verified` user whose lowercased email equals `customer.email` and the document is in a customer-visible status (never `draft`, A-05) | none |
 | `tenants/{t}/invoices/{id}/paymentIncidents/*` | members of `t` | none |
 | `tenants/{t}/invoices/{id}/payAttempts/*` | none | none |
 | `customDomains/*`, `stripeAccounts/*`, `stripeEvents/*`, `emailSends/*` | none | none |
 | `platformAdmins/*` | `platformAdmin` claim | none |
 | anything else | none | none |
 
-Open issues: the customer branch still matches drafts (A-05).
+Customer-visible statuses (A-05): invoices `sent`, `unpaid`, `overdue`, `partial`, `paid`, `refunded`, `partially-refunded`; quotes `sent`, `accepted`, `declined`, `expired`, `converted`. The rules repeat the allow-lists in `functions/src/shared/customerVisibility.ts`, and the rules tests iterate those constants.
 
 **Storage (`storage.rules`, 18 emulator tests in `functions/test/rules/storage.test.ts`):**
 
@@ -554,6 +555,8 @@ The actual syntax for query-constraint checks in Firestore rules has some quirks
 A simpler fallback if the `request.query` pattern proves fragile: have a Cloud Function `getCustomerInvoices()` that runs with admin SDK, verifies the caller's auth email, and returns the list. Trades rule-level security for function-level security, but it works and is easier to reason about.
 
 **Decision deferred to Phase 1 implementation:** start with the Cloud Function approach (`getCustomerInvoices`), migrate to `collectionGroup` + rules if the function hits latency issues.
+
+**As built:** the Cloud Function approach. `getCustomerInvoices` pages through the `(customer.email, createdAt desc)` collection-group index, keeps only customer-visible statuses (drafts are never listed, A-05), stops at 100 rows with at most 10 pages scanned, and returns each row's `tenantSnapshot.logoUrl`, never the inlined base64 logo. `getCustomerInvoiceDetail` answers not-found for drafts. No client-side collection-group rule exists.
 
 ### Data migration
 No migration needed. Existing Firestore data is 73 test invoices — discarded. Fresh start in the new Firebase project.

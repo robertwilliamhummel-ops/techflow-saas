@@ -2,12 +2,27 @@
 //
 // Customer-facing: requires email_verified, NO tenantId claim.
 // Returns invoices across all tenants where customer.email matches the
-// caller's verified email. Projected fields for list display (R8 guidance).
+// caller's verified email, newest first, projected for list display (R8).
+//
+// A-05: drafts are never listed — only customer-visible statuses. The filter is
+// applied while paging through the (customer.email, createdAt) collection-group
+// index, so no further composite index is needed and the list still fills to
+// its limit when a customer also has drafts. Rows carry the snapshot's logo
+// URL, never the inlined base64 logo: a callable response is capped at 10 MB,
+// which a couple of dozen inlined logos would reach.
 
 import { onCall, type CallableRequest } from "firebase-functions/v2/https";
 import { db } from "../shared/admin";
 import { readClaims, requireVerifiedCustomer } from "../shared/auth";
 import { lowerEmail } from "../shared/email";
+import { isCustomerVisibleInvoiceStatus } from "../shared/customerVisibility";
+
+export const CUSTOMER_INVOICE_LIST_LIMIT = 100;
+
+// Bounds the documents scanned for one list (pages × page size), so a customer
+// with an unusual number of hidden documents can't turn one call into
+// thousands of reads.
+const MAX_PAGES = 10;
 
 export interface CustomerInvoiceListItem {
   id: string;
@@ -20,9 +35,74 @@ export interface CustomerInvoiceListItem {
   issueDate: string;
   tenantBranding: {
     name: string;
-    logo: string | null;
+    logoUrl: string | null;
     primaryColor: string;
   };
+}
+
+function toListItem(
+  doc: FirebaseFirestore.QueryDocumentSnapshot,
+): CustomerInvoiceListItem {
+  const d = doc.data();
+  // tenants/{tenantId}/invoices/{id}
+  const tenantId = doc.ref.path.split("/")[1];
+  return {
+    id: doc.id,
+    path: doc.ref.path,
+    tenantId,
+    customer: {
+      name: d.customer?.name ?? "",
+      email: d.customer?.email ?? "",
+    },
+    totals: {
+      subtotal: d.totals?.subtotal ?? 0,
+      taxAmount: d.totals?.taxAmount ?? 0,
+      total: d.totals?.total ?? 0,
+    },
+    status: d.status,
+    dueDate: d.dueDate ?? "",
+    issueDate: d.issueDate ?? "",
+    tenantBranding: {
+      name: d.tenantSnapshot?.name ?? "",
+      logoUrl:
+        typeof d.tenantSnapshot?.logoUrl === "string"
+          ? d.tenantSnapshot.logoUrl
+          : null,
+      primaryColor: d.tenantSnapshot?.primaryColor ?? "#667eea",
+    },
+  };
+}
+
+export async function listCustomerInvoices(
+  email: string,
+  options: { limit?: number; pageSize?: number } = {},
+): Promise<CustomerInvoiceListItem[]> {
+  const limit = options.limit ?? CUSTOMER_INVOICE_LIST_LIMIT;
+  const pageSize = options.pageSize ?? limit;
+
+  // C2 — invoices store a lowercased customer.email.
+  const base = db
+    .collectionGroup("invoices")
+    .where("customer.email", "==", lowerEmail(email))
+    .orderBy("createdAt", "desc");
+
+  const items: CustomerInvoiceListItem[] = [];
+  let cursor: FirebaseFirestore.QueryDocumentSnapshot | undefined;
+
+  for (let page = 0; page < MAX_PAGES && items.length < limit; page++) {
+    const snap = await (cursor ? base.startAfter(cursor) : base)
+      .limit(pageSize)
+      .get();
+    for (const doc of snap.docs) {
+      if (!isCustomerVisibleInvoiceStatus(doc.get("status"))) continue;
+      items.push(toListItem(doc));
+      if (items.length === limit) break;
+    }
+    if (snap.size < pageSize) break;
+    cursor = snap.docs[snap.docs.length - 1];
+  }
+
+  return items;
 }
 
 export async function getCustomerInvoicesHandler(
@@ -30,48 +110,7 @@ export async function getCustomerInvoicesHandler(
 ): Promise<{ invoices: CustomerInvoiceListItem[] }> {
   const claims = readClaims(request);
   const { email } = requireVerifiedCustomer(claims);
-
-  // C2 — lowercase before querying. Invoices store lowercased customer.email.
-  const normalizedEmail = lowerEmail(email);
-
-  const snap = await db
-    .collectionGroup("invoices")
-    .where("customer.email", "==", normalizedEmail)
-    .orderBy("createdAt", "desc")
-    .limit(100)
-    .get();
-
-  const invoices: CustomerInvoiceListItem[] = snap.docs.map((doc) => {
-    const d = doc.data();
-    // Extract tenantId from the document path: tenants/{tenantId}/invoices/{id}
-    const pathParts = doc.ref.path.split("/");
-    const tenantId = pathParts[1];
-
-    return {
-      id: doc.id,
-      path: doc.ref.path,
-      tenantId,
-      customer: {
-        name: d.customer?.name ?? "",
-        email: d.customer?.email ?? "",
-      },
-      totals: {
-        subtotal: d.totals?.subtotal ?? 0,
-        taxAmount: d.totals?.taxAmount ?? 0,
-        total: d.totals?.total ?? 0,
-      },
-      status: d.status ?? "draft",
-      dueDate: d.dueDate ?? "",
-      issueDate: d.issueDate ?? "",
-      tenantBranding: {
-        name: d.tenantSnapshot?.name ?? "",
-        logo: d.tenantSnapshot?.logo ?? null,
-        primaryColor: d.tenantSnapshot?.primaryColor ?? "#667eea",
-      },
-    };
-  });
-
-  return { invoices };
+  return { invoices: await listCustomerInvoices(email) };
 }
 
 export const getCustomerInvoices = onCall(getCustomerInvoicesHandler);
