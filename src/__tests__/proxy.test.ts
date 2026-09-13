@@ -104,7 +104,8 @@ describe("proxy host routing", () => {
   it("lowercases the host before lookup", async () => {
     edgeConfigGet.mockResolvedValueOnce("t1");
     await proxy(request("Invoices.SmithPlumbing.ca"));
-    expect(edgeConfigGet.mock.calls[0][0]).toContain("invoices.smithplumbing.ca");
+    // A-07: a valid Global Config key (^[\w-]+$), shared with setupCustomDomain.
+    expect(edgeConfigGet.mock.calls[0][0]).toBe("domain_invoices_smithplumbing_ca");
   });
 
   it("returns 404 for an unknown custom domain", async () => {

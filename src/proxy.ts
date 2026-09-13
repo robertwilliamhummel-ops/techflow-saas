@@ -3,6 +3,7 @@ import { initializeApp, getApps, cert } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 
 import { edgeConfigGet, edgeConfigPut } from "@/lib/edgeConfig";
+import { domainCacheKey } from "@/lib/domainCacheKey";
 
 // ---------------------------------------------------------------------------
 // Custom-domain proxy (Phase 5 / Bundle E; Next 16 renamed `middleware` to `proxy`)
@@ -77,12 +78,36 @@ function getAdminDbForProxy() {
   }
 }
 
-async function resolveTenantId(host: string): Promise<string | null> {
-  // Edge Config is the authoritative hot lookup (per Phase 5 cache spec).
-  const cached = await edgeConfigGet(`domain:${host}`);
-  if (cached) return cached;
+// Self-heal writes are billed and rate-limited (Global Config allows 100 writes
+// an hour on Pro), and a new entry takes up to 10 seconds to propagate, so each
+// instance re-populates a given host at most once per window. The map is capped
+// so an unusual number of distinct hosts can't grow memory without bound.
+const HEAL_INTERVAL_MS = 10 * 60 * 1000;
+const MAX_TRACKED_HOSTS = 1000;
+const lastHealAt = new Map<string, number>();
 
-  // Cache miss → single Firestore read, then re-populate Edge Config so the
+function shouldHeal(cacheKey: string, now: number = Date.now()): boolean {
+  const last = lastHealAt.get(cacheKey);
+  if (last !== undefined && now - last < HEAL_INTERVAL_MS) return false;
+  lastHealAt.delete(cacheKey);
+  lastHealAt.set(cacheKey, now);
+  if (lastHealAt.size > MAX_TRACKED_HOSTS) {
+    const oldest = lastHealAt.keys().next().value;
+    if (oldest !== undefined) lastHealAt.delete(oldest);
+  }
+  return true;
+}
+
+async function resolveTenantId(host: string): Promise<string | null> {
+  // Global Config is the hot lookup (per Phase 5 cache spec). Hosts that can't
+  // be a valid cache key (A-07) go straight to Firestore.
+  const cacheKey = domainCacheKey(host);
+  if (cacheKey) {
+    const cached = await edgeConfigGet(cacheKey);
+    if (cached) return cached;
+  }
+
+  // Cache miss → single Firestore read, then re-populate the cache so the
   // next request is hot. Stored at top-level `customDomains/{domain}`.
   const adminDb = getAdminDbForProxy();
   if (!adminDb) return null;
@@ -92,7 +117,9 @@ async function resolveTenantId(host: string): Promise<string | null> {
     const tenantId = (snap.data() as { tenantId?: string } | undefined)?.tenantId;
     if (!tenantId) return null;
     // Fire-and-forget — don't block the user response on the cache write.
-    void edgeConfigPut(`domain:${host}`, tenantId);
+    if (cacheKey && shouldHeal(cacheKey)) {
+      void edgeConfigPut(cacheKey, tenantId);
+    }
     return tenantId;
   } catch {
     return null;

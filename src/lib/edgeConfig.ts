@@ -1,48 +1,55 @@
 import "server-only";
+import { createClient } from "@vercel/global-config";
 
-// Edge Config wrapper. Used by the proxy (src/proxy.ts) for hot-path domain→tenantId lookup
-// and by Cloud Functions for write-side cache population. Reads use the
-// connection string in EDGE_CONFIG (Vercel-managed). Writes go through the
-// Vercel REST API and require both EDGE_CONFIG_ID + VERCEL_API_TOKEN.
+// Global Config wrapper — the domain → tenantId cache the proxy reads (A-07).
 //
-// All helpers tolerate missing env vars and return null/false so local dev
-// without Vercel creds still boots (the proxy falls back to Firestore).
+// Vercel renamed Edge Config to Global Config in 2026. The store is the same,
+// and the legacy EDGE_CONFIG variable, edge-config.vercel.com connection
+// strings and /v1/edge-config API keep working, but a store connected to a
+// project now creates a GLOBAL_CONFIG variable instead.
+//
+// Reads use the SDK (Vercel applies its read optimizations only to SDK reads)
+// with GLOBAL_CONFIG, falling back to EDGE_CONFIG. Writes use the REST API and
+// need EDGE_CONFIG_ID + VERCEL_API_TOKEN (+ VERCEL_TEAM_ID for team-owned
+// stores). Every helper tolerates missing configuration and failures and
+// returns null/false, so the proxy falls back to Firestore.
 
-const EDGE_CONFIG = process.env.EDGE_CONFIG;
-const EDGE_CONFIG_ID = process.env.EDGE_CONFIG_ID;
-const VERCEL_API_TOKEN = process.env.VERCEL_API_TOKEN;
-const VERCEL_TEAM_ID = process.env.VERCEL_TEAM_ID; // optional
+type GlobalConfigClient = ReturnType<typeof createClient>;
+
+let cachedClient: {
+  connectionString: string;
+  client: GlobalConfigClient;
+} | null = null;
+
+function readClient(): GlobalConfigClient | null {
+  const connectionString =
+    process.env.GLOBAL_CONFIG || process.env.EDGE_CONFIG;
+  if (!connectionString) return null;
+  if (cachedClient?.connectionString !== connectionString) {
+    cachedClient = { connectionString, client: createClient(connectionString) };
+  }
+  return cachedClient.client;
+}
 
 interface EdgeConfigItem {
   key: string;
   value: string;
 }
 
-/**
- * Read a single key. Returns the value or null if not found or if Edge Config
- * is not configured. Connection string format:
- *   https://edge-config.vercel.com/<id>?token=<read-token>
- */
+/** Read a single key. Null when missing, not a string, unconfigured, or on error. */
 export async function edgeConfigGet(key: string): Promise<string | null> {
-  if (!EDGE_CONFIG) return null;
-  const safeKey = encodeURIComponent(key);
-  // Append item path before the query string.
-  const url = EDGE_CONFIG.includes("?")
-    ? EDGE_CONFIG.replace("?", `/item/${safeKey}?`)
-    : `${EDGE_CONFIG}/item/${safeKey}`;
+  const client = readClient();
+  if (!client) return null;
   try {
-    const res = await fetch(url, { cache: "no-store" });
-    if (res.status === 404) return null;
-    if (!res.ok) return null;
-    const data = (await res.json()) as unknown;
-    return typeof data === "string" ? data : null;
+    const value: unknown = await client.get(key);
+    return typeof value === "string" ? value : null;
   } catch {
     return null;
   }
 }
 
 /**
- * Upsert a single key. Used by setupCustomDomain. Returns true on success.
+ * Upsert a single key. Used by the proxy's self-heal on a cache miss.
  * No-ops (returns false) if write credentials are missing.
  */
 export async function edgeConfigPut(
@@ -52,9 +59,7 @@ export async function edgeConfigPut(
   return edgeConfigBatch([{ operation: "upsert", key, value }]);
 }
 
-/**
- * Delete a single key. Used when a custom domain is removed.
- */
+/** Delete a single key. */
 export async function edgeConfigDelete(key: string): Promise<boolean> {
   return edgeConfigBatch([{ operation: "delete", key }]);
 }
@@ -66,14 +71,17 @@ interface BatchOp {
 }
 
 async function edgeConfigBatch(items: BatchOp[]): Promise<boolean> {
-  if (!EDGE_CONFIG_ID || !VERCEL_API_TOKEN) return false;
-  const team = VERCEL_TEAM_ID ? `?teamId=${VERCEL_TEAM_ID}` : "";
-  const url = `https://api.vercel.com/v1/edge-config/${EDGE_CONFIG_ID}/items${team}`;
+  const storeId = process.env.EDGE_CONFIG_ID;
+  const apiToken = process.env.VERCEL_API_TOKEN;
+  if (!storeId || !apiToken) return false;
+  const teamId = process.env.VERCEL_TEAM_ID;
+  const team = teamId ? `?teamId=${encodeURIComponent(teamId)}` : "";
+  const url = `https://api.vercel.com/v1/global-config/${encodeURIComponent(storeId)}/items${team}`;
   try {
     const res = await fetch(url, {
       method: "PATCH",
       headers: {
-        Authorization: `Bearer ${VERCEL_API_TOKEN}`,
+        Authorization: `Bearer ${apiToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ items }),
@@ -84,17 +92,16 @@ async function edgeConfigBatch(items: BatchOp[]): Promise<boolean> {
   }
 }
 
-/** Used in dev/diagnostics. Lists everything in the config. */
+/** Used in dev/diagnostics. Lists everything in the store. */
 export async function edgeConfigList(): Promise<EdgeConfigItem[]> {
-  if (!EDGE_CONFIG) return [];
-  const url = EDGE_CONFIG.includes("?")
-    ? EDGE_CONFIG.replace("?", "/items?")
-    : `${EDGE_CONFIG}/items`;
+  const client = readClient();
+  if (!client) return [];
   try {
-    const res = await fetch(url, { cache: "no-store" });
-    if (!res.ok) return [];
-    const data = (await res.json()) as EdgeConfigItem[];
-    return Array.isArray(data) ? data : [];
+    const all = (await client.getAll()) as Record<string, unknown> | undefined;
+    return Object.entries(all ?? {}).map(([key, value]) => ({
+      key,
+      value: typeof value === "string" ? value : JSON.stringify(value),
+    }));
   } catch {
     return [];
   }

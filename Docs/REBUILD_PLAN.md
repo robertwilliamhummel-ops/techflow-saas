@@ -68,7 +68,7 @@
 | 2 Cloud Functions | Mostly done — 246 callable, 55 email, 54 shared tests | `getCustomerQuotes` (P6), MagicLinkSignIn + PaymentReceipt templates, App Check + send rate limits (R4), Sentry in functions |
 | 3 Frontend architecture | Contexts, guards, auth recovery done | 12 placeholder pages: `/dashboard`, `/invoices`, `/invoices/new`, `/invoices/[id]`, `/customers`, `/quotes/[id]`, `/portal`, `/portal/invoices/[id]`, `/portal/quotes/[id]`, `/pay/[token]`, `/pay/[token]/success`, `/pay/[token]/cancelled`; dashboard navigation |
 | 4 Stripe Connect | Backend done (D1 applied); webhook money bugs A-02, A-03, A-08 fixed | Public pay page UI |
-| 5 Onboarding & domains | Signup, login, settings, team, domain, billing UI done; host-routing proxy loads | Customer magic-link sign-in (portal login is password-only today); A-07 |
+| 5 Onboarding & domains | Signup, login, settings, team, domain, billing UI done; host-routing proxy loads | Customer magic-link sign-in (portal login is password-only today) |
 | 6 PDF | Code done — 222 tests; Node 24 image (D6) | Deploy (the Docker image has not been built yet) |
 | 7 Testing & first onboarding | Bundles A–E done | Test matrix, staging project, backup restore drill, first onboarding |
 | Deploy | Nothing deployed | "Environment Strategy & Deploy Runbook" |
@@ -77,7 +77,6 @@
 
 | Ref | Bug | Where | Fix |
 |---|---|---|---|
-| A-07 | Edge Config keys `domain:{host}` contain `:` and `.`, but keys must match `^[\w-]+$` — every write fails silently | `src/proxy.ts`, `functions/src/domain/setupCustomDomain.ts` | Encode the host into a valid key in one shared helper |
 | A-10 | No callables to create/update/delete customers or pause/resume/cancel recurring templates, while rules block client writes | `functions/src/index.ts`, `firestore.rules` | `upsertCustomer`, `deleteCustomer`, `updateRecurringInvoice` |
 | A-12 | Smaller: `useAuth.ts` types roles as `member`/`platform_admin`; `deleteInvoice` hard-deletes sent invoices (should become `void`); `createQuote` prefix only maps `INV→QT`; the `onSignup` membership check isn't transactional | various | — |
 
@@ -98,6 +97,8 @@ Fixed: A-04 (2026-09-13) — `processRecurringInvoices` queries `collectionGroup
 Fixed: A-05 (2026-09-13) — customers could see draft invoices through `getCustomerInvoices`, `getCustomerInvoiceDetail`, and the Firestore customer branch, and list rows carried each invoice's full base64 logo (a callable response is capped at 10 MB). Customer-visible statuses now live in `functions/src/shared/customerVisibility.ts` as allow-lists (drafts and any future status stay hidden until listed); `firestore.rules` mirrors them for invoices and quotes. The list pages through the existing `(customer.email, createdAt)` index and filters while paging — no new composite index, still fills to 100 rows, at most 10 pages scanned — and returns `tenantBranding.logoUrl` instead of the base64 logo. The detail callable answers not-found for drafts. Covered by the rules tests (every visible status, drafts denied, members still read drafts) and `customerFacing.test.ts`.
 
 Fixed: A-06 (2026-09-13) — invoice, quote, and recurring emails embedded the snapshot's base64 logo (up to 500 KB). Gmail clips any email over 102 KB and embedded base64 images are the most common cause, and support for `data:` images varies by client. `functions/src/shared/logo.ts` now freezes the logo two ways at creation (`createInvoice`, `createQuote`, `convertQuoteToInvoice`, `processRecurringInvoices`): the base64 `logo` for PDFs, plus an immutable copy at `tenants/{t}/snapshots/logos/{sha256}.{ext}` whose token URL is stored as `logoUrl` with `logoContentType`. The path comes from the bytes and the download token from the tenant and hash, so a copy is never overwritten and concurrent creates can't rotate a token another document stored. Emails use `emailLogoUrl()`: the hosted copy for PNG, JPEG, GIF, and WebP; the business name for SVG (Gmail's apps don't show SVG for Google accounts). Logo URLs that don't return an image are now rejected. Covered by `functions/test/callables/logoSnapshot.test.ts` (the URL serves the bytes without auth, stable across documents, email HTML never contains `data:image`) and `inlineLogo.test.ts`.
+
+Fixed: A-07 (2026-09-13) — the custom-domain cache keys `domain:{host}` contained `:` and `.`, but Vercel only accepts keys matching `^[\w-]+$` (≤ 256 chars), so every write was rejected and every portal request on a custom domain hit Firestore. `domainCacheKey()` (identical in `src/lib` and `functions/src/shared`, pinned by a test that imports both) encodes the host as `domain_` + host with `.` → `_` — hostnames can't contain `_`, so keys can't collide — and returns null for anything that isn't a plain hostname or would exceed 256 chars, which then skips the cache. Same pass: Vercel renamed Edge Config to **Global Config** (same store; old names keep working, but connecting a store now creates `GLOBAL_CONFIG`), so the proxy reads through the `@vercel/global-config` SDK with `GLOBAL_CONFIG` falling back to `EDGE_CONFIG`, writes use `/v1/global-config`, and the proxy's self-heal write is limited to once per host per instance per 10 minutes (writes are billed and capped at 100/hour on Pro). Covered by `functions/test/shared/domainCacheKey.test.ts`, `src/lib/__tests__/edgeConfig.test.ts`, `src/__tests__/proxySelfHeal.test.ts`, and the updated proxy and `setupCustomDomain` tests.
 
 ### Platform deadlines
 
@@ -1860,11 +1861,11 @@ Two domain tiers per tenant:
 **Implementation:**
 
 - **`customDomain` field in tenant meta.** Set by Reggie (platform admin) during onboarding or by tenant in `/settings` (if on a plan that includes custom domains — feature-gated via `entitlements`).
-- **`customDomains/{domain}` Firestore collection.** Reverse lookup: `domain → tenantId`. Written by the `setupCustomDomain` callable (owner/admin, `customDomain` feature) and removed by `removeCustomDomain`. The middleware reads it only on an Edge Config miss.
+- **`customDomains/{domain}` Firestore collection.** Reverse lookup: `domain → tenantId`. Written by the `setupCustomDomain` callable (owner/admin, `customDomain` feature) and removed by `removeCustomDomain`. The proxy reads it only on a Global Config (formerly Edge Config) cache miss.
 - **Vercel domain provisioning.** Cloud Function calls the [Vercel Domains API](https://vercel.com/docs/rest-api/endpoints/domains) to add/remove the domain from the Vercel project when `customDomain` is set/changed.
 - **Next.js proxy** (`src/proxy.ts` — Next 16's name for middleware; it always runs on the Node.js runtime):
   1. On every request, read `Host` header and **delete any incoming `x-tenant-id`** — portal layouts trust that header, so a client-supplied value must never reach them.
-  2. If host is not `portal.techflowsolutions.ca` (the generic domain; also `localhost`, `127.0.0.1`, `*.vercel.app`), look up `tenantId` (Edge Config, then `customDomains/{host}`).
+  2. If host is not `portal.techflowsolutions.ca` (the generic domain; also `localhost`, `127.0.0.1`, `*.vercel.app`), look up `tenantId` (Global Config key from `domainCacheKey(host)`, then `customDomains/{host}`).
   3. If found, inject `x-tenant-id` into the forwarded request headers so the login page and portal can load that tenant's branding.
   4. If not found, 404.
 
@@ -1898,11 +1899,11 @@ Two domain tiers per tenant:
   Even with Node.js runtime and the `config.matcher` above, the naive implementation runs one Firestore read per HTML page view per custom domain. Cold-path Firestore reads are 100–300ms — that's latency a user feels before the login page starts rendering. At 50 tenants × 1000 page views/day, it's also ~50k Firestore reads/day purely for domain resolution, when the data changes maybe once a month.
 
   **Required — Vercel Edge Config as the authoritative lookup, Firestore as the write-side source:**
-  1. The `setupCustomDomain` Cloud Function (the same one that manages Vercel Domains API + Firebase authorized domains) also writes `{ [domain]: tenantId }` to Vercel Edge Config via the Edge Config API. Edge Config keys must match `^[\w-]+$`, so the host has to be encoded — the current `domain:{host}` key is invalid (A-07).
-  2. Middleware reads from Edge Config (`get(host)` from `@vercel/edge-config`) — sub-50ms globally replicated, no Firestore read on the hot path.
+  1. The `setupCustomDomain` Cloud Function (the same one that manages Vercel Domains API + Firebase authorized domains) also writes `{ [domainCacheKey(domain)]: tenantId }` to Vercel Global Config (Vercel's 2026 name for Edge Config) via `PATCH /v1/global-config/{id}/items`. Keys must match `^[\w-]+$` (≤ 256 chars), so `domainCacheKey` encodes the host as `domain_` + host with `.` → `_` (A-07).
+  2. The proxy reads through the `@vercel/global-config` SDK (`createClient(GLOBAL_CONFIG || EDGE_CONFIG).get(key)`) — Vercel only applies its read optimizations to SDK reads — so there's no Firestore read on the hot path.
   3. Firestore `customDomains/{domain}` remains the durable source of truth (for audit + recovery if Edge Config is ever inconsistent), and is what the Cloud Function updates first.
   4. Eventual-consistency lag (~seconds) between "tenant saves custom domain" and "domain resolves in middleware" is acceptable — adding a custom domain is already a multi-minute DNS propagation operation; a few seconds of cache lag is invisible.
-  5. Miss path: if Edge Config returns nothing, fall back to a single Firestore read and **re-populate Edge Config on the spot** so only the first request pays the cost.
+  5. Miss path: if the cache returns nothing, fall back to a single Firestore read and **re-populate the cache on the spot**. Writes are billed and capped (100/hour on Pro) and take up to 10 s to propagate, so each proxy instance re-populates a given host at most once per 10 minutes.
 
   This is Phase 5 scope, not a later optimization — building the middleware without it means ripping it out and redoing it under load.
 
@@ -1914,7 +1915,7 @@ Two domain tiers per tenant:
   Correct implementation: make `/portal/login` a **React Server Component** (or use `getServerSideProps` if using the pages router — but we're on App Router). In the server component, read the resolved `tenantId` from the middleware-injected header, then call `adminDb.doc(\`tenants/${tenantId}/meta\`).get()` using the Admin SDK (which bypasses rules because it runs with service-account credentials). Pass the branding values as props to the client-side login form.
 
   Do NOT add a "public read" branch to the Firestore rules for `meta` to work around this. That leaks every tenant's branding + address + business number to anyone who can guess a tenantId. Keep rules strict; use Admin SDK on the server for legitimate public-facing reads.
-- **Firebase Auth authorized domains (automated).** Each custom domain must be added to Firebase Auth's authorized domains list for magic-link redirects to work. **This MUST be automated** — at 50 clients, manual addition is not viable. The same Cloud Function that calls the Vercel Domains API must also call the Firebase Auth Admin SDK (`admin.auth().projectConfigManager().updateProjectConfig()` or the Identity Toolkit REST API) to add the domain to the authorized list. When a custom domain is removed, the function must also remove it from the authorized domains list. This is a single Cloud Function that does four things atomically: (1) add/remove Vercel domain, (2) add/remove Firebase Auth authorized domain, (3) write/delete `customDomains/{domain}` doc, (4) write/delete the `{ [domain]: tenantId }` entry in Vercel Edge Config for middleware caching.
+- **Firebase Auth authorized domains (automated).** Each custom domain must be added to Firebase Auth's authorized domains list for magic-link redirects to work. **This MUST be automated** — at 50 clients, manual addition is not viable. The same Cloud Function that calls the Vercel Domains API must also call the Firebase Auth Admin SDK (`admin.auth().projectConfigManager().updateProjectConfig()` or the Identity Toolkit REST API) to add the domain to the authorized list. When a custom domain is removed, the function must also remove it from the authorized domains list. This is a single Cloud Function that does four things atomically: (1) add/remove Vercel domain, (2) add/remove Firebase Auth authorized domain, (3) write/delete `customDomains/{domain}` doc, (4) write/delete the `{ [domain]: tenantId }` entry in Vercel Global Config (key from `domainCacheKey`) for the proxy's cache.
 
 - **Domain verification state surfaced in `/settings/domain`.** Adding a custom domain isn't instant — DNS propagation (5 min to 48 hrs) and SSL issuance (Vercel's Let's Encrypt flow, usually <10 min but sometimes longer) each have their own state. If we don't show this, contractors enter a domain, see "saved," and then email support when it doesn't work an hour later.
   - Store `customDomainStatus` in tenant meta: `{ stage: 'unverified' | 'dns_pending' | 'ssl_pending' | 'verified' | 'error', message, checkedAt }`.
@@ -2425,7 +2426,7 @@ Not MVP-critical. Shape is reserved so it can be added later without schema migr
 | `STRIPE_SECRET_KEY` | webhook auto-refunds |
 | `STRIPE_PLATFORM_WEBHOOK_SECRET`, `STRIPE_CONNECT_WEBHOOK_SECRET` | the two webhook routes |
 | `PDF_SERVICE_URL`, `PDF_SERVICE_API_KEY` | `/api/pdf/*` proxy |
-| `EDGE_CONFIG` (read connection string), `EDGE_CONFIG_ID`, `VERCEL_API_TOKEN`, `VERCEL_TEAM_ID` | custom-domain cache |
+| `GLOBAL_CONFIG` (read connection string, created when the store is connected; the legacy `EDGE_CONFIG` also works), `EDGE_CONFIG_ID` (store id), `VERCEL_API_TOKEN`, `VERCEL_TEAM_ID` | custom-domain cache — SDK reads, REST writes on `/v1/global-config` |
 | `PORTAL_GENERIC_HOST` | optional; default `portal.techflowsolutions.ca` |
 
 The Next.js app sends no email and needs no AWS credentials (D5).
@@ -2475,7 +2476,7 @@ Vercel env vars and Cloud Functions secrets are parallel systems — both must b
 
 **3. Vercel**
 - One project (marketing site + portal) with `vercel.json` regions `yul1`, the env vars above per scope, and the `portal.techflowsolutions.ca` domain (Cloudflare DNS record set to DNS-only, not proxied).
-- Create and connect an Edge Config store (`EDGE_CONFIG`); create a token with Domains and Edge Config scopes for the functions secrets.
+- Create a Global Config store (Vercel's new name for Edge Config) and connect it to the project, which adds `GLOBAL_CONFIG`; put the store id in `EDGE_CONFIG_ID` (Vercel env and functions secret). Create an API token with Domains and Global Config access for `VERCEL_API_TOKEN`.
 
 **4. Stripe** (test mode for dev and staging, live for prod)
 - Complete the Connect platform profile (D1 accounts: Stripe-liable, full dashboard).

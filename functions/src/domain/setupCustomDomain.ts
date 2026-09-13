@@ -19,6 +19,7 @@ import {
   addAuthorizedDomain,
   removeAuthorizedDomain,
 } from "../shared/identityToolkit";
+import { domainCacheKey } from "../shared/domainCacheKey";
 
 interface Input {
   domain?: unknown;
@@ -146,15 +147,20 @@ export async function setupCustomDomainHandler(
     throw new HttpsError("internal", "Failed to record custom domain.");
   }
 
-  // Step 4: Edge Config write. Best-effort — middleware will fall back to
-  // Firestore on miss and self-heal, so a failure here isn't fatal.
-  try {
-    await edgeConfigUpsert(`domain:${domain}`, tenantId);
-  } catch (err) {
-    logger.warn("setupCustomDomain: edge config write failed (non-fatal)", {
-      domain,
-      err,
-    });
+  // Step 4: Global Config cache write. Best-effort — the proxy falls back to
+  // Firestore on a miss and self-heals, so a failure here isn't fatal. The key
+  // must be a valid Global Config key (A-07); a host that can't be encoded is
+  // simply served from Firestore.
+  const cacheKey = domainCacheKey(domain);
+  if (cacheKey) {
+    try {
+      await edgeConfigUpsert(cacheKey, tenantId);
+    } catch (err) {
+      logger.warn("setupCustomDomain: cache write failed (non-fatal)", {
+        domain,
+        err,
+      });
+    }
   }
 
   // Detach the previous domain (if any). Best-effort — if any sub-step fails
@@ -172,10 +178,11 @@ export async function setupCustomDomainHandler(
 }
 
 async function detachDomain(domain: string): Promise<void> {
+  const cacheKey = domainCacheKey(domain);
   await Promise.allSettled([
     vercelRemoveDomain(domain),
     removeAuthorizedDomain(domain),
-    edgeConfigDelete(`domain:${domain}`),
+    cacheKey ? edgeConfigDelete(cacheKey) : Promise.resolve(),
     db.doc(`customDomains/${domain}`).delete(),
   ]);
 }

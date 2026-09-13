@@ -13,7 +13,7 @@
 - Stripe Connect with Standard-equivalent controller properties (full Stripe Dashboard, Stripe-liable), direct charges
 - Amazon SES + React Email for transactional mail, sent only from Cloud Functions via `functions/src/emails/send.ts`
 - Tailwind + shadcn/ui + Radix, semantic CSS-variable tokens (Phase 1.5)
-- Vercel Edge Config for domain→tenantId cache
+- Vercel Global Config (formerly Edge Config) for the domain→tenantId cache — `@vercel/global-config` SDK reads, keys from `domainCacheKey`
 
 ## Core principle
 Zero-trust multi-tenancy. `tenantId` in Firebase Auth custom claims is the authoritative boundary. All mutations flow through Cloud Function callables. Firestore rules use `allow write: if false` on every tenant collection — clients cannot write directly.

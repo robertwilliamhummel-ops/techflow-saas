@@ -99,7 +99,7 @@ describe("setupCustomDomain", () => {
       "invoices.smithplumbing.ca",
     );
     expect(edgeConfigUpsert).toHaveBeenCalledWith(
-      "domain:invoices.smithplumbing.ca",
+      "domain_invoices_smithplumbing_ca",
       TENANT,
     );
 
@@ -215,7 +215,7 @@ describe("setupCustomDomain", () => {
     // Previous one detached: vercel remove + auth remove + edge delete + index delete.
     expect(vercelRemoveDomain).toHaveBeenCalledWith("first.test.ca");
     expect(removeAuthorizedDomain).toHaveBeenCalledWith("first.test.ca");
-    expect(edgeConfigDelete).toHaveBeenCalledWith("domain:first.test.ca");
+    expect(edgeConfigDelete).toHaveBeenCalledWith("domain_first_test_ca");
     const oldIdx = await testDb.doc(`customDomains/first.test.ca`).get();
     expect(oldIdx.exists).toBe(false);
   });
@@ -250,7 +250,7 @@ describe("removeCustomDomain", () => {
 
     expect(vercelRemoveDomain).toHaveBeenCalledWith("live.test.ca");
     expect(removeAuthorizedDomain).toHaveBeenCalledWith("live.test.ca");
-    expect(edgeConfigDelete).toHaveBeenCalledWith("domain:live.test.ca");
+    expect(edgeConfigDelete).toHaveBeenCalledWith("domain_live_test_ca");
 
     const meta = (
       await testDb.doc(`tenants/${TENANT}/meta/settings`).get()

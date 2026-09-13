@@ -23,6 +23,7 @@
     "@base-ui/react": "^1.4.0",
     "@hookform/resolvers": "^5.2.2",
     "@sentry/nextjs": "^10.74.0",
+    "@vercel/global-config": "^1.5.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "firebase-admin": "^14.4.0",

@@ -152,7 +152,8 @@ export async function vercelGetDomainStatus(
 }
 
 // ---------------------------------------------------------------------------
-// Edge Config — write side. Middleware reads via the connection-string SDK.
+// Global Config (Vercel's new name for Edge Config; same store) — write side.
+// The Next.js proxy reads through the SDK. Keys come from domainCacheKey (A-07).
 // ---------------------------------------------------------------------------
 
 export async function edgeConfigUpsert(
@@ -176,7 +177,7 @@ async function edgeConfigBatch(items: EdgeOp[]): Promise<void> {
   const id = safeSecret(EDGE_CONFIG_ID);
   if (!id) throw new Error("EDGE_CONFIG_ID is not configured.");
   await vercelFetch(
-    teamQueryAppend(`/v1/edge-config/${encodeURIComponent(id)}/items`),
+    teamQueryAppend(`/v1/global-config/${encodeURIComponent(id)}/items`),
     {
       method: "PATCH",
       body: JSON.stringify({ items }),
