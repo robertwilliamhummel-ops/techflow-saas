@@ -10,6 +10,8 @@ export const FEATURE_DEFAULTS = {
   stripePayments: false,
   etransfer: true,
   multiCurrency: false,
+  // D3 — card surcharging ships disabled (see functions/src/shared/features.ts).
+  cardSurcharge: false,
 } as const;
 
 export type FeatureKey = keyof typeof FEATURE_DEFAULTS;

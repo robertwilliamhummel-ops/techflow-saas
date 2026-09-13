@@ -51,7 +51,7 @@ export interface InvoiceData {
   lineItems: LineItem[];
   totals: InvoiceTotals;
   notes: string | null;
-  paidVia?: "card" | "etransfer" | "cash" | "manual" | "stripe" | null;
+  paidVia?: "card" | "etransfer" | "cash" | "manual" | null;
   paidAt?: string | null;
   surchargeAmountCents?: number | null;
   payUrl?: string | null;

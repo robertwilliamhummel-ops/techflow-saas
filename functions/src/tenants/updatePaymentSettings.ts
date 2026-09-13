@@ -6,6 +6,7 @@ import {
 import { db, FieldValue } from "../shared/admin";
 import { readClaims, requireRole, requireTenant } from "../shared/auth";
 import { isValidEmail, lowerEmail } from "../shared/email";
+import { requireFeature } from "../shared/requireFeature";
 
 // Payment-related tenant meta. Stripe Connect onboarding writes are handled by
 // the Stripe callables in Phase 4. This callable only lets owners/admins edit:
@@ -102,6 +103,13 @@ export async function updatePaymentSettingsHandler(
     !ackNow
   ) {
     throw new HttpsError("invalid-argument", "No editable fields supplied.");
+  }
+
+  // D3 — surcharging can only be switched ON when the platform has enabled
+  // the `cardSurcharge` feature for this tenant (default off). Switching it
+  // off is always allowed.
+  if (nextCharge === true) {
+    await requireFeature(tenantId, "cardSurcharge");
   }
 
   const metaRef = db.doc(`tenants/${tenantId}/meta/settings`);

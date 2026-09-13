@@ -249,6 +249,31 @@ describe("createInvoice", () => {
     expect(inv.totals.total).toBe(385);
   });
 
+  it("snapshot never enables surcharging while the cardSurcharge feature is off (D3)", async () => {
+    await testDb.doc(`tenants/${TENANT}/meta/settings`).update({
+      chargeCustomerCardFees: true,
+    });
+
+    const off = await createInvoiceHandler(
+      fakeRequest(validInvoiceData(), ownerAuth),
+    );
+    const offInv = (
+      await testDb.doc(`tenants/${TENANT}/invoices/${off.invoiceId}`).get()
+    ).data()!;
+    expect(offInv.tenantSnapshot.chargeCustomerCardFees).toBe(false);
+
+    await testDb.doc(`tenants/${TENANT}/entitlements/current`).update({
+      features: { cardSurcharge: true },
+    });
+    const on = await createInvoiceHandler(
+      fakeRequest(validInvoiceData(), ownerAuth),
+    );
+    const onInv = (
+      await testDb.doc(`tenants/${TENANT}/invoices/${on.invoiceId}`).get()
+    ).data()!;
+    expect(onInv.tenantSnapshot.chargeCustomerCardFees).toBe(true);
+  });
+
   it("rejects unauthenticated caller", async () => {
     await expect(
       createInvoiceHandler(fakeRequest(validInvoiceData(), null)),

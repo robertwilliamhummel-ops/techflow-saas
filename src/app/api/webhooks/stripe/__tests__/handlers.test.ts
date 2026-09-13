@@ -268,7 +268,8 @@ describe("handleCheckoutCompleted", () => {
 
     const inv = docs.get(`tenants/${TENANT}/invoices/${INVOICE}`);
     expect(inv?.status).toBe("paid");
-    expect(inv?.paymentMethod).toBe("stripe");
+    // "card" — the value the PDF template branches on for the surcharge receipt row.
+    expect(inv?.paymentMethod).toBe("card");
     expect(inv?.paidAmountCents).toBe(11300);
     expect(inv?.surchargeAmountCents).toBe(271);
     expect(inv?.stripeChargeId).toBe("pi_123");

@@ -16,6 +16,8 @@ import {
 import { defineSecret } from "firebase-functions/params";
 import { db } from "../shared/admin";
 import { verifyPayToken } from "../shared/payToken";
+import { loadFeatures } from "../shared/requireFeature";
+import { effectiveCardSurcharge } from "../shared/surcharge";
 
 const PAY_TOKEN_SECRET = defineSecret("PAY_TOKEN_SECRET");
 
@@ -113,6 +115,14 @@ export async function verifyInvoicePayTokenHandler(
     return { outcome: "not-available" };
   }
 
+  // Same surcharge source as createPayTokenCheckoutSession (snapshot + D3
+  // kill switch) so the fee shown is exactly the fee charged.
+  const features = await loadFeatures(payload.tenantId);
+  const surcharge = effectiveCardSurcharge(
+    invoice.tenantSnapshot,
+    features.cardSurcharge,
+  );
+
   // Return minimal payload for rendering the public pay page.
   return {
     outcome: "ok",
@@ -132,11 +142,12 @@ export async function verifyInvoicePayTokenHandler(
         total: 0,
       },
       status: invoice.status,
-      tenantSnapshot: invoice.tenantSnapshot ?? {},
-      chargeCustomerCardFees: Boolean(
-        invoice.tenantSnapshot?.chargeCustomerCardFees,
-      ),
-      cardFeePercent: invoice.tenantSnapshot?.cardFeePercent ?? 0,
+      tenantSnapshot: {
+        ...(invoice.tenantSnapshot ?? {}),
+        chargeCustomerCardFees: surcharge.enabled,
+      },
+      chargeCustomerCardFees: surcharge.enabled,
+      cardFeePercent: surcharge.percent,
       etransferEmail: invoice.tenantSnapshot?.etransferEmail ?? null,
     },
   };

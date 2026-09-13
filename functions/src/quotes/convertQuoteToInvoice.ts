@@ -37,7 +37,7 @@ export async function convertQuoteToInvoiceHandler(
 
   // Must have BOTH features enabled.
   await requireFeature(tenantId, "quotes");
-  await requireFeature(tenantId, "invoices");
+  const features = await requireFeature(tenantId, "invoices");
 
   const data = request.data as Record<string, unknown> | undefined;
   const quoteId = String(data?.quoteId ?? "").trim();
@@ -66,7 +66,7 @@ export async function convertQuoteToInvoiceHandler(
     throw new Error("Tenant meta not found — corrupt tenant state.");
   }
   const meta = metaSnap.data()!;
-  const snapshot = buildTenantSnapshot(meta);
+  const snapshot = buildTenantSnapshot(meta, features);
   const logoUrl = (meta.logoUrl as string | null) ?? null;
   snapshot.logo = logoUrl ? await inlineLogoOrThrow(logoUrl) : null;
 

@@ -10,6 +10,10 @@ export const FEATURE_DEFAULTS = {
   stripePayments: false,
   etransfer: true,
   multiCurrency: false,
+  // D3 — card surcharging ships disabled. Checkout cannot tell credit from
+  // debit/prepaid, and Visa/Mastercard forbid surcharging those. Enable per
+  // tenant only once card-funding detection is available.
+  cardSurcharge: false,
 } as const;
 
 export type FeatureKey = keyof typeof FEATURE_DEFAULTS;

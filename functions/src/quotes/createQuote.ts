@@ -21,7 +21,7 @@ export async function createQuoteHandler(
 ): Promise<{ quoteId: string }> {
   const claims = readClaims(request);
   const { uid, tenantId } = requireTenant(claims);
-  await requireFeature(tenantId, "quotes");
+  const features = await requireFeature(tenantId, "quotes");
 
   const input = validateQuoteInput(request.data);
   const customerEmail = lowerEmail(input.customer.email);
@@ -33,7 +33,7 @@ export async function createQuoteHandler(
   }
   const meta = metaSnap.data()!;
 
-  const snapshot = buildTenantSnapshot(meta);
+  const snapshot = buildTenantSnapshot(meta, features);
   const logoUrl = (meta.logoUrl as string | null) ?? null;
   snapshot.logo = logoUrl ? await inlineLogoOrThrow(logoUrl) : null;
 

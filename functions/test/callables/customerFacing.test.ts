@@ -344,6 +344,31 @@ describe("verifyInvoicePayToken", () => {
     }
   });
 
+  it("reports no surcharge while the cardSurcharge feature is off, even if the snapshot says so (D3)", async () => {
+    await testDb.doc(`tenants/${TENANT}/invoices/INV-0001`).update({
+      "tenantSnapshot.chargeCustomerCardFees": true,
+    });
+    const off = await verifyInvoicePayTokenHandler(
+      fakeRequest({ token: validToken }, null),
+    );
+    expect(off.outcome).toBe("ok");
+    if (off.outcome === "ok") {
+      expect(off.invoice.chargeCustomerCardFees).toBe(false);
+      expect(off.invoice.cardFeePercent).toBe(0);
+    }
+
+    await testDb.doc(`tenants/${TENANT}/entitlements/current`).update({
+      features: { stripePayments: true, cardSurcharge: true },
+    });
+    const on = await verifyInvoicePayTokenHandler(
+      fakeRequest({ token: validToken }, null),
+    );
+    if (on.outcome === "ok") {
+      expect(on.invoice.chargeCustomerCardFees).toBe(true);
+      expect(on.invoice.cardFeePercent).toBe(2.4);
+    }
+  });
+
   it("returns paid for already-paid invoices", async () => {
     await testDb.doc(`tenants/${TENANT}/invoices/INV-0001`).update({
       status: "paid",
@@ -489,6 +514,52 @@ describe("createPayTokenCheckoutSession", () => {
       ),
     ).rejects.toThrow(/cannot accept card payments/);
     expect(mockStripeCreate).not.toHaveBeenCalled();
+  });
+
+  it("adds the surcharge line item from the invoice snapshot when cardSurcharge is enabled", async () => {
+    await testDb.doc(`tenants/${TENANT}/entitlements/current`).update({
+      features: { stripePayments: true, cardSurcharge: true },
+    });
+    await testDb.doc(`tenants/${TENANT}/invoices/INV-0001`).update({
+      "tenantSnapshot.chargeCustomerCardFees": true,
+    });
+
+    await createPayTokenCheckoutSessionHandler(
+      fakeRequest({ token: validToken }, null),
+    );
+    const args = mockStripeCreate.mock.calls[0][0];
+    expect(args.line_items).toHaveLength(2);
+    expect(args.line_items[1].price_data.unit_amount).toBe(271); // 2.4% of $113.00
+    expect(args.metadata.surchargeCents).toBe("271");
+  });
+
+  it("never surcharges while cardSurcharge is off, even if the snapshot says so (D3)", async () => {
+    await testDb.doc(`tenants/${TENANT}/invoices/INV-0001`).update({
+      "tenantSnapshot.chargeCustomerCardFees": true,
+    });
+
+    await createPayTokenCheckoutSessionHandler(
+      fakeRequest({ token: validToken }, null),
+    );
+    const args = mockStripeCreate.mock.calls[0][0];
+    expect(args.line_items).toHaveLength(1);
+    expect(args.metadata.surchargeCents).toBe("0");
+  });
+
+  it("charges what the snapshot disclosed, not current payment settings (A-09)", async () => {
+    await testDb.doc(`tenants/${TENANT}/entitlements/current`).update({
+      features: { stripePayments: true, cardSurcharge: true },
+    });
+    // Tenant turns surcharging on AFTER the invoice was sent without it.
+    await testDb.doc(`tenants/${TENANT}/meta/settings`).update({
+      chargeCustomerCardFees: true,
+    });
+
+    await createPayTokenCheckoutSessionHandler(
+      fakeRequest({ token: validToken }, null),
+    );
+    const args = mockStripeCreate.mock.calls[0][0];
+    expect(args.line_items).toHaveLength(1);
   });
 });
 

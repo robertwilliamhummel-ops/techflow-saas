@@ -62,7 +62,9 @@ type FormInput = z.input<typeof schema>;
 type FormValues = z.output<typeof schema>;
 
 export default function SettingsPaymentsPage() {
-  const { meta, loading } = useTenantContext();
+  const { meta, loading, hasFeature } = useTenantContext();
+  // D3 — surcharging is hidden unless the platform enabled `cardSurcharge`.
+  const surchargeAvailable = hasFeature("cardSurcharge");
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [pendingEnable, setPendingEnable] = useState(false);
 
@@ -103,8 +105,12 @@ export default function SettingsPaymentsPage() {
       const fn = httpsCallable(getClientFunctions(), "updatePaymentSettings");
       await fn({
         etransferEmail: values.etransferEmail === "" ? null : values.etransferEmail,
-        chargeCustomerCardFees: values.chargeCustomerCardFees,
-        cardFeePercent: values.cardFeePercent,
+        ...(surchargeAvailable
+          ? {
+              chargeCustomerCardFees: values.chargeCustomerCardFees,
+              cardFeePercent: values.cardFeePercent,
+            }
+          : {}),
       });
       toast.success("Payment settings saved.");
       form.reset(values);
@@ -183,6 +189,7 @@ export default function SettingsPaymentsPage() {
                 )}
               />
 
+              {surchargeAvailable ? (
               <div className="grid gap-3 rounded-md border p-4">
                 <div className="flex items-start justify-between gap-4">
                   <div>
@@ -236,8 +243,11 @@ export default function SettingsPaymentsPage() {
                   )}
                 />
               </div>
+              ) : null}
 
-              <SurchargePreview enabled={charge} feePct={feePct} />
+              {surchargeAvailable ? (
+                <SurchargePreview enabled={charge} feePct={feePct} />
+              ) : null}
 
               <div className="flex justify-end">
                 <Button type="submit" disabled={submitting || !dirty}>
@@ -249,11 +259,13 @@ export default function SettingsPaymentsPage() {
         </CardContent>
       </Card>
 
-      <SurchargeAcknowledgmentDialog
-        open={pendingEnable}
-        onOpenChange={setPendingEnable}
-        onConfirm={onAcknowledge}
-      />
+      {surchargeAvailable ? (
+        <SurchargeAcknowledgmentDialog
+          open={pendingEnable}
+          onOpenChange={setPendingEnable}
+          onConfirm={onAcknowledge}
+        />
+      ) : null}
     </div>
   );
 }

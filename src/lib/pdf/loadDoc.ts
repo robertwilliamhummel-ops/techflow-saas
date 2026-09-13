@@ -29,7 +29,7 @@ export async function loadInvoiceForPdf(
   invoiceId: string,
   platformBaseUrl: string,
 ): Promise<LoadedInvoice> {
-  await requireFeatureEnabled(tenantId, "invoices");
+  const overrides = await requireFeatureEnabled(tenantId, "invoices");
   const snap = await getAdminDb()
     .doc(`tenants/${tenantId}/invoices/${invoiceId}`)
     .get();
@@ -43,10 +43,19 @@ export async function loadInvoiceForPdf(
     throw new PdfLoadError(409, "Invoice has no customer email.");
   }
 
-  const snapshot = data.tenantSnapshot as Record<string, unknown> | undefined;
-  if (!snapshot) {
+  const frozenSnapshot = data.tenantSnapshot as
+    | Record<string, unknown>
+    | undefined;
+  if (!frozenSnapshot) {
     throw new PdfLoadError(409, "Invoice is missing tenantSnapshot.");
   }
+  // D3 kill switch — never disclose a surcharge the platform won't charge.
+  const snapshot = {
+    ...frozenSnapshot,
+    chargeCustomerCardFees:
+      frozenSnapshot.chargeCustomerCardFees === true &&
+      resolveFeature("cardSurcharge", overrides),
+  };
 
   const payToken = typeof data.payToken === "string" ? data.payToken : null;
   const payUrl = payToken
@@ -146,7 +155,7 @@ export async function loadQuoteForPdf(
 async function requireFeatureEnabled(
   tenantId: string,
   feature: FeatureKey,
-): Promise<void> {
+): Promise<Record<string, boolean> | null> {
   const snap = await getAdminDb()
     .doc(`tenants/${tenantId}/entitlements/current`)
     .get();
@@ -156,6 +165,7 @@ async function requireFeatureEnabled(
   if (!resolveFeature(feature, overrides)) {
     throw new PdfLoadError(403, `Feature "${feature}" is not enabled for this tenant.`);
   }
+  return overrides;
 }
 
 function deriveStringOrNull(value: unknown): string | null {

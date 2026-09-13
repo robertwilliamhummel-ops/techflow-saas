@@ -24,6 +24,14 @@ async function seedOwner(): Promise<string> {
   return tenantId;
 }
 
+// D3 — surcharging is off by default; tests that exercise it enable the flag
+// the way the platform admin would.
+async function enableCardSurcharge(tenantId: string): Promise<void> {
+  await testDb
+    .doc(`tenants/${tenantId}/entitlements/current`)
+    .set({ features: { cardSurcharge: true } }, { merge: true });
+}
+
 describe("updatePaymentSettings", () => {
   beforeEach(async () => {
     await clearFirestore();
@@ -73,8 +81,35 @@ describe("updatePaymentSettings", () => {
     ).rejects.toThrow(/not a valid address/);
   });
 
+  it("enabling surcharging is refused while the cardSurcharge feature is off (D3 default)", async () => {
+    const tenantId = await seedOwner();
+    await expect(
+      updatePaymentSettingsHandler(
+        fakeRequest(
+          { chargeCustomerCardFees: true, acknowledgeSurcharge: true },
+          { uid: "owner1", claims: { tenantId, role: "owner" } },
+        ),
+      ),
+    ).rejects.toThrow(/Feature 'cardSurcharge' is not enabled/);
+    const meta = await testDb.doc(`tenants/${tenantId}/meta/settings`).get();
+    expect(meta.data()?.chargeCustomerCardFees).toBe(false);
+    expect(meta.data()?.surchargeAcknowledgedAt).toBeNull();
+  });
+
+  it("disabling surcharging is always allowed, even with the feature off", async () => {
+    const tenantId = await seedOwner();
+    const res = await updatePaymentSettingsHandler(
+      fakeRequest(
+        { chargeCustomerCardFees: false },
+        { uid: "owner1", claims: { tenantId, role: "owner" } },
+      ),
+    );
+    expect(res).toEqual({ ok: true });
+  });
+
   it("enabling surcharging without acknowledgment is refused", async () => {
     const tenantId = await seedOwner();
+    await enableCardSurcharge(tenantId);
     await expect(
       updatePaymentSettingsHandler(
         fakeRequest(
@@ -87,6 +122,7 @@ describe("updatePaymentSettings", () => {
 
   it("enabling surcharging WITH acknowledgeSurcharge:true stamps timestamp", async () => {
     const tenantId = await seedOwner();
+    await enableCardSurcharge(tenantId);
     await updatePaymentSettingsHandler(
       fakeRequest(
         { chargeCustomerCardFees: true, acknowledgeSurcharge: true },
@@ -101,6 +137,7 @@ describe("updatePaymentSettings", () => {
 
   it("once acknowledged, later edits succeed without re-acknowledging", async () => {
     const tenantId = await seedOwner();
+    await enableCardSurcharge(tenantId);
     await updatePaymentSettingsHandler(
       fakeRequest(
         { chargeCustomerCardFees: true, acknowledgeSurcharge: true },

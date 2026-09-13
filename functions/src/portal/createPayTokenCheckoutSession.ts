@@ -15,7 +15,11 @@ import { defineSecret } from "firebase-functions/params";
 import Stripe from "stripe";
 import { db, FieldValue, Timestamp } from "../shared/admin";
 import { verifyPayToken } from "../shared/payToken";
-import { computeSurchargeCents } from "../shared/surcharge";
+import { loadFeatures } from "../shared/requireFeature";
+import {
+  computeSurchargeCents,
+  effectiveCardSurcharge,
+} from "../shared/surcharge";
 
 const PAY_TOKEN_SECRET = defineSecret("PAY_TOKEN_SECRET");
 const STRIPE_SECRET_KEY = defineSecret("STRIPE_SECRET_KEY");
@@ -124,10 +128,18 @@ export async function createPayTokenCheckoutSessionHandler(
     invoice.tenantSnapshot?.currency ?? meta.currency ?? "CAD",
   ).toLowerCase();
 
+  // Surcharge comes from the invoice's frozen snapshot — the same values the
+  // PDF and pay page disclosed — never from current settings (A-09). The
+  // platform `cardSurcharge` flag (D3) is a kill switch on top.
+  const features = await loadFeatures(payload.tenantId);
+  const surcharge = effectiveCardSurcharge(
+    invoice.tenantSnapshot,
+    features.cardSurcharge,
+  );
   const surchargeCents = computeSurchargeCents(
     totalCents,
-    Boolean(meta.chargeCustomerCardFees),
-    Number(meta.cardFeePercent ?? 0),
+    surcharge.enabled,
+    surcharge.percent,
   );
 
   const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [
@@ -146,7 +158,7 @@ export async function createPayTokenCheckoutSessionHandler(
       price_data: {
         currency,
         product_data: {
-          name: `Credit card processing fee (${meta.cardFeePercent ?? 2.4}%)`,
+          name: `Credit card processing fee (${surcharge.percent}%)`,
         },
         unit_amount: surchargeCents,
       },

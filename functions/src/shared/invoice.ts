@@ -89,7 +89,7 @@ export interface InvoiceDoc {
   createdAt: Timestamp | FieldValue;
   createdBy: string;
   paidAt?: Timestamp | FieldValue | null;
-  paymentMethod?: ManualPaymentMethod | "stripe" | null;
+  paymentMethod?: ManualPaymentMethod | "card" | null;
   sourceQuoteId?: string | null;
   sourceRecurringInvoiceId?: string | null;
 
@@ -262,8 +262,12 @@ function roundCents(n: number): number {
 // Tenant snapshot builder — freezes branding at invoice creation time
 // ---------------------------------------------------------------------------
 
+// `features.cardSurcharge` (D3) gates the frozen surcharge flag: while the
+// platform flag is off, no invoice can be created that discloses or charges a
+// card fee, whatever the tenant's saved payment settings say.
 export function buildTenantSnapshot(
   meta: Record<string, unknown>,
+  features: { cardSurcharge: boolean },
 ): TenantSnapshot {
   return {
     version: 1,
@@ -280,7 +284,8 @@ export function buildTenantSnapshot(
       meta.businessNumber != null ? String(meta.businessNumber) : null,
     emailFooter: meta.emailFooter != null ? String(meta.emailFooter) : null,
     currency: String(meta.currency ?? "CAD"),
-    chargeCustomerCardFees: meta.chargeCustomerCardFees === true,
+    chargeCustomerCardFees:
+      features.cardSurcharge && meta.chargeCustomerCardFees === true,
     cardFeePercent: Number(meta.cardFeePercent ?? 0),
     etransferEmail:
       meta.etransferEmail != null ? String(meta.etransferEmail) : null,

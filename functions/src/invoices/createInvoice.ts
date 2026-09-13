@@ -29,7 +29,7 @@ export async function createInvoiceHandler(
 ): Promise<{ invoiceId: string }> {
   const claims = readClaims(request);
   const { uid, tenantId } = requireTenant(claims);
-  await requireFeature(tenantId, "invoices");
+  const features = await requireFeature(tenantId, "invoices");
 
   const input = validateInvoiceInput(request.data);
 
@@ -45,7 +45,7 @@ export async function createInvoiceHandler(
 
   // Inline the logo as base64 so the invoice survives future logo changes.
   // Fails atomically — no half-snapshot persisted if the logo can't be fetched.
-  const snapshot = buildTenantSnapshot(meta);
+  const snapshot = buildTenantSnapshot(meta, features);
   const logoUrl = (meta.logoUrl as string | null) ?? null;
   snapshot.logo = logoUrl ? await inlineLogoOrThrow(logoUrl) : null;
 

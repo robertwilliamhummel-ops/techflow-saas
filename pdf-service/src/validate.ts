@@ -42,7 +42,7 @@ export function validateInvoiceBody(input: unknown): RenderInvoiceRequest {
       : optionalEnum(
           data.paidVia,
           "data.paidVia",
-          ["card", "etransfer", "cash", "manual", "stripe"],
+          ["card", "etransfer", "cash", "manual"],
         );
   const paidAt = optionalString(data.paidAt, "data.paidAt", 64);
   const surchargeAmountCents = optionalFiniteNumber(

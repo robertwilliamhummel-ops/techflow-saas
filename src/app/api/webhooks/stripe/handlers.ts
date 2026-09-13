@@ -144,7 +144,7 @@ export async function handleCheckoutCompleted(
     {
       status: "paid",
       paidAt: FieldValue.serverTimestamp(),
-      paymentMethod: "stripe",
+      paymentMethod: "card",
       paidAmountCents,
       surchargeAmountCents,
       stripeChargeId: chargeId,

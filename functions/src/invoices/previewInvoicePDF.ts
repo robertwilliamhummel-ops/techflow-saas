@@ -18,6 +18,7 @@ import { db } from "../shared/admin";
 import { readClaims, requireTenant } from "../shared/auth";
 import { requireFeature } from "../shared/requireFeature";
 import { renderViaPdfService } from "../shared/pdfService";
+import { effectiveCardSurcharge } from "../shared/surcharge";
 
 const PDF_SERVICE_API_KEY = defineSecret("PDF_SERVICE_API_KEY");
 
@@ -36,7 +37,7 @@ export async function previewInvoicePDFHandler(
 ): Promise<PreviewInvoicePDFResult> {
   const claims = readClaims(request);
   const { tenantId } = requireTenant(claims);
-  await requireFeature(tenantId, "invoices");
+  const features = await requireFeature(tenantId, "invoices");
 
   const invoiceId = request.data?.invoiceId;
   if (!invoiceId || typeof invoiceId !== "string") {
@@ -49,13 +50,23 @@ export async function previewInvoicePDFHandler(
   }
   const invoice = snap.data() as Record<string, unknown>;
 
-  const snapshot = invoice.tenantSnapshot as Record<string, unknown> | undefined;
-  if (!snapshot) {
+  const frozenSnapshot = invoice.tenantSnapshot as
+    | Record<string, unknown>
+    | undefined;
+  if (!frozenSnapshot) {
     throw new HttpsError(
       "failed-precondition",
       "Invoice is missing tenantSnapshot.",
     );
   }
+  // D3 kill switch — the PDF never discloses a surcharge the platform won't charge.
+  const snapshot = {
+    ...frozenSnapshot,
+    chargeCustomerCardFees: effectiveCardSurcharge(
+      frozenSnapshot,
+      features.cardSurcharge,
+    ).enabled,
+  };
 
   const customer = (invoice.customer as Record<string, unknown> | undefined) ?? {};
   const appUrl =

@@ -165,7 +165,9 @@ async function processOneTemplate(
   // Build fresh tenantSnapshot for the generated invoice. A broken logo
   // surfaces as a recordFailure (try/catch around processOneTemplate's caller
   // path treats it as a per-template failure — auto-pauses after 3 misses).
-  const tenantSnapshot = buildTenantSnapshot(meta);
+  const tenantSnapshot = buildTenantSnapshot(meta, {
+    cardSurcharge: resolveFeature("cardSurcharge", features),
+  });
   const logoUrl = (meta.logoUrl as string | null) ?? null;
   try {
     tenantSnapshot.logo = logoUrl ? await inlineLogoOrThrow(logoUrl) : null;
