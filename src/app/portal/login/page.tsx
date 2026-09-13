@@ -25,7 +25,7 @@ export async function generateMetadata(): Promise<Metadata> {
 
 // Branded portal login (Phase 5 / Bundle E).
 //
-// React Server Component — middleware injects `x-tenant-id` for custom hosts,
+// React Server Component — the proxy (src/proxy.ts) injects `x-tenant-id` for custom hosts,
 // we resolve branding via Admin SDK (rules block unauthenticated reads of
 // tenant meta), and pass the branding values to the client form. Customers
 // land here from a per-tenant URL like `https://invoices.smithplumbing.ca`.

@@ -45,6 +45,28 @@ export interface CustomerPortalContextValue {
   ) => CustomerInvoiceListItem["tenantBranding"];
 }
 
+interface LoadedInvoices {
+  uid: string;
+  invoices: CustomerInvoiceListItem[];
+  error: Error | null;
+}
+
+const EMPTY_INVOICES: CustomerInvoiceListItem[] = [];
+
+// Never throws, so callers only set state once the request settles.
+async function fetchCustomerInvoices(): Promise<Omit<LoadedInvoices, "uid">> {
+  try {
+    const fn = httpsCallable<unknown, { invoices: CustomerInvoiceListItem[] }>(
+      getClientFunctions(),
+      "getCustomerInvoices",
+    );
+    const result = await fn();
+    return { invoices: result.data.invoices ?? [], error: null };
+  } catch (err) {
+    return { invoices: [], error: err as Error };
+  }
+}
+
 const CustomerPortalContext = createContext<CustomerPortalContextValue>({
   customerEmail: null,
   invoices: [],
@@ -59,39 +81,36 @@ const CustomerPortalContext = createContext<CustomerPortalContextValue>({
 export function CustomerPortalProvider({ children }: { children: ReactNode }) {
   const { user, claims, loading: authLoading } = useAuth();
   const customerEmail = user?.email ?? null;
-  const isCustomer = !!user && !claims.tenantId;
+  // Only a signed-in user without a tenant claim is a portal customer.
+  const uid = user && !claims.tenantId ? user.uid : null;
 
-  const [invoices, setInvoices] = useState<CustomerInvoiceListItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<Error | null>(null);
-
-  const load = useCallback(async () => {
-    if (!isCustomer) {
-      setInvoices([]);
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    try {
-      const fn = httpsCallable<unknown, { invoices: CustomerInvoiceListItem[] }>(
-        getClientFunctions(),
-        "getCustomerInvoices",
-      );
-      const result = await fn();
-      setInvoices(result.data.invoices ?? []);
-    } catch (err) {
-      setError(err as Error);
-      setInvoices([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [isCustomer]);
+  // Results are tagged with the customer they were fetched for and derived
+  // below, so one customer's invoices never render for the next sign-in.
+  const [loaded, setLoaded] = useState<LoadedInvoices | null>(null);
 
   useEffect(() => {
-    if (authLoading) return;
-    void load();
-  }, [authLoading, load]);
+    if (authLoading || !uid) return;
+    let active = true;
+    void fetchCustomerInvoices().then((next) => {
+      // Ignore a late response for a customer who is no longer signed in.
+      if (active) setLoaded({ uid, ...next });
+    });
+    return () => {
+      active = false;
+    };
+  }, [authLoading, uid]);
+
+  const reload = useCallback(async () => {
+    if (!uid) return;
+    const next = await fetchCustomerInvoices();
+    // Don't overwrite results that already belong to a different customer.
+    setLoaded((prev) => (prev && prev.uid !== uid ? prev : { uid, ...next }));
+  }, [uid]);
+
+  const current = uid && loaded?.uid === uid ? loaded : null;
+  const invoices = current?.invoices ?? EMPTY_INVOICES;
+  const loading = !!uid && current === null;
+  const error = current?.error ?? null;
 
   useEffect(() => {
     if (user) {
@@ -110,11 +129,11 @@ export function CustomerPortalProvider({ children }: { children: ReactNode }) {
       quotes: [] as never[],
       loading: authLoading || loading,
       error,
-      reload: load,
+      reload,
       getInvoice: (id) => invoices.find((inv) => inv.id === id),
       getTenantBranding: (item) => item.tenantBranding,
     }),
-    [customerEmail, invoices, authLoading, loading, error, load],
+    [customerEmail, invoices, authLoading, loading, error, reload],
   );
 
   return (

@@ -358,9 +358,13 @@ function SurchargeAcknowledgmentDialog({
 }) {
   const [confirmed, setConfirmed] = useState(false);
 
-  useEffect(() => {
+  // Reset the acknowledgment whenever the dialog closes — adjusted during
+  // render (React's "state from a changed prop" pattern), not in an effect.
+  const [prevOpen, setPrevOpen] = useState(open);
+  if (open !== prevOpen) {
+    setPrevOpen(open);
     if (!open) setConfirmed(false);
-  }, [open]);
+  }
 
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>

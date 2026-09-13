@@ -10,7 +10,7 @@ vi.mock("@/lib/edgeConfig", () => ({
   edgeConfigPut: vi.fn(async () => true),
 }));
 
-const { middleware, config } = await import("@/middleware");
+const { proxy, config } = await import("@/proxy");
 
 const ROOT = process.cwd();
 
@@ -45,7 +45,7 @@ afterEach(() => {
 });
 
 describe("A-01 — Next.js loads these files only from src/", () => {
-  it.each(["middleware.ts", "instrumentation.ts", "instrumentation-client.ts"])(
+  it.each(["proxy.ts", "instrumentation.ts", "instrumentation-client.ts"])(
     "%s lives in src/, not the repo root",
     (file) => {
       expect(existsSync(path.join(ROOT, "src", file))).toBe(true);
@@ -53,21 +53,26 @@ describe("A-01 — Next.js loads these files only from src/", () => {
     },
   );
 
-  it("runs on the Node.js runtime (Firebase Admin fallback)", () => {
-    expect(config.runtime).toBe("nodejs");
+  it("has no leftover middleware file (Next 16 renamed it to proxy)", () => {
+    expect(existsSync(path.join(ROOT, "src", "middleware.ts"))).toBe(false);
+    expect(existsSync(path.join(ROOT, "middleware.ts"))).toBe(false);
+  });
+
+  it("does not configure a runtime (proxy is always Node.js in Next 16)", () => {
+    expect(config).not.toHaveProperty("runtime");
   });
 });
 
-describe("middleware host routing", () => {
+describe("proxy host routing", () => {
   it("passes the generic portal host through without a tenant", async () => {
-    const res = await middleware(request("portal.techflowsolutions.ca"));
+    const res = await proxy(request("portal.techflowsolutions.ca"));
     expect(res.headers.get("x-middleware-next")).toBe("1");
     expect(forwardedTenantId(res)).toBeNull();
     expect(edgeConfigGet).not.toHaveBeenCalled();
   });
 
   it("strips a spoofed x-tenant-id on the generic host", async () => {
-    const res = await middleware(
+    const res = await proxy(
       request("portal.techflowsolutions.ca", { "x-tenant-id": "victim" }),
     );
     expect(forwardedTenantId(res)).toBeNull();
@@ -76,7 +81,7 @@ describe("middleware host routing", () => {
   it.each(["localhost:3000", "127.0.0.1:3000", "techflow-saas-git-main.vercel.app"])(
     "treats %s as generic",
     async (host) => {
-      const res = await middleware(request(host, { "x-tenant-id": "victim" }));
+      const res = await proxy(request(host, { "x-tenant-id": "victim" }));
       expect(res.status).toBe(200);
       expect(forwardedTenantId(res)).toBeNull();
     },
@@ -84,13 +89,13 @@ describe("middleware host routing", () => {
 
   it("injects the resolved tenant for a known custom domain", async () => {
     edgeConfigGet.mockResolvedValueOnce("t1");
-    const res = await middleware(request("invoices.smithplumbing.ca"));
+    const res = await proxy(request("invoices.smithplumbing.ca"));
     expect(forwardedTenantId(res)).toBe("t1");
   });
 
   it("overwrites a spoofed x-tenant-id on a custom domain", async () => {
     edgeConfigGet.mockResolvedValueOnce("t1");
-    const res = await middleware(
+    const res = await proxy(
       request("invoices.smithplumbing.ca", { "x-tenant-id": "victim" }),
     );
     expect(forwardedTenantId(res)).toBe("t1");
@@ -98,12 +103,12 @@ describe("middleware host routing", () => {
 
   it("lowercases the host before lookup", async () => {
     edgeConfigGet.mockResolvedValueOnce("t1");
-    await middleware(request("Invoices.SmithPlumbing.ca"));
+    await proxy(request("Invoices.SmithPlumbing.ca"));
     expect(edgeConfigGet.mock.calls[0][0]).toContain("invoices.smithplumbing.ca");
   });
 
   it("returns 404 for an unknown custom domain", async () => {
-    const res = await middleware(request("unknown.example.com"));
+    const res = await proxy(request("unknown.example.com"));
     expect(res.status).toBe(404);
   });
 });

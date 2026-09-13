@@ -7,8 +7,8 @@
 - Environment variables, secrets, regions, and deploy steps live only in REBUILD_PLAN.md → "Environment Strategy & Deploy Runbook". Don't restate them here or in new docs.
 
 ## Stack
-- Next.js 15.5 App Router on Vercel (single project, `src/middleware.ts` host routing, functions in `yul1`) — Next 16 upgrade pending (before 2026-10-21)
-- Firebase: Firestore + Auth + Storage + Cloud Functions v2 + Emulators — Firestore and functions in `northamerica-northeast2`, scheduled functions in `northamerica-northeast1`
+- Next.js 16 App Router on Vercel (single project, `src/proxy.ts` host routing, functions in `yul1`); Node.js 24 everywhere (D6)
+- Firebase: Firestore + Auth + Storage + Cloud Functions v2 + Emulators — Firestore and functions in `northamerica-northeast2`, scheduled functions in `northamerica-northeast1`; runtime `nodejs24`
 - Cloud Run `pdf-service` (Puppeteer + Handlebars), protected by `X-Api-Key` from the Next.js proxy and callables
 - Stripe Connect with Standard-equivalent controller properties (full Stripe Dashboard, Stripe-liable), direct charges
 - Amazon SES + React Email for transactional mail, sent only from Cloud Functions via `functions/src/emails/send.ts`

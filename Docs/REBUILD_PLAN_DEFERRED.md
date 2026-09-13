@@ -14,7 +14,7 @@
 | R3 `PDF_SERVICE_URL` drift | Superseded — Cloud Run domain mappings aren't offered in `northamerica-northeast2` (D2); the deterministic `*.run.app` URL survives service recreation (REBUILD_PLAN Deploy Runbook) |
 | R4 Rate limiting / App Check | Open — only the pay-attempt limit (10 per invoice per 24h) exists |
 | R5 Split webhook endpoints | Done — `/api/webhooks/stripe/platform` and `/connect` with separate secrets; event scopes corrected by D1 |
-| R6 Middleware Admin SDK singleton + Next version | Done — `src/middleware.ts` (module singleton, Node runtime), Next 15.5.25; A-01 fixed 2026-09-13 |
+| R6 Middleware Admin SDK singleton + Next version | Done — `src/proxy.ts` (module singleton; the Next 16 proxy is Node-only), Next 16.3.5; A-01 fixed 2026-09-13 |
 | R7 `deletedAt` without rule enforcement | Open — `deletedAt: null` is still written on meta and memberships; rules don't filter on it |
 | R8 Portal pagination / projection | Partial — list rows are projected, no cursor; drafts and base64 logos are returned (A-05) |
 | P1 Null logo in PDF | Done — templates show the tenant name when `logo` is null |

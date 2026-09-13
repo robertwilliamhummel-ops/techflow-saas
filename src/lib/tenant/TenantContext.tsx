@@ -31,6 +31,18 @@ export interface TenantContextValue {
 
 const defaultFeatures = { ...FEATURE_DEFAULTS } as Record<FeatureKey, boolean>;
 
+interface TenantSnapshot<T> {
+  tenantId: string;
+  value: T | null;
+}
+
+function keepOrEmpty<T>(
+  prev: TenantSnapshot<T> | null,
+  tenantId: string,
+): TenantSnapshot<T> {
+  return prev?.tenantId === tenantId ? prev : { tenantId, value: null };
+}
+
 const TenantContext = createContext<TenantContextValue>({
   tenantId: null,
   meta: null,
@@ -54,43 +66,37 @@ export function TenantProvider({ children }: { children: ReactNode }) {
     Sentry.setTag("tenantId", tenantId ?? "none");
   }, [user, tenantId]);
 
-  const [meta, setMeta] = useState<TenantMeta | null>(null);
-  const [entitlements, setEntitlements] = useState<TenantEntitlements | null>(
+  // Snapshots are tagged with the tenant they belong to. Values are derived
+  // below, so a previous tenant's meta/entitlements are never rendered after
+  // tenantId changes, and no state is reset synchronously inside the effect.
+  const [metaSnap, setMetaSnap] = useState<TenantSnapshot<TenantMeta> | null>(
     null,
   );
-  const [metaLoading, setMetaLoading] = useState(true);
-  const [entLoading, setEntLoading] = useState(true);
+  const [entSnap, setEntSnap] =
+    useState<TenantSnapshot<TenantEntitlements> | null>(null);
 
   useEffect(() => {
-    if (!tenantId) {
-      setMeta(null);
-      setEntitlements(null);
-      setMetaLoading(false);
-      setEntLoading(false);
-      return;
-    }
-
-    setMetaLoading(true);
-    setEntLoading(true);
+    if (!tenantId) return;
 
     const db = getClientDb();
     const unsubMeta = onSnapshot(
       doc(db, "tenants", tenantId, "meta", "settings"),
-      (snap) => {
-        setMeta(snap.exists() ? (snap.data() as TenantMeta) : null);
-        setMetaLoading(false);
-      },
-      () => setMetaLoading(false),
+      (snap) =>
+        setMetaSnap({
+          tenantId,
+          value: snap.exists() ? (snap.data() as TenantMeta) : null,
+        }),
+      // Keep the last good value for this tenant if the listener errors.
+      () => setMetaSnap((prev) => keepOrEmpty(prev, tenantId)),
     );
     const unsubEnt = onSnapshot(
       doc(db, "tenants", tenantId, "entitlements", "current"),
-      (snap) => {
-        setEntitlements(
-          snap.exists() ? (snap.data() as TenantEntitlements) : null,
-        );
-        setEntLoading(false);
-      },
-      () => setEntLoading(false),
+      (snap) =>
+        setEntSnap({
+          tenantId,
+          value: snap.exists() ? (snap.data() as TenantEntitlements) : null,
+        }),
+      () => setEntSnap((prev) => keepOrEmpty(prev, tenantId)),
     );
 
     return () => {
@@ -98,6 +104,12 @@ export function TenantProvider({ children }: { children: ReactNode }) {
       unsubEnt();
     };
   }, [tenantId]);
+
+  const meta = tenantId && metaSnap?.tenantId === tenantId ? metaSnap.value : null;
+  const entitlements =
+    tenantId && entSnap?.tenantId === tenantId ? entSnap.value : null;
+  const metaLoading = !!tenantId && metaSnap?.tenantId !== tenantId;
+  const entLoading = !!tenantId && entSnap?.tenantId !== tenantId;
 
   const features = useMemo<Record<FeatureKey, boolean>>(() => {
     const overrides = (entitlements?.features ?? null) as Partial<

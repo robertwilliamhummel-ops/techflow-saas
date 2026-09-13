@@ -1,4 +1,4 @@
-FROM node:20-slim AS builder
+FROM node:24-slim AS builder
 
 WORKDIR /build
 COPY package.json package-lock.json* tsconfig.json ./
@@ -9,7 +9,7 @@ RUN npm run build
 # ---------------------------------------------------------------------------
 # Runtime image — Chrome stable + production deps only.
 # ---------------------------------------------------------------------------
-FROM node:20-slim
+FROM node:24-slim
 
 # Install Chrome stable and the font packages Puppeteer needs to render
 # realistic invoices. Slim image keeps the surface area small.

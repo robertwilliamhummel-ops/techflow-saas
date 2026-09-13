@@ -5,7 +5,7 @@ import { getFirestore } from "firebase-admin/firestore";
 import { edgeConfigGet, edgeConfigPut } from "@/lib/edgeConfig";
 
 // ---------------------------------------------------------------------------
-// Custom-domain middleware (Phase 5 / Bundle E)
+// Custom-domain proxy (Phase 5 / Bundle E; Next 16 renamed `middleware` to `proxy`)
 //
 // Purpose: resolve `Host` header → tenantId so the public portal renders
 // branded for the right contractor. Hot path is Vercel Edge Config (sub-50ms
@@ -14,18 +14,15 @@ import { edgeConfigGet, edgeConfigPut } from "@/lib/edgeConfig";
 //
 // R3: matcher excludes static assets / API routes / files with extensions —
 //     without it, every image/font triggers a Firestore read.
-// R6: runs on Node.js runtime (Firebase Admin SDK has no Edge equivalent).
-//     Module-level singleton for adminDb so init only happens once per
-//     serverless instance.
+// R6: proxy always runs on the Node.js runtime (not configurable in Next 16),
+//     which the Firebase Admin SDK needs. Module-level singleton for adminDb
+//     so init only happens once per serverless instance.
 // ---------------------------------------------------------------------------
 
 export const config = {
   matcher: [
     "/((?!_next/static|_next/image|favicon.ico|robots.txt|sitemap.xml|api/|.*\\..*).*)",
   ],
-  // Node.js middleware is stable since Next 15.5 (Next 16's proxy.ts is
-  // Node-only, so this line goes away with that upgrade).
-  runtime: "nodejs",
 };
 
 // Request header the portal layouts trust for tenant branding. Only routes the
@@ -49,11 +46,11 @@ function isGenericHost(host: string): boolean {
 
 // Lazy admin init — singleton at module scope so warm invocations skip it.
 // Returns null when admin env vars are absent (build-time / dev without
-// secrets) so the middleware degrades to "no Firestore fallback" cleanly
+// secrets) so the proxy degrades to "no Firestore fallback" cleanly
 // instead of crashing the request.
 let _adminDbHandle: ReturnType<typeof getFirestore> | null | undefined;
 
-function getAdminDbForMiddleware() {
+function getAdminDbForProxy() {
   if (_adminDbHandle !== undefined) return _adminDbHandle;
   const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
   const clientEmail = process.env.FIREBASE_ADMIN_CLIENT_EMAIL;
@@ -87,7 +84,7 @@ async function resolveTenantId(host: string): Promise<string | null> {
 
   // Cache miss → single Firestore read, then re-populate Edge Config so the
   // next request is hot. Stored at top-level `customDomains/{domain}`.
-  const adminDb = getAdminDbForMiddleware();
+  const adminDb = getAdminDbForProxy();
   if (!adminDb) return null;
   try {
     const snap = await adminDb.doc(`customDomains/${host}`).get();
@@ -102,7 +99,7 @@ async function resolveTenantId(host: string): Promise<string | null> {
   }
 }
 
-export async function middleware(req: NextRequest): Promise<NextResponse> {
+export async function proxy(req: NextRequest): Promise<NextResponse> {
   const host = (req.headers.get("host") ?? "").toLowerCase();
 
   // Never let a client-supplied tenant header through — otherwise anyone on

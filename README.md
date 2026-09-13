@@ -17,7 +17,7 @@ Multi-tenant, white-label invoicing and customer portal for TechFlow Solutions c
 
 ## Local development
 
-Requires Node 20+ (Node 22 is the target) and Java 11+ for the Firestore emulator.
+Requires Node 24 (the runtime everywhere — decision D6) and Java 21+ for the Firebase emulators (firebase-tools 15).
 
 ```bash
 npm install

@@ -9,7 +9,7 @@
 
 ## TL;DR — Decisions Locked
 
-1. **Rebuild strategy:** One pass. New repo. Next.js 15 (App Router) + Tailwind + multi-tenant Firebase from day one. No intermediate Vite multi-tenant step.
+1. **Rebuild strategy:** One pass. New repo. Next.js (App Router; 16 as built) + Tailwind + multi-tenant Firebase from day one. No intermediate Vite multi-tenant step.
 2. **Scale target:** 50+ clients. Clone-per-client model is abandoned.
 3. **Hosting:** Vercel Pro ($20/mo) for the Next.js app. PDF generation is NOT on Vercel — it runs on a dedicated Cloud Run service (see item 4).
 4. **PDF generation:** Dedicated **Cloud Run** service running full Chrome + Puppeteer in a Docker container. Not Vercel. Separate microservice, protected by an API key, called from the Next.js app. This choice is locked — see "PDF Generation Strategy" section below.
@@ -38,6 +38,7 @@
 | D3 | **Card surcharging ships disabled** behind the `cardSurcharge` feature flag (default `false`). The frozen `tenantSnapshot` is the single source for the surcharge shown and charged; the flag is a kill switch on top. | Checkout cannot tell credit from debit/prepaid, which Visa/Mastercard forbid surcharging, and Quebec is not auto-excluded. Re-enable per tenant only once card-funding detection (Stripe automatic surcharge or a compliance partner) is integrated. | `functions/src/shared/features.ts`, `surcharge.ts` (`effectiveCardSurcharge`), `updatePaymentSettings.ts`, `createPayTokenCheckoutSession.ts`, `verifyInvoicePayToken.ts`, `/settings/payments` |
 | D4 | **Per-line tax.** Every line item stores `taxable` (defaults to the document's `applyTax`); totals carry `taxableSubtotal` and `taxes[]` (one entry per tax) alongside aggregate `taxRate`/`taxAmount`. PDFs render one row per tax and mark exempt lines when an invoice mixes both. | Mixed taxable/exempt supplies are common (e.g. HST-exempt dental services). Invoices are frozen legal documents, so the shape had to be right before real data. `taxes[]` makes GST+PST/QST provinces an additive change; rates stay single-tax (GTA HST) for MVP. | `functions/src/shared/invoice.ts` (`validateLineItems`, `resolveLineItems`, `computeInvoiceTotals`), `pdf-service/src/templates/*.hbs` |
 | D5 | **Amazon SES replaces Resend** (supersedes Decision #3 below). React Email templates unchanged; transport, idempotency, bounce feedback, and owner incident alerts rebuilt on SES. | Production SES access with `techflowsolutions.ca` verified; SES tenant isolation gives per-tenant reputation protection; one email credential location (Cloud Functions only). | `functions/src/emails/send.ts`, `sesEvents.ts`, `functions/src/stripe/onPaymentIncidentCreated.ts` — see Phase 2 "React Email + Amazon SES" |
+| D6 | **Node.js 24 everywhere** (replaces the planned Node 22): Cloud Functions runtime `nodejs24`, `pdf-service` image `node:24-slim`, Vercel `engines.node: 24.x`, local dev on 24. | Node 22 is deprecated for Cloud Functions on 2027-04-30 — a second forced migration within ~7 months. Node 24 is GA in Cloud Run functions and firebase-tools 15 (deprecation 2028-04-30), is Vercel's default, and firebase-admin 14 and Puppeteer support it. | `firebase.json`, `functions/package.json`, `pdf-service/Dockerfile`, `package.json` engines |
 
 ### As-built conventions (override older code samples in this plan)
 
@@ -67,8 +68,8 @@
 | 2 Cloud Functions | Mostly done — 246 callable, 55 email, 54 shared tests | `getCustomerQuotes` (P6), MagicLinkSignIn + PaymentReceipt templates, App Check + send rate limits (R4), Sentry in functions |
 | 3 Frontend architecture | Contexts, guards, auth recovery done | 12 placeholder pages: `/dashboard`, `/invoices`, `/invoices/new`, `/invoices/[id]`, `/customers`, `/quotes/[id]`, `/portal`, `/portal/invoices/[id]`, `/portal/quotes/[id]`, `/pay/[token]`, `/pay/[token]/success`, `/pay/[token]/cancelled`; dashboard navigation |
 | 4 Stripe Connect | Backend done (D1 applied) | Public pay page UI; A-02, A-03, A-08 |
-| 5 Onboarding & domains | Signup, login, settings, team, domain, billing UI done; host-routing middleware loads | Customer magic-link sign-in (portal login is password-only today); A-07 |
-| 6 PDF | Code done — 222 tests | Deploy; Node 22 base image |
+| 5 Onboarding & domains | Signup, login, settings, team, domain, billing UI done; host-routing proxy loads | Customer magic-link sign-in (portal login is password-only today); A-07 |
+| 6 PDF | Code done — 222 tests; Node 24 image (D6) | Deploy (the Docker image has not been built yet) |
 | 7 Testing & first onboarding | Bundles A–E done | Test matrix, staging project, backup restore drill, first onboarding |
 | Deploy | Nothing deployed | "Environment Strategy & Deploy Runbook" |
 
@@ -81,7 +82,7 @@
 | A-04 | `processRecurringInvoices` collection-group query (`status ==` + `nextRunAt <=`) has no composite index — fails in production (the emulator doesn't enforce indexes) | `firestore.indexes.json` | Add the `recurringInvoices` COLLECTION_GROUP index |
 | A-05 | `getCustomerInvoices` (and the customer rule branch) include drafts; list rows carry full base64 logos (callable 10 MB limit at ~20 rows) | `functions/src/portal/getCustomerInvoices.ts`, `firestore.rules` | Exclude `draft`; project a small logo URL |
 | A-06 | Emails embed the snapshot's base64 `data:` logo, which Gmail web and Outlook block | `sendInvoiceEmail.ts`, `sendQuoteEmail.ts`, `processRecurringInvoices.ts` | Copy the logo to an immutable public Storage path at snapshot time; use that https URL in email |
-| A-07 | Edge Config keys `domain:{host}` contain `:` and `.`, but keys must match `^[\w-]+$` — every write fails silently | `src/middleware.ts`, `functions/src/domain/setupCustomDomain.ts` | Encode the host into a valid key in one shared helper |
+| A-07 | Edge Config keys `domain:{host}` contain `:` and `.`, but keys must match `^[\w-]+$` — every write fails silently | `src/proxy.ts`, `functions/src/domain/setupCustomDomain.ts` | Encode the host into a valid key in one shared helper |
 | A-08 | Sent invoices can be edited (amount, customer email) without bumping `payTokenVersion`; the webhook marks paid without comparing `amount_total` | `updateInvoice.ts`, `handlers.ts` | Bump the version on edits of a sent invoice; verify the amount before marking paid |
 | A-10 | No callables to create/update/delete customers or pause/resume/cancel recurring templates, while rules block client writes | `functions/src/index.ts`, `firestore.rules` | `upsertCustomer`, `deleteCustomer`, `updateRecurringInvoice` |
 | A-12 | Smaller: `useAuth.ts` types roles as `member`/`platform_admin`; `deleteInvoice` hard-deletes sent invoices (should become `void`); `createQuote` prefix only maps `INV→QT`; the `onSignup` membership check isn't transactional | various | — |
@@ -90,17 +91,17 @@ Closed by the D-decisions: A-09 (surcharge shown vs charged — D3), A-11 (email
 
 Fixed: A-13 (2026-09-13) — `storage.rules` used `logo.{ext}`, invalid path syntax, so the ruleset never loaded. It now matches `/tenants/{tenantId}/{fileName}` and validates the file name, content type, and size; covered by `functions/test/rules/storage.test.ts`.
 
-Fixed: A-01 (2026-09-13) — `middleware.ts`, `instrumentation.ts`, and `instrumentation-client.ts` moved into `src/`, so Next.js loads them (the build's functions-config manifest lists `/_middleware` on the Node.js runtime). The middleware now also strips any client-supplied `x-tenant-id` before routing. Covered by `src/__tests__/middleware.test.ts`.
+Fixed: A-01 (2026-09-13) — `middleware.ts`, `instrumentation.ts`, and `instrumentation-client.ts` moved into `src/`, so Next.js loads them (the build's functions-config manifest lists `/_middleware` on the Node.js runtime). The middleware now also strips any client-supplied `x-tenant-id` before routing. Covered by `src/__tests__/proxy.test.ts` (Next 16 renamed the file to `src/proxy.ts`).
 
 ### Platform deadlines
 
-- **Next.js:** on 15.5.25 (includes the May–August 2026 security releases; the critical RCE was fixed in 15.5.24). Next 15 reaches end of life on 2026-10-21 — move to Next 16 before then (`src/middleware.ts` becomes `src/proxy.ts`, which is Node-only, so its `config.runtime` line is removed).
-- **Node.js:** Cloud Functions decommissions Node 20 on 2026-10-30. Move `functions/package.json` engines, `firebase.json` runtime, and the `pdf-service` Dockerfile to Node 22 (firebase-functions 7 and firebase-admin 14 require it).
+- **Next.js:** on 16.3.5 with React 19.3 (Next 15's 2026-10-21 end of life no longer applies). Next 16 removed `next lint` — run `npm run lint`; `next build` no longer lints.
+- **Node.js:** 24 everywhere (D6). Cloud Functions deprecates Node 24 on 2028-04-30; Vercel deprecates Node 20 on 2026-10-01, which the `engines.node: 24.x` pin avoids.
 
 ### Path to launch (in order)
 
 1. ~~Next 15.5.25 and move the A-01 files into `src/`.~~ Done 2026-09-13.
-2. Platform upgrade: Node 22, firebase-functions 7, firebase-admin 14, firebase-tools 15, Next 16.
+2. ~~Platform upgrade: Node 22, firebase-functions 7, firebase-admin 14, firebase-tools 15, Next 16.~~ Done 2026-09-13 — Node 24 (D6), firebase-functions 7.3, firebase-admin 14.4, firebase-tools 15.30, Next 16.3, React 19.3.
 3. Backend fixes A-02 → A-12, each with a test that would have caught it.
 4. Product screens: Phase 3 placeholders, public pay page, portal magic-link sign-in.
 5. Stand up staging, then prod, per the Deploy Runbook.
@@ -183,7 +184,7 @@ This keeps PDF service stateless and fast: it receives `{ html, snapshot }` (or 
 ### Dockerfile sketch
 
 ```dockerfile
-FROM node:20-slim
+FROM node:24-slim
 
 # Install Chrome stable + fonts
 RUN apt-get update && apt-get install -y \
@@ -246,7 +247,7 @@ All confirmed:
 | tenantSnapshot policy | **Frozen at creation time (legal document approach).** Invoices/quotes embed a branding snapshot when created. If a contractor rebrands later, old documents keep the branding they were sent with. This is correct for tax/legal documents and avoids cross-doc reads in security rules. PDFs always render from the snapshot, never from current `meta`. |
 | Environment strategy | **Separate Firebase projects for dev/staging/prod.** Stripe test vs live keys per Vercel environment scope. See "Environment Strategy" section below Phase 7. |
 | CSS approach | Tailwind only. No plain CSS files |
-| Stack | Next.js 15 App Router + Tailwind + TypeScript |
+| Stack | Next.js 16 App Router + Tailwind + TypeScript |
 
 ---
 
@@ -1847,7 +1848,7 @@ Two domain tiers per tenant:
 - **`customDomain` field in tenant meta.** Set by Reggie (platform admin) during onboarding or by tenant in `/settings` (if on a plan that includes custom domains — feature-gated via `entitlements`).
 - **`customDomains/{domain}` Firestore collection.** Reverse lookup: `domain → tenantId`. Written by the `setupCustomDomain` callable (owner/admin, `customDomain` feature) and removed by `removeCustomDomain`. The middleware reads it only on an Edge Config miss.
 - **Vercel domain provisioning.** Cloud Function calls the [Vercel Domains API](https://vercel.com/docs/rest-api/endpoints/domains) to add/remove the domain from the Vercel project when `customDomain` is set/changed.
-- **Next.js middleware** (`src/middleware.ts`, Node.js runtime via `config.runtime`; becomes `src/proxy.ts` on Next 16):
+- **Next.js proxy** (`src/proxy.ts` — Next 16's name for middleware; it always runs on the Node.js runtime):
   1. On every request, read `Host` header and **delete any incoming `x-tenant-id`** — portal layouts trust that header, so a client-supplied value must never reach them.
   2. If host is not `portal.techflowsolutions.ca` (the generic domain; also `localhost`, `127.0.0.1`, `*.vercel.app`), look up `tenantId` (Edge Config, then `customDomains/{host}`).
   3. If found, inject `x-tenant-id` into the forwarded request headers so the login page and portal can load that tenant's branding.
@@ -2404,7 +2405,7 @@ Not MVP-critical. Shape is reserved so it can be added later without schema migr
 | `NEXT_PUBLIC_APP_URL` | pay links in PDFs (`https://portal.techflowsolutions.ca` in prod) |
 | `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | pay page (when built) |
 | `NEXT_PUBLIC_SENTRY_DSN`, `SENTRY_DSN` | Sentry client and server (only load once A-01 is fixed) |
-| `FIREBASE_ADMIN_CLIENT_EMAIL`, `FIREBASE_ADMIN_PRIVATE_KEY` | Admin SDK in middleware, PDF routes, webhooks, branded pages — store the key with escaped `\n` |
+| `FIREBASE_ADMIN_CLIENT_EMAIL`, `FIREBASE_ADMIN_PRIVATE_KEY` | Admin SDK in the proxy, PDF routes, webhooks, branded pages — store the key with escaped `\n` |
 | `STRIPE_SECRET_KEY` | webhook auto-refunds |
 | `STRIPE_PLATFORM_WEBHOOK_SECRET`, `STRIPE_CONNECT_WEBHOOK_SECRET` | the two webhook routes |
 | `PDF_SERVICE_URL`, `PDF_SERVICE_API_KEY` | `/api/pdf/*` proxy |

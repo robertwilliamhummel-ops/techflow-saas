@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { httpsCallable } from "firebase/functions";
@@ -46,54 +46,65 @@ function AcceptInviteFlow() {
   const token = params.get("token") ?? "";
   const linkComplete = Boolean(tenantId && invitationId && token);
 
-  const [status, setStatus] = useState<Status>({ kind: "init" });
+  // Only the outcome of the onAcceptInvite call is stored, tagged with the
+  // user it ran for. The states before the call (bad link, signed out,
+  // unverified) are derived from the link and auth state during render.
+  const [outcome, setOutcome] = useState<{ uid: string; status: Status } | null>(
+    null,
+  );
+  // Guards against a second call for the same user (effect re-runs, Strict Mode).
+  const acceptedFor = useRef<string | null>(null);
+  const uid = user?.uid ?? null;
+  const readyToAccept =
+    linkComplete && !authLoading && !!uid && !!claims.email_verified;
 
   useEffect(() => {
-    if (!linkComplete) {
-      setStatus({
-        kind: "error",
-        message:
-          "This invitation link is missing required information. Ask the sender to re-send it.",
-      });
-      return;
-    }
-    if (authLoading) return;
-    if (!user) {
-      setStatus({ kind: "needs-signin" });
-      return;
-    }
-    if (!claims.email_verified) {
-      setStatus({ kind: "needs-verify" });
-      return;
-    }
-    if (status.kind !== "init" && status.kind !== "accepting") return;
-    setStatus({ kind: "accepting" });
+    if (!readyToAccept || !uid || acceptedFor.current === uid) return;
+    acceptedFor.current = uid;
+    const email = user?.email ?? null;
     (async () => {
       try {
         const fn = httpsCallable(getClientFunctions(), "onAcceptInvite");
         await fn({ tenantId, invitationId, token });
         await refreshClaims();
-        setStatus({ kind: "success" });
+        setOutcome({ uid, status: { kind: "success" } });
         setTimeout(() => router.replace("/dashboard"), 800);
       } catch (err) {
         const message =
           err instanceof Error ? err.message : "Could not accept invitation.";
-        if (
-          message.includes("issued to a different email") &&
-          user?.email
-        ) {
-          setStatus({
-            kind: "wrong-email",
-            expected: "the invited address",
-            actual: user.email,
+        if (message.includes("issued to a different email") && email) {
+          setOutcome({
+            uid,
+            status: {
+              kind: "wrong-email",
+              expected: "the invited address",
+              actual: email,
+            },
           });
         } else {
-          setStatus({ kind: "error", message });
+          setOutcome({ uid, status: { kind: "error", message } });
         }
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authLoading, user, claims.email_verified, linkComplete]);
+  }, [readyToAccept, uid]);
+
+  let status: Status;
+  if (!linkComplete) {
+    status = {
+      kind: "error",
+      message:
+        "This invitation link is missing required information. Ask the sender to re-send it.",
+    };
+  } else if (authLoading) {
+    status = { kind: "init" };
+  } else if (!user) {
+    status = { kind: "needs-signin" };
+  } else if (!claims.email_verified) {
+    status = { kind: "needs-verify" };
+  } else {
+    status = outcome?.uid === user.uid ? outcome.status : { kind: "accepting" };
+  }
 
   const inviteHref = `/accept-invite?tenantId=${encodeURIComponent(
     tenantId,

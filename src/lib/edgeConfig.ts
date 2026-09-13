@@ -1,12 +1,12 @@
 import "server-only";
 
-// Edge Config wrapper. Used by middleware for hot-path domain→tenantId lookup
+// Edge Config wrapper. Used by the proxy (src/proxy.ts) for hot-path domain→tenantId lookup
 // and by Cloud Functions for write-side cache population. Reads use the
 // connection string in EDGE_CONFIG (Vercel-managed). Writes go through the
 // Vercel REST API and require both EDGE_CONFIG_ID + VERCEL_API_TOKEN.
 //
 // All helpers tolerate missing env vars and return null/false so local dev
-// without Vercel creds still boots (middleware falls back to Firestore).
+// without Vercel creds still boots (the proxy falls back to Firestore).
 
 const EDGE_CONFIG = process.env.EDGE_CONFIG;
 const EDGE_CONFIG_ID = process.env.EDGE_CONFIG_ID;

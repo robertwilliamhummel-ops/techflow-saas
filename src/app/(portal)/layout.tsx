@@ -12,8 +12,9 @@ const PLATFORM_DEFAULT: Metadata = {
 };
 
 export async function generateMetadata(): Promise<Metadata> {
-  // Phase 5 wires middleware to inject x-tenant-id from custom domain or
-  // Edge Config lookup. Until then, this resolves to the platform default.
+  // src/proxy.ts injects x-tenant-id for custom domains (Edge Config, then
+  // Firestore) and strips any client-supplied value. Generic hosts have no
+  // header, so they get the platform default.
   const h = await headers();
   const tenantId = h.get("x-tenant-id");
   if (!tenantId) return PLATFORM_DEFAULT;
