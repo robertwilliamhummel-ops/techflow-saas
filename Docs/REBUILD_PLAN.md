@@ -67,7 +67,7 @@
 | 1.5 Design system | Done | — |
 | 2 Cloud Functions | Mostly done — 246 callable, 55 email, 54 shared tests | `getCustomerQuotes` (P6), MagicLinkSignIn + PaymentReceipt templates, App Check + send rate limits (R4), Sentry in functions |
 | 3 Frontend architecture | Contexts, guards, auth recovery done | 12 placeholder pages: `/dashboard`, `/invoices`, `/invoices/new`, `/invoices/[id]`, `/customers`, `/quotes/[id]`, `/portal`, `/portal/invoices/[id]`, `/portal/quotes/[id]`, `/pay/[token]`, `/pay/[token]/success`, `/pay/[token]/cancelled`; dashboard navigation |
-| 4 Stripe Connect | Backend done (D1 applied) | Public pay page UI; A-02, A-03, A-08 |
+| 4 Stripe Connect | Backend done (D1 applied) | Public pay page UI; A-02, A-08 |
 | 5 Onboarding & domains | Signup, login, settings, team, domain, billing UI done; host-routing proxy loads | Customer magic-link sign-in (portal login is password-only today); A-07 |
 | 6 PDF | Code done — 222 tests; Node 24 image (D6) | Deploy (the Docker image has not been built yet) |
 | 7 Testing & first onboarding | Bundles A–E done | Test matrix, staging project, backup restore drill, first onboarding |
@@ -78,7 +78,6 @@
 | Ref | Bug | Where | Fix |
 |---|---|---|---|
 | A-02 | Payment saves `session.payment_intent` (`pi_…`) as `stripeChargeId`; refund and dispute handlers look up `charge.id` (`ch_…`), so they never match | `src/app/api/webhooks/stripe/handlers.ts` | Store `stripePaymentIntentId`; look up by `charge.payment_intent` |
-| A-03 | Event sentinel is written before the handler runs; a failed handler is never retried (redelivery sees "duplicate") | `src/lib/stripe/idempotency.ts`, webhook routes | `processing` → `done` states; release on failure |
 | A-04 | `processRecurringInvoices` collection-group query (`status ==` + `nextRunAt <=`) has no composite index — fails in production (the emulator doesn't enforce indexes) | `firestore.indexes.json` | Add the `recurringInvoices` COLLECTION_GROUP index |
 | A-05 | `getCustomerInvoices` (and the customer rule branch) include drafts; list rows carry full base64 logos (callable 10 MB limit at ~20 rows) | `functions/src/portal/getCustomerInvoices.ts`, `firestore.rules` | Exclude `draft`; project a small logo URL |
 | A-06 | Emails embed the snapshot's base64 `data:` logo, which Gmail web and Outlook block | `sendInvoiceEmail.ts`, `sendQuoteEmail.ts`, `processRecurringInvoices.ts` | Copy the logo to an immutable public Storage path at snapshot time; use that https URL in email |
@@ -92,6 +91,8 @@ Closed by the D-decisions: A-09 (surcharge shown vs charged — D3), A-11 (email
 Fixed: A-13 (2026-09-13) — `storage.rules` used `logo.{ext}`, invalid path syntax, so the ruleset never loaded. It now matches `/tenants/{tenantId}/{fileName}` and validates the file name, content type, and size; covered by `functions/test/rules/storage.test.ts`.
 
 Fixed: A-01 (2026-09-13) — `middleware.ts`, `instrumentation.ts`, and `instrumentation-client.ts` moved into `src/`, so Next.js loads them (the build's functions-config manifest lists `/_middleware` on the Node.js runtime). The middleware now also strips any client-supplied `x-tenant-id` before routing. Covered by `src/__tests__/proxy.test.ts` (Next 16 renamed the file to `src/proxy.ts`).
+
+Fixed: A-03 (2026-09-13) — the event marker was written before the handler ran, so a failed handler was never retried. `stripeEvents/{eventId}` now moves `processing` → `done` (or `failed`, which Stripe's retry re-runs); a copy arriving mid-run gets 409; a 5-minute lease covers crashed runs; auto-refunds carry Stripe idempotency keys. Covered by `src/app/api/webhooks/stripe/__tests__/webhooks.test.ts`. The unused Cloud Functions copy of `claimStripeEvent` was deleted.
 
 ### Platform deadlines
 
@@ -1571,7 +1572,7 @@ Stripe delivers events in two scopes. Each endpoint has its own signing secret a
 
 **1. Platform scope — `POST /api/webhooks/stripe/platform`** (`STRIPE_PLATFORM_WEBHOOK_SECRET`). Events about TechFlow's own Stripe account. Nothing needs handling today (no platform billing): the route verifies the signature, rejects events carrying `event.account`, logs, and returns 200.
 
-**2. Connected-accounts scope — `POST /api/webhooks/stripe/connect`** (`STRIPE_CONNECT_WEBHOOK_SECRET`). Every event carries `event.account` and is routed through `stripeAccounts/{event.account}`; unknown accounts get 200 plus an error log. Idempotency uses `stripeEvents/{event.id}` (A-03 open). Register it with "Listen to events on Connected accounts" and these events:
+**2. Connected-accounts scope — `POST /api/webhooks/stripe/connect`** (`STRIPE_CONNECT_WEBHOOK_SECRET`). Every event carries `event.account` and is routed through `stripeAccounts/{event.account}`; unknown accounts get 200 plus an error log. **Idempotency (A-03):** `stripeEvents/{event.id}` moves `processing` → `done` only after the handler succeeds. A handler that throws marks it `failed` and returns 500, so Stripe's retry (up to 3 days in live mode) runs it again; a copy arriving while a run holds its 5-minute lease gets 409 so Stripe retries later; a lapsed lease is reclaimed. Handlers are therefore written to run more than once — merge writes, deterministic incident ids, and Stripe idempotency keys on refunds. Register it with "Listen to events on Connected accounts" and these events:
 
 - `checkout.session.completed` — `metadata.tenantId` must match the routed tenant (otherwise a `tenant-mismatch` incident). **C2 guard:** if `metadata.payTokenVersion` differs from the invoice's current version, the tenant regenerated the link mid-checkout — refund on the connected account and write an `auto-refund-version-mismatch` incident instead of marking paid. Otherwise set `status: 'paid'`, `paidAt`, `paymentMethod: 'card'`, `paidAmountCents`, `surchargeAmountCents`, `stripeChargeId` (A-02 open).
 - `payment_intent.payment_failed` — log only; the customer can retry.

@@ -385,6 +385,106 @@ describe("connect webhook — POST /api/webhooks/stripe/connect", () => {
     const res = await connectPOST(makeRequest("{}"));
     expect(res.status).toBe(500);
     expect(err).toHaveBeenCalled();
+    expect(store.get("stripeEvents/evt_throw")).toMatchObject({
+      status: "failed",
+      lastError: "db boom",
+    });
     err.mockRestore();
+  });
+
+  // -------------------------------------------------------------------------
+  // A-03 — processing → done / failed states
+  // -------------------------------------------------------------------------
+
+  function refundEvent(id: string): Stripe.Event {
+    return {
+      id,
+      type: "charge.refunded",
+      account: "acct_live",
+      livemode: false,
+      data: { object: {} },
+    } as unknown as Stripe.Event;
+  }
+
+  it("marks the event done only after the handler succeeds", async () => {
+    store.set("stripeAccounts/acct_live", { tenantId: "tnt_live" });
+    let statusWhileHandling: unknown;
+    handleChargeRefunded.mockImplementationOnce(async () => {
+      statusWhileHandling = store.get("stripeEvents/evt_state")?.status;
+    });
+    constructEvent.mockReturnValue(refundEvent("evt_state"));
+
+    const res = await connectPOST(makeRequest("{}"));
+    expect(res.status).toBe(200);
+    expect(statusWhileHandling).toBe("processing");
+    expect(store.get("stripeEvents/evt_state")).toMatchObject({
+      status: "done",
+      attempts: 1,
+      leaseExpiresAtMs: null,
+    });
+  });
+
+  it("A-03: a failed handler is released and Stripe's retry processes the event", async () => {
+    store.set("stripeAccounts/acct_live", { tenantId: "tnt_live" });
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    handleChargeRefunded
+      .mockRejectedValueOnce(new Error("firestore unavailable"))
+      .mockResolvedValueOnce(undefined);
+
+    constructEvent.mockReturnValue(refundEvent("evt_retry"));
+    const first = await connectPOST(makeRequest("{}"));
+    expect(first.status).toBe(500);
+    expect(store.get("stripeEvents/evt_retry")).toMatchObject({
+      status: "failed",
+      lastError: "firestore unavailable",
+    });
+
+    // Stripe redelivers the same event id after the 500.
+    constructEvent.mockReturnValue(refundEvent("evt_retry"));
+    const retry = await connectPOST(makeRequest("{}"));
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toEqual({ received: true });
+    expect(handleChargeRefunded).toHaveBeenCalledTimes(2);
+    expect(store.get("stripeEvents/evt_retry")).toMatchObject({
+      status: "done",
+      attempts: 2,
+    });
+    err.mockRestore();
+  });
+
+  it("a copy arriving while the event is still processing gets 409 so Stripe retries later", async () => {
+    store.set("stripeAccounts/acct_live", { tenantId: "tnt_live" });
+    store.set("stripeEvents/evt_busy", {
+      status: "processing",
+      attempts: 1,
+      leaseExpiresAtMs: Date.now() + 60_000,
+    });
+    constructEvent.mockReturnValue(refundEvent("evt_busy"));
+
+    const res = await connectPOST(makeRequest("{}"));
+    expect(res.status).toBe(409);
+    expect(handleChargeRefunded).not.toHaveBeenCalled();
+    expect(store.get("stripeEvents/evt_busy")).toMatchObject({
+      status: "processing",
+      attempts: 1,
+    });
+  });
+
+  it("reclaims an event whose processing lease lapsed (crashed or timed-out run)", async () => {
+    store.set("stripeAccounts/acct_live", { tenantId: "tnt_live" });
+    store.set("stripeEvents/evt_stale", {
+      status: "processing",
+      attempts: 1,
+      leaseExpiresAtMs: Date.now() - 1,
+    });
+    constructEvent.mockReturnValue(refundEvent("evt_stale"));
+
+    const res = await connectPOST(makeRequest("{}"));
+    expect(res.status).toBe(200);
+    expect(handleChargeRefunded).toHaveBeenCalledTimes(1);
+    expect(store.get("stripeEvents/evt_stale")).toMatchObject({
+      status: "done",
+      attempts: 2,
+    });
   });
 });

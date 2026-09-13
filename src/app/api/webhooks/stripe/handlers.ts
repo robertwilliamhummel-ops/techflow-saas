@@ -1,9 +1,10 @@
 // Connect webhook handlers — payment, refund, and dispute reconciliation.
 //
 // All handlers receive the tenantId (resolved upstream via the stripeAccounts
-// reverse-lookup doc) plus the raw Stripe event. Idempotency is already
-// guaranteed by the route layer (stripeEvents/{event.id} claim), so these
-// handlers focus purely on state transitions.
+// reverse-lookup doc) plus the raw Stripe event. The route marks an event done
+// only after its handler succeeds and releases it on failure so Stripe's retry
+// runs it again (A-03). Every handler must therefore be safe to run more than
+// once: merge writes, deterministic incident ids, idempotency keys on Stripe calls.
 //
 // CRITICAL: checkoutCompleted enforces the C2 pay-token version guard. If
 // `session.metadata.payTokenVersion` diverges from the invoice's current
@@ -179,9 +180,11 @@ async function autoRefundVersionMismatch(args: {
       // stripeAccount context required — the payment lives on the connected
       // account, not the platform. Without it the refund call fails with
       // "no such payment_intent."
+      // Idempotency key per session: a re-run of this event (A-03) gets the
+      // original refund back from Stripe instead of creating a second one.
       const refund = await getStripeClient().refunds.create(
         { payment_intent: paymentIntent, reason: "requested_by_customer" },
-        { stripeAccount },
+        { stripeAccount, idempotencyKey: `auto-refund:${session.id}` },
       );
       refundId = refund.id;
     } catch (err) {

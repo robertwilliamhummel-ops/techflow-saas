@@ -8,7 +8,11 @@ import { NextResponse } from "next/server";
 import type Stripe from "stripe";
 import { getAdminDb } from "@/lib/firebase/admin";
 import { getStripeClient } from "@/lib/stripe/admin";
-import { claimStripeEvent } from "@/lib/stripe/idempotency";
+import {
+  claimStripeEvent,
+  completeStripeEvent,
+  releaseStripeEvent,
+} from "@/lib/stripe/idempotency";
 import {
   handleAccountDeauthorized,
   handleAccountUpdated,
@@ -77,13 +81,22 @@ export async function POST(req: Request): Promise<Response> {
     return NextResponse.json({ received: true, ignored: "unlinkable-account" });
   }
 
-  const claimed = await claimStripeEvent(event.id, {
+  const claim = await claimStripeEvent(event.id, {
     type: event.type,
     account: event.account,
     livemode: event.livemode,
   });
-  if (!claimed) {
+  if (claim === "duplicate") {
     return NextResponse.json({ received: true, duplicate: true });
+  }
+  if (claim === "in-progress") {
+    // Another delivery of this event is still running. A non-2xx makes Stripe
+    // retry later instead of counting this copy as delivered — if the running
+    // copy fails, that retry is what processes the event.
+    return NextResponse.json(
+      { error: "Event is already being processed." },
+      { status: 409 },
+    );
   }
 
   try {
@@ -119,7 +132,26 @@ export async function POST(req: Request): Promise<Response> {
     console.error(
       `[stripe connect] handler failed for ${event.type} / ${tenantId}: ${message}`,
     );
+    try {
+      // Release so Stripe's retry (triggered by the 500) runs the event again.
+      await releaseStripeEvent(event.id, message);
+    } catch (releaseErr) {
+      // The processing lease still lapses on its own; the retry after that works.
+      console.error(`[stripe connect] could not release event ${event.id}`, {
+        error: releaseErr instanceof Error ? releaseErr.message : String(releaseErr),
+      });
+    }
     return NextResponse.json({ error: "Handler failed." }, { status: 500 });
+  }
+
+  try {
+    await completeStripeEvent(event.id);
+  } catch (err) {
+    // The handler's writes landed. If the marker can't be finished, a later copy
+    // re-runs the (idempotent) handler once the lease lapses — acknowledge anyway.
+    console.error(`[stripe connect] could not mark event ${event.id} done`, {
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 
   return NextResponse.json({ received: true });

@@ -306,7 +306,8 @@ describe("handleCheckoutCompleted", () => {
     expect(refundsCreate).toHaveBeenCalledTimes(1);
     expect(refundsCreate).toHaveBeenCalledWith(
       { payment_intent: "pi_123", reason: "requested_by_customer" },
-      { stripeAccount: ACCT },
+      // A-03: a re-run gets Stripe's saved refund back instead of a second refund.
+      { stripeAccount: ACCT, idempotencyKey: "auto-refund:cs_test_abc" },
     );
 
     const incidents = [...docs.entries()].filter(([k]) =>
