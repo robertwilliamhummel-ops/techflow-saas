@@ -63,6 +63,14 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // ---------- emailSends/{keyHash} ----------
+    // Email idempotency sentinel (D5) — written by Cloud Functions only.
+    // 30-day TTL via Firestore TTL policy on `expireAt`.
+    match /emailSends/{keyHash} {
+      allow read: if false;
+      allow write: if false;
+    }
+
     // ---------- platformAdmins/{uid} ----------
     match /platformAdmins/{uid} {
       allow read: if isPlatformAdmin();

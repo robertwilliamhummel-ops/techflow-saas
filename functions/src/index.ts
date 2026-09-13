@@ -54,6 +54,10 @@ export { scheduledFirestoreExport } from "./scheduled/firestoreExport";
 export { startConnectOnboarding } from "./stripe/startConnectOnboarding";
 export { completeConnectOnboarding } from "./stripe/completeConnectOnboarding";
 
+// D5 — Amazon SES: payment-incident owner alerts + bounce/complaint feedback.
+export { onPaymentIncidentCreated } from "./stripe/onPaymentIncidentCreated";
+export { sesEventsWebhook } from "./emails/sesEvents";
+
 // Phase 5 Bundle E — Custom domains + Vercel/Edge Config provisioning.
 export {
   setupCustomDomain,

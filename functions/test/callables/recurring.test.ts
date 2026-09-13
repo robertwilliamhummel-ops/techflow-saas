@@ -10,7 +10,7 @@ vi.mock("firebase-functions/params", () => ({
   defineSecret: (name: string) => ({
     value: () => {
       if (name === "PAY_TOKEN_SECRET") return TEST_SECRET;
-      if (name === "RESEND_API_KEY") return "re_test_fake";
+      if (name === "AWS_SES_ACCESS_KEY_ID") return "AKIA_TEST";
       return "mock-secret";
     },
   }),
@@ -22,11 +22,13 @@ vi.mock("firebase-functions/logger", () => ({
   error: vi.fn(),
 }));
 
-const mockResendSend = vi.fn().mockResolvedValue({ data: { id: "email_123" } });
-vi.mock("resend", () => ({
-  Resend: vi.fn().mockImplementation(() => ({
-    emails: { send: mockResendSend },
-  })),
+// Amazon SES (D5) — SendEmailCommand reduced to { input } for inspection.
+const mockSesSend = vi.fn().mockResolvedValue({ MessageId: "ses_msg_123" });
+vi.mock("@aws-sdk/client-sesv2", () => ({
+  SESv2Client: vi.fn().mockImplementation(() => ({ send: mockSesSend })),
+  SendEmailCommand: vi
+    .fn()
+    .mockImplementation((input: unknown) => ({ input })),
 }));
 
 vi.mock("@react-email/render", () => ({
@@ -266,7 +268,7 @@ describe("addDaysToISODate", () => {
 describe("createRecurringInvoice", () => {
   beforeEach(async () => {
     await clearFirestore();
-    mockResendSend.mockClear();
+    mockSesSend.mockClear();
   });
 
   it("rejects unauthenticated calls", async () => {
@@ -417,7 +419,7 @@ describe("createRecurringInvoice", () => {
 describe("processRecurringInvoices", () => {
   beforeEach(async () => {
     await clearFirestore();
-    mockResendSend.mockClear();
+    mockSesSend.mockClear();
   });
 
   it("does nothing when no templates are due", async () => {
@@ -603,11 +605,16 @@ describe("processRecurringInvoices", () => {
     await seedRecurringTemplate({ autoSend: true });
     await processRecurringInvoicesHandler();
 
-    // Email sent
-    expect(mockResendSend).toHaveBeenCalledTimes(1);
-    const call = mockResendSend.mock.calls[0][0];
-    expect(call.to).toBe("jane@example.com");
-    expect(call.subject).toMatch(/Invoice.*Acme Plumbing/);
+    // Email sent through SES, tagged for bounce tracking (D5)
+    expect(mockSesSend).toHaveBeenCalledTimes(1);
+    const call = mockSesSend.mock.calls[0][0].input;
+    expect(call.Destination.ToAddresses).toEqual(["jane@example.com"]);
+    expect(call.Content.Simple.Subject.Data).toMatch(/Invoice.*Acme Plumbing/);
+    expect(call.ReplyToAddresses).toEqual(["pay@acme.test"]);
+    expect(call.EmailTags).toContainEqual({
+      Name: "category",
+      Value: "recurring-invoice",
+    });
 
     // Invoice status transitioned to "sent"
     const invoices = await testDb
@@ -621,7 +628,7 @@ describe("processRecurringInvoices", () => {
     await seedRecurringTemplate({ autoSend: false });
     await processRecurringInvoicesHandler();
 
-    expect(mockResendSend).not.toHaveBeenCalled();
+    expect(mockSesSend).not.toHaveBeenCalled();
 
     const invoices = await testDb
       .collection(`tenants/${TENANT}/invoices`)

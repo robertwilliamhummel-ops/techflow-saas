@@ -17,7 +17,6 @@ import { FieldValue } from "firebase-admin/firestore";
 import { getAdminDb } from "@/lib/firebase/admin";
 import { getStripeClient } from "@/lib/stripe/admin";
 import { buildStripeStatusFromAccount } from "@/lib/stripe/status";
-import { notifyTenantOfIncident } from "@/lib/emails/paymentIncidentNotify";
 
 // ---------------------------------------------------------------------------
 // Shared lookup helpers
@@ -80,7 +79,8 @@ export async function handleCheckoutCompleted(
     // Paranoia check: session metadata claims a different tenant than the one
     // the reverse-lookup resolved. Do not reconcile — write an incident and
     // bail so a support human can investigate.
-    await writeIncident(tenantId, invoiceId, {
+    await writeIncident(tenantId, invoiceId, `tenant-mismatch_${session.id}`, {
+      kind: "tenant-mismatch",
       reason: "tenant-mismatch",
       sessionId: session.id,
       metadataTenantId: metaTenantId,
@@ -195,20 +195,14 @@ async function autoRefundVersionMismatch(args: {
     refundError = "missing-payment-intent";
   }
 
-  await writeIncident(tenantId, invoiceId, {
+  await writeIncident(tenantId, invoiceId, `auto-refund_${session.id}`, {
+    kind: "auto-refund-version-mismatch",
     reason: "version-mismatch",
     sessionId: session.id,
     metadataVersion: sessionVersion,
     currentVersion,
     refundId,
     refundError,
-  });
-
-  await notifyTenantOfIncident({
-    tenantId,
-    invoiceId,
-    kind: "auto-refund-version-mismatch",
-    details: { refundId, refundError },
   });
 }
 
@@ -289,15 +283,12 @@ export async function handleDisputeCreated(
           .slice(0, 10)
       : undefined;
 
-  await notifyTenantOfIncident({
-    tenantId,
-    invoiceId: match.ref.id,
+  await writeIncident(tenantId, match.ref.id, `dispute-created_${dispute.id}`, {
     kind: "dispute-created",
-    details: {
-      reason: dispute.reason ?? "unspecified",
-      evidenceDueBy,
-      disputeId: dispute.id,
-    },
+    disputeId: dispute.id,
+    disputeReason: dispute.reason ?? "unspecified",
+    evidenceDueBy: evidenceDueBy ?? null,
+    amountCents: dispute.amount ?? null,
   });
 }
 
@@ -336,15 +327,11 @@ export async function handleDisputeClosed(
       { merge: true },
     );
 
-    await notifyTenantOfIncident({
-      tenantId,
-      invoiceId: match.ref.id,
+    await writeIncident(tenantId, match.ref.id, `dispute-lost_${dispute.id}`, {
       kind: "dispute-lost",
-      details: {
-        amountCents: dispute.amount ?? null,
-        disputeId: dispute.id,
-        outcomeStatus: dispute.status,
-      },
+      disputeId: dispute.id,
+      amountCents: dispute.amount ?? null,
+      outcomeStatus: dispute.status,
     });
   }
 }
@@ -452,16 +439,23 @@ export async function handleAccountDeauthorized(
 // paymentIncidents audit writer
 // ---------------------------------------------------------------------------
 
+// Deterministic ids (kind + Stripe object id): a redelivered event rewrites the
+// same doc. The Cloud Functions trigger onPaymentIncidentCreated emails tenant
+// owners on CREATE only (D5), so redelivery never double-emails.
 async function writeIncident(
   tenantId: string,
   invoiceId: string,
+  incidentId: string,
   payload: Record<string, unknown>,
 ): Promise<void> {
   const db = getAdminDb();
   await db
-    .collection(`tenants/${tenantId}/invoices/${invoiceId}/paymentIncidents`)
-    .add({
-      ...payload,
-      createdAt: FieldValue.serverTimestamp(),
-    });
+    .doc(`tenants/${tenantId}/invoices/${invoiceId}/paymentIncidents/${incidentId}`)
+    .set(
+      {
+        ...payload,
+        createdAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
 }

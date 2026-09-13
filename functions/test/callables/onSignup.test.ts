@@ -35,6 +35,8 @@ describe("onSignup", () => {
     expect(meta.exists).toBe(true);
     expect(meta.data()?.name).toBe("Acme Plumbing");
     expect(meta.data()?.taxRate).toBe(0.13);
+    // D5 — Reply-To defaults to the owner's signup email.
+    expect(meta.data()?.contactEmail).toBe("owner@acme.test");
     expect(meta.data()?.stripeStatus.chargesEnabled).toBe(false);
 
     const ent = await testDb

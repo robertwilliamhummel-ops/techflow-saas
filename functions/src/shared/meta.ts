@@ -5,11 +5,18 @@ import type { TenantMetaWrite } from "./schema";
 // here MUST be initialized — the first invoice's tenantSnapshot freezes these
 // values, and any `undefined` crashes PDF rendering / tax math silently. This
 // is the single most expensive-to-debug bug in the whole plan.
-export function defaultTenantMeta(name: string): TenantMetaWrite {
+//
+// contactEmail (D5) defaults to the owner's signup email so customer replies
+// to invoice/quote emails always reach the business.
+export function defaultTenantMeta(
+  name: string,
+  contactEmail: string | null,
+): TenantMetaWrite {
   return {
     name,
     logoUrl: null,
     address: null,
+    contactEmail,
 
     primaryColor: "#667eea",
     secondaryColor: "#764ba2",

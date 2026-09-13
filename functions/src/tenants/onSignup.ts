@@ -67,7 +67,7 @@ export async function onSignupHandler(
   const batch = db.batch();
   batch.set(
     db.doc(`tenants/${tenantId}/meta/settings`),
-    defaultTenantMeta(businessName),
+    defaultTenantMeta(businessName, email),
   );
   batch.set(db.doc(`tenants/${tenantId}/entitlements/current`), {
     plan: "starter",

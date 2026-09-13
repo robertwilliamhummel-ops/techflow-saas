@@ -1,12 +1,11 @@
 // Email-field sanitizer — blueprint R4.
 //
 // Tenant-controlled strings flow into email templates AND SMTP headers
-// (replyTo). Two attack surfaces to defuse before the string reaches Resend
-// or the rendered HTML:
+// (From display name, Reply-To, Subject). Two attack surfaces to defuse before
+// the string reaches Amazon SES or the rendered HTML:
 //
-//   1. Header smuggling. A CRLF in a value passed as `replyTo` could split
-//      the header and inject a Bcc: line. Resend's SDK may or may not strip
-//      these — we never rely on that.
+//   1. Header smuggling. A CRLF in a header value could split the header and
+//      inject a Bcc: line. We never rely on the SES SDK to strip these.
 //   2. Plain-text fallback injection. React Email auto-generates text from
 //      the JSX tree; embedded newlines in emailFooter can impersonate
 //      separate paragraphs in a forwarded thread.
@@ -36,8 +35,8 @@ export function sanitizeEmailField(
   const stripped = raw.replace(UNSAFE_CONTROL_RE, "");
   // Pass 2: fold every whitespace run — CR, LF, tab, multiple spaces — into
   // a single space. This is what defuses header smuggling: a CR or LF in a
-  // replyTo value becomes a space, so Resend's SDK (or any SMTP backend)
-  // sees a single-line header value.
+  // header value becomes a space, so SES (or any SMTP backend) sees a
+  // single-line header value.
   const collapsed = stripped.replace(/\s+/g, " ").trim();
   return collapsed.slice(0, maxLen);
 }

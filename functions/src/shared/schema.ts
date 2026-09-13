@@ -26,6 +26,7 @@ export interface TenantMetaWrite {
   name: string;
   logoUrl: string | null;
   address: string | null;
+  contactEmail: string | null; // Reply-To on customer emails (D5)
 
   primaryColor: string;
   secondaryColor: string;

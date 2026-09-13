@@ -6,6 +6,7 @@ import {
 import { db, FieldValue } from "../shared/admin";
 import { readClaims, requireRole, requireTenant } from "../shared/auth";
 import { isValidHexColor, meetsWcagAA } from "../shared/contrast";
+import { isValidEmail, lowerEmail } from "../shared/email";
 
 // Whitelisted branding + business-identity fields editable via the settings
 // page. Stripe/payment fields live on updatePaymentSettings. Custom-domain
@@ -14,6 +15,7 @@ import { isValidHexColor, meetsWcagAA } from "../shared/contrast";
 interface Input {
   name?: unknown;
   address?: unknown;
+  contactEmail?: unknown;
   logoUrl?: unknown;
   faviconUrl?: unknown;
   primaryColor?: unknown;
@@ -55,6 +57,16 @@ function validNullableString(
       "invalid-argument",
       `${opts.field} must be <= ${opts.max} characters.`,
     );
+  }
+  return s;
+}
+
+function validNullableEmail(raw: unknown, field: string): string | null {
+  if (raw === null) return null;
+  const s = lowerEmail(raw);
+  if (s.length === 0) return null;
+  if (!isValidEmail(s)) {
+    throw new HttpsError("invalid-argument", `${field} is not a valid address.`);
   }
   return s;
 }
@@ -140,6 +152,9 @@ export async function updateTenantBrandingHandler(
       field: "address",
       max: 500,
     });
+  }
+  if ("contactEmail" in data) {
+    patch.contactEmail = validNullableEmail(data.contactEmail, "contactEmail");
   }
   if ("logoUrl" in data) {
     patch.logoUrl = validHttpsUrl(data.logoUrl, "logoUrl");

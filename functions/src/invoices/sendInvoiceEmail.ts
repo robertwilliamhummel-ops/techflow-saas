@@ -1,33 +1,24 @@
-// sendInvoiceEmail — Phase 2 Bundle F.
+// sendInvoiceEmail — Phase 2 Bundle F; transport moved to Amazon SES (D5).
 //
-// Tenant callable: reads invoice doc, renders InvoiceSent template, sends
-// via Resend. Transitions status from "draft" to "sent" if currently draft.
+// Tenant callable: reads invoice doc, renders InvoiceSent template, sends via
+// emails/send.ts. Transitions status from "draft" to "sent" if currently draft.
+// Not deduplicated — pressing Send again is a legitimate resend.
 
 import {
   onCall,
   HttpsError,
   type CallableRequest,
 } from "firebase-functions/v2/https";
-import { defineSecret } from "firebase-functions/params";
 import { createElement } from "react";
 import { render } from "@react-email/render";
-import { Resend } from "resend";
-import * as logger from "firebase-functions/logger";
 import { db, FieldValue } from "../shared/admin";
 import { readClaims, requireTenant } from "../shared/auth";
 import { requireFeature } from "../shared/requireFeature";
-import { sanitizeEmailField, sanitizeHeaderValue } from "../emails/sanitize";
-import { isValidEmail } from "../shared/email";
-import {
-  InvoiceSent,
-  buildInvoiceSentPreviewText,
-} from "../emails/templates/InvoiceSent";
+import { sanitizeEmailField } from "../emails/sanitize";
+import { EMAIL_SECRETS, pickReplyTo, sendEmail } from "../emails/send";
+import { formatCurrency } from "../emails/format";
+import { InvoiceSent } from "../emails/templates/InvoiceSent";
 import type { TenantSnapshotForEmail } from "../emails/components/TenantEmailLayout";
-
-const RESEND_API_KEY = defineSecret("RESEND_API_KEY");
-
-const FROM_DOMAIN = "techflowsolutions.ca";
-const FROM_EMAIL = `notifications@${FROM_DOMAIN}`;
 
 export async function sendInvoiceEmailHandler(
   request: CallableRequest,
@@ -60,15 +51,14 @@ export async function sendInvoiceEmailHandler(
   // pay. Card payments require stripeStatus.chargesEnabled === true; e-transfer
   // requires meta.etransferEmail. If neither is available, sending the invoice
   // is just noise — tell the tenant to finish setup instead.
-  const metaForPreflight = await db
-    .doc(`tenants/${tenantId}/meta/settings`)
-    .get();
-  if (metaForPreflight.exists) {
-    const m = metaForPreflight.data()!;
-    const cardReady = (m.stripeStatus as { chargesEnabled?: boolean } | undefined)
-      ?.chargesEnabled === true;
+  const metaSnap = await db.doc(`tenants/${tenantId}/meta/settings`).get();
+  const meta = metaSnap.exists ? metaSnap.data()! : {};
+  if (metaSnap.exists) {
+    const cardReady =
+      (meta.stripeStatus as { chargesEnabled?: boolean } | undefined)
+        ?.chargesEnabled === true;
     const etransferReady =
-      typeof m.etransferEmail === "string" && m.etransferEmail.length > 0;
+      typeof meta.etransferEmail === "string" && meta.etransferEmail.length > 0;
     if (!cardReady && !etransferReady) {
       throw new HttpsError(
         "failed-precondition",
@@ -87,80 +77,45 @@ export async function sendInvoiceEmailHandler(
     primaryColor: snapshot.primaryColor ?? null,
   };
 
-  // Determine the base URL for pay links.
   const appUrl =
     process.env.APP_URL || "https://portal.techflowsolutions.ca";
-
   const payUrl = invoice.payToken
     ? `${appUrl}/pay/${invoice.payToken}`
     : `${appUrl}/portal/login`;
 
-  const portalLoginUrl = `${appUrl}/portal/login`;
-
-  // Format values for the template.
-  const currency = snapshot.currency ?? "CAD";
-  const totalFormatted = formatCurrency(invoice.totals?.total ?? 0, currency);
-  const customerFirstName =
-    invoice.customer.name?.split(" ")[0] ?? "there";
+  const totalFormatted = formatCurrency(
+    invoice.totals?.total ?? 0,
+    snapshot.currency ?? "CAD",
+  );
 
   const props = {
     tenant,
-    customerFirstName,
+    customerFirstName: invoice.customer.name?.split(" ")[0] ?? "there",
     invoiceNumber: invoiceSnap.id,
     totalFormatted,
     dueDateFormatted: invoice.dueDate ?? "",
     payUrl,
-    portalLoginUrl,
+    portalLoginUrl: `${appUrl}/portal/login`,
   };
 
-  // Render email.
   const html = await render(createElement(InvoiceSent, props));
   const text = await render(createElement(InvoiceSent, props), {
     plainText: true,
   });
 
-  // Send via Resend.
   const safeTenantName =
     sanitizeEmailField(snapshot.name, 100) || "TechFlow";
-  const subject = `Invoice ${invoiceSnap.id} from ${safeTenantName} — ${totalFormatted}`;
 
-  let replyTo: string | undefined;
-  const metaSnap = await db
-    .doc(`tenants/${tenantId}/meta/settings`)
-    .get();
-  if (metaSnap.exists) {
-    const metaEmail = metaSnap.data()?.emailFrom ?? metaSnap.data()?.etransferEmail;
-    if (metaEmail) {
-      const cleaned = sanitizeHeaderValue(metaEmail, 200);
-      if (cleaned && isValidEmail(cleaned)) {
-        replyTo = cleaned;
-      }
-    }
-  }
-
-  const resend = new Resend(RESEND_API_KEY.value());
-  const idempotencyKey = `sendInvoiceEmail:${tenantId}:${invoiceId}`;
-
-  const payload: Parameters<typeof resend.emails.send>[0] = {
-    from: `${safeTenantName} <${FROM_EMAIL}>`,
+  await sendEmail({
     to: invoice.customer.email,
-    subject,
+    subject: `Invoice ${invoiceSnap.id} from ${safeTenantName} — ${totalFormatted}`,
     html,
     text,
-  };
-  if (replyTo) payload.replyTo = replyTo;
-
-  const headers: Record<string, string> = {
-    "Idempotency-Key": idempotencyKey,
-  };
-
-  await resend.emails.send(payload, { headers } as never);
-
-  logger.info("sendInvoiceEmail", {
-    to: invoice.customer.email,
-    invoiceId,
+    fromName: safeTenantName,
+    replyTo: pickReplyTo(meta.contactEmail, meta.etransferEmail),
+    category: "invoice",
     tenantId,
-    preview: buildInvoiceSentPreviewText(props),
+    documentId: invoiceId,
   });
 
   // Transition draft → sent.
@@ -174,18 +129,7 @@ export async function sendInvoiceEmailHandler(
   return { success: true };
 }
 
-function formatCurrency(amount: number, currency: string): string {
-  try {
-    return new Intl.NumberFormat("en-CA", {
-      style: "currency",
-      currency: currency.toUpperCase(),
-    }).format(amount);
-  } catch {
-    return `$${amount.toFixed(2)}`;
-  }
-}
-
 export const sendInvoiceEmail = onCall(
-  { secrets: [RESEND_API_KEY] },
+  { secrets: EMAIL_SECRETS },
   sendInvoiceEmailHandler,
 );

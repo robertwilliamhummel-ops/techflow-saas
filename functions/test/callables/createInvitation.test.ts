@@ -8,9 +8,13 @@ import {
 } from "./_setup";
 
 // Mock the email send layer — callable tests verify Firestore state, not
-// Resend delivery. The send.test.ts suite covers the real send path.
+// SES delivery. The send.test.ts suite covers the real send path.
 vi.mock("../../src/emails/send", () => ({
-  sendInvitationEmail: vi.fn().mockResolvedValue(undefined),
+  EMAIL_SECRETS: [],
+  sendInvitationEmail: vi.fn().mockResolvedValue({
+    messageId: "ses-mock",
+    deduplicated: false,
+  }),
 }));
 
 import { createInvitationHandler } from "../../src/tenants/createInvitation";

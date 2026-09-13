@@ -168,6 +168,27 @@ describe("updateTenantBranding", () => {
     expect(meta.data()?.logoUrl).toBeNull();
   });
 
+  it("sets contactEmail lowercased, clears it with null, rejects invalid (D5)", async () => {
+    const tenantId = await seedOwner();
+    const auth = { uid: "owner1", claims: { tenantId, role: "owner" as const } };
+
+    await updateTenantBrandingHandler(
+      fakeRequest({ contactEmail: "Office@Acme.Test" }, auth),
+    );
+    let meta = await testDb.doc(`tenants/${tenantId}/meta/settings`).get();
+    expect(meta.data()?.contactEmail).toBe("office@acme.test");
+
+    await updateTenantBrandingHandler(fakeRequest({ contactEmail: null }, auth));
+    meta = await testDb.doc(`tenants/${tenantId}/meta/settings`).get();
+    expect(meta.data()?.contactEmail).toBeNull();
+
+    await expect(
+      updateTenantBrandingHandler(
+        fakeRequest({ contactEmail: "not-an-email" }, auth),
+      ),
+    ).rejects.toThrow(/contactEmail is not a valid address/);
+  });
+
   it("rejects invalid invoicePrefix (lowercase)", async () => {
     const tenantId = await seedOwner();
     await expect(

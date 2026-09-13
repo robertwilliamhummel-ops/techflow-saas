@@ -12,7 +12,7 @@ vi.mock("firebase-functions/params", () => ({
     value: () => {
       if (name === "PAY_TOKEN_SECRET") return TEST_SECRET;
       if (name === "STRIPE_SECRET_KEY") return TEST_STRIPE_SECRET;
-      if (name === "RESEND_API_KEY") return "re_test_fake";
+      if (name === "AWS_SES_ACCESS_KEY_ID") return "AKIA_TEST";
       return "mock-secret";
     },
   }),
@@ -24,12 +24,14 @@ vi.mock("firebase-functions/logger", () => ({
   error: vi.fn(),
 }));
 
-// Mock Resend — sendInvoiceEmail and sendQuoteEmail use it.
-const mockResendSend = vi.fn().mockResolvedValue({ data: { id: "email_123" } });
-vi.mock("resend", () => ({
-  Resend: vi.fn().mockImplementation(() => ({
-    emails: { send: mockResendSend },
-  })),
+// Mock Amazon SES (D5) — sendInvoiceEmail and sendQuoteEmail send through it.
+// SendEmailCommand is reduced to { input } so tests can inspect the request.
+const mockSesSend = vi.fn().mockResolvedValue({ MessageId: "ses_msg_123" });
+vi.mock("@aws-sdk/client-sesv2", () => ({
+  SESv2Client: vi.fn().mockImplementation(() => ({ send: mockSesSend })),
+  SendEmailCommand: vi
+    .fn()
+    .mockImplementation((input: unknown) => ({ input })),
 }));
 
 // Mock Stripe — createPayTokenCheckoutSession uses it.
@@ -618,8 +620,8 @@ describe("sendInvoiceEmail", () => {
   beforeEach(async () => {
     await clearFirestore();
     await seedTenantAndInvoice();
-    mockResendSend.mockClear();
-    mockResendSend.mockResolvedValue({ data: { id: "email_456" } });
+    mockSesSend.mockClear();
+    mockSesSend.mockResolvedValue({ MessageId: "ses_msg_456" });
   });
 
   it("sends email and transitions draft to sent", async () => {
@@ -632,7 +634,7 @@ describe("sendInvoiceEmail", () => {
       fakeRequest({ invoiceId: "INV-0001" }, ownerAuth),
     );
     expect(result.success).toBe(true);
-    expect(mockResendSend).toHaveBeenCalledOnce();
+    expect(mockSesSend).toHaveBeenCalledOnce();
 
     // Verify status transitioned
     const inv = await testDb
@@ -678,7 +680,7 @@ describe("sendInvoiceEmail", () => {
         fakeRequest({ invoiceId: "INV-0001" }, ownerAuth),
       ),
     ).rejects.toThrow(/Add an e-transfer email or finish Stripe onboarding/);
-    expect(mockResendSend).not.toHaveBeenCalled();
+    expect(mockSesSend).not.toHaveBeenCalled();
   });
 
   it("sends when only card rail is ready (chargesEnabled true)", async () => {
@@ -690,7 +692,7 @@ describe("sendInvoiceEmail", () => {
       fakeRequest({ invoiceId: "INV-0001" }, ownerAuth),
     );
     expect(result.success).toBe(true);
-    expect(mockResendSend).toHaveBeenCalledOnce();
+    expect(mockSesSend).toHaveBeenCalledOnce();
   });
 
   it("sends when only e-transfer rail is ready (no Stripe)", async () => {
@@ -701,7 +703,59 @@ describe("sendInvoiceEmail", () => {
       fakeRequest({ invoiceId: "INV-0001" }, ownerAuth),
     );
     expect(result.success).toBe(true);
-    expect(mockResendSend).toHaveBeenCalledOnce();
+    expect(mockSesSend).toHaveBeenCalledOnce();
+  });
+});
+
+describe("sendInvoiceEmail — SES request shape (D5)", () => {
+  beforeEach(async () => {
+    await clearFirestore();
+    await seedTenantAndInvoice();
+    mockSesSend.mockClear();
+    mockSesSend.mockResolvedValue({ MessageId: "ses_msg_shape" });
+  });
+
+  it("sends as the tenant with Reply-To contactEmail and bounce-tracking tags", async () => {
+    await testDb.doc(`tenants/${TENANT}/meta/settings`).update({
+      contactEmail: "office@acme.test",
+    });
+
+    await sendInvoiceEmailHandler(
+      fakeRequest({ invoiceId: "INV-0001" }, ownerAuth),
+    );
+
+    const input = mockSesSend.mock.calls[0][0].input;
+    expect(input.Destination.ToAddresses).toEqual([CUSTOMER_EMAIL]);
+    expect(input.FromEmailAddress).toBe(
+      '"Acme Plumbing" <notifications@techflowsolutions.ca>',
+    );
+    expect(input.ReplyToAddresses).toEqual(["office@acme.test"]);
+    expect(input.Content.Simple.Subject.Data).toContain("INV-0001");
+    expect(input.EmailTags).toEqual(
+      expect.arrayContaining([
+        { Name: "category", Value: "invoice" },
+        { Name: "tenantId", Value: TENANT },
+        { Name: "documentId", Value: "INV-0001" },
+      ]),
+    );
+  });
+
+  it("falls back to the e-transfer email for Reply-To when no contactEmail is set", async () => {
+    await sendInvoiceEmailHandler(
+      fakeRequest({ invoiceId: "INV-0001" }, ownerAuth),
+    );
+    const input = mockSesSend.mock.calls[0][0].input;
+    expect(input.ReplyToAddresses).toEqual(["pay@acme.test"]);
+  });
+
+  it("does not deduplicate manual resends", async () => {
+    await sendInvoiceEmailHandler(
+      fakeRequest({ invoiceId: "INV-0001" }, ownerAuth),
+    );
+    await sendInvoiceEmailHandler(
+      fakeRequest({ invoiceId: "INV-0001" }, ownerAuth),
+    );
+    expect(mockSesSend).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -714,8 +768,8 @@ describe("sendQuoteEmail", () => {
     await clearFirestore();
     await seedTenantAndInvoice(); // seeds tenant meta + entitlements
     await seedQuote();
-    mockResendSend.mockClear();
-    mockResendSend.mockResolvedValue({ data: { id: "email_789" } });
+    mockSesSend.mockClear();
+    mockSesSend.mockResolvedValue({ MessageId: "ses_msg_789" });
   });
 
   it("sends email and transitions draft to sent", async () => {
@@ -723,7 +777,7 @@ describe("sendQuoteEmail", () => {
       fakeRequest({ quoteId: "QT-0001" }, ownerAuth),
     );
     expect(result.success).toBe(true);
-    expect(mockResendSend).toHaveBeenCalledOnce();
+    expect(mockSesSend).toHaveBeenCalledOnce();
 
     const qt = await testDb
       .doc(`tenants/${TENANT}/quotes/QT-0001`)

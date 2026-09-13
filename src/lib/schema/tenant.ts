@@ -33,6 +33,7 @@ export interface TenantMeta {
   name: string;
   logoUrl: string | null;
   address: string | null;
+  contactEmail: string | null; // Reply-To on customer emails (D5)
 
   // Branding — required from Phase 1 per blueprint.
   primaryColor: string;
@@ -145,6 +146,14 @@ export type InvoiceStatus =
 
 export type PaymentMethod = "manual" | "etransfer" | "cash" | "card";
 
+// Written by the SES event webhook (D5) from delivery/bounce/complaint events.
+export type EmailDeliveryStatus =
+  | "delivered"
+  | "bounced"
+  | "complained"
+  | "delayed"
+  | "rejected";
+
 // tenants/{tenantId}/invoices/{invoiceNumber} — doc id IS the invoice number.
 export interface Invoice {
   customer: DocumentCustomer;
@@ -177,6 +186,11 @@ export interface Invoice {
   disputedAt?: Timestamp | null;
   disputeReason?: string | null;
   disputeOutcome?: "won" | "lost" | null;
+
+  lastEmailStatus?: EmailDeliveryStatus;
+  lastEmailStatusDetail?: string | null;
+  lastEmailMessageId?: string | null;
+  lastEmailStatusAt?: Timestamp;
 }
 
 export type QuoteStatus =
@@ -203,6 +217,11 @@ export interface Quote {
   updatedAt?: Timestamp;
   sentAt?: Timestamp;
   convertedToInvoiceId?: string;
+
+  lastEmailStatus?: EmailDeliveryStatus;
+  lastEmailStatusDetail?: string | null;
+  lastEmailMessageId?: string | null;
+  lastEmailStatusAt?: Timestamp;
 }
 
 export type MembershipRole = "owner" | "admin" | "staff";

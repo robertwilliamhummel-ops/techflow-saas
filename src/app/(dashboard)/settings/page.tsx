@@ -39,6 +39,10 @@ import {
 
 const schema = z.object({
   name: z.string().trim().min(2, "Business name must be at least 2 characters.").max(100),
+  contactEmail: z.union([
+    z.literal(""),
+    z.string().trim().email("Enter a valid email address."),
+  ]),
   address: z.string().trim().max(500).optional().or(z.literal("")),
   businessNumber: z.string().trim().max(50).optional().or(z.literal("")),
   invoicePrefix: z
@@ -70,6 +74,7 @@ export default function SettingsBusinessPage() {
     resolver: zodResolver(schema),
     defaultValues: {
       name: "",
+      contactEmail: "",
       address: "",
       businessNumber: "",
       invoicePrefix: "INV",
@@ -87,6 +92,7 @@ export default function SettingsBusinessPage() {
     if (!meta) return;
     form.reset({
       name: meta.name,
+      contactEmail: nullToEmpty(meta.contactEmail),
       address: nullToEmpty(meta.address),
       businessNumber: nullToEmpty(meta.businessNumber),
       invoicePrefix: meta.invoicePrefix,
@@ -103,6 +109,7 @@ export default function SettingsBusinessPage() {
       const fn = httpsCallable(getClientFunctions(), "updateTenantBranding");
       await fn({
         name: values.name,
+        contactEmail: values.contactEmail || null,
         address: values.address || null,
         businessNumber: values.businessNumber || null,
         invoicePrefix: values.invoicePrefix,
@@ -153,6 +160,28 @@ export default function SettingsBusinessPage() {
                   <FormControl>
                     <Input {...field} />
                   </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name="contactEmail"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Reply-to email</FormLabel>
+                  <FormControl>
+                    <Input
+                      type="email"
+                      placeholder="office@yourbusiness.ca"
+                      {...field}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    Customers who reply to an invoice or quote email reach this
+                    address.
+                  </FormDescription>
                   <FormMessage />
                 </FormItem>
               )}

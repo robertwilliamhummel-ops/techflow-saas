@@ -179,13 +179,13 @@ vi.mock("@/lib/stripe/admin", () => ({
   }),
 }));
 
-// Tenant owner notifier — Phase 7 Bundle C. Stub so tests assert the call
-// shape without hitting Resend.
-const notifyTenantOfIncident = vi.fn().mockResolvedValue(undefined);
-vi.mock("@/lib/emails/paymentIncidentNotify", () => ({
-  notifyTenantOfIncident: (...args: unknown[]) =>
-    notifyTenantOfIncident(...args),
-}));
+// Owner emails are sent by the Cloud Functions trigger onPaymentIncidentCreated
+// (D5); these handlers only write the incident docs that trigger it.
+function incidentDocs(tenantId: string, invoiceId: string) {
+  return [...docs.entries()].filter(([k]) =>
+    k.startsWith(`tenants/${tenantId}/invoices/${invoiceId}/paymentIncidents/`),
+  );
+}
 
 import {
   handleAccountDeauthorized,
@@ -201,7 +201,6 @@ function resetState(): void {
   docs.clear();
   collections.clear();
   refundsCreate.mockReset();
-  notifyTenantOfIncident.mockClear();
 }
 
 beforeEach(() => {
@@ -321,14 +320,32 @@ describe("handleCheckoutCompleted", () => {
       currentVersion: 5,
       refundId: "re_refund_777",
     });
-
-    expect(notifyTenantOfIncident).toHaveBeenCalledTimes(1);
-    expect(notifyTenantOfIncident).toHaveBeenCalledWith({
-      tenantId: TENANT,
-      invoiceId: INVOICE,
+    // Deterministic id + kind — the email trigger keys off both (D5).
+    expect(incidents[0][0]).toBe(
+      `tenants/${TENANT}/invoices/${INVOICE}/paymentIncidents/auto-refund_cs_test_abc`,
+    );
+    expect(incidents[0][1]).toMatchObject({
       kind: "auto-refund-version-mismatch",
-      details: { refundId: "re_refund_777", refundError: null },
     });
+  });
+
+  it("C2 version mismatch redelivered — same incident doc, no duplicate", async () => {
+    seedInvoice({ payTokenVersion: 5 });
+    refundsCreate.mockResolvedValue({ id: "re_refund_777" });
+    const evt = event(
+      session({
+        invoiceId: INVOICE,
+        tenantId: TENANT,
+        payTokenVersion: "3",
+        basePaidCents: "11300",
+        surchargeCents: "0",
+      }),
+    );
+
+    await handleCheckoutCompleted(TENANT, evt);
+    await handleCheckoutCompleted(TENANT, evt);
+
+    expect(incidentDocs(TENANT, INVOICE)).toHaveLength(1);
   });
 
   it("C2 version mismatch — refund failure still writes incident with error", async () => {
@@ -358,16 +375,13 @@ describe("handleCheckoutCompleted", () => {
       refundId: null,
       refundError: "card_declined",
     });
-    expect(notifyTenantOfIncident).toHaveBeenCalledWith({
-      tenantId: TENANT,
-      invoiceId: INVOICE,
+    expect(incidents[0][1]).toMatchObject({
       kind: "auto-refund-version-mismatch",
-      details: { refundId: null, refundError: "card_declined" },
     });
     err.mockRestore();
   });
 
-  it("matches version → does NOT notify (only incidents notify)", async () => {
+  it("matches version → writes no incident (nothing to email)", async () => {
     seedInvoice();
     await handleCheckoutCompleted(
       TENANT,
@@ -381,7 +395,7 @@ describe("handleCheckoutCompleted", () => {
         }),
       ),
     );
-    expect(notifyTenantOfIncident).not.toHaveBeenCalled();
+    expect(incidentDocs(TENANT, INVOICE)).toHaveLength(0);
   });
 
   it("is a no-op when the invoice is already paid (duplicate-safety net)", async () => {
@@ -560,20 +574,19 @@ describe("handleDisputeCreated", () => {
     // status stays 'paid' — dispute isn't resolved yet
     expect(inv?.status).toBe("paid");
 
-    expect(notifyTenantOfIncident).toHaveBeenCalledTimes(1);
-    expect(notifyTenantOfIncident).toHaveBeenCalledWith({
-      tenantId: TENANT,
-      invoiceId: "INV-3",
+    const incident = docs.get(
+      `tenants/${TENANT}/invoices/INV-3/paymentIncidents/dispute-created_dp_1`,
+    );
+    expect(incident).toMatchObject({
       kind: "dispute-created",
-      details: {
-        reason: "fraudulent",
-        evidenceDueBy: "2026-05-15",
-        disputeId: "dp_1",
-      },
+      disputeId: "dp_1",
+      disputeReason: "fraudulent",
+      evidenceDueBy: "2026-05-15",
+      amountCents: 11300,
     });
   });
 
-  it("notifies even when reason is missing (defaults to 'unspecified')", async () => {
+  it("records an incident even when reason is missing (defaults to 'unspecified')", async () => {
     docs.set(`tenants/${TENANT}/invoices/INV-3b`, {
       status: "paid",
       stripeChargeId: "ch_disputed_b",
@@ -588,12 +601,11 @@ describe("handleDisputeCreated", () => {
       },
     } as unknown as Stripe.Event);
 
-    expect(notifyTenantOfIncident).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "dispute-created",
-        details: expect.objectContaining({ reason: "unspecified" }),
-      }),
-    );
+    expect(
+      docs.get(
+        `tenants/${TENANT}/invoices/INV-3b/paymentIncidents/dispute-created_dp_2`,
+      ),
+    ).toMatchObject({ kind: "dispute-created", disputeReason: "unspecified" });
   });
 });
 
@@ -630,7 +642,7 @@ describe("handleDisputeClosed", () => {
     expect(inv?.disputed).toBe(false);
     expect(inv?.disputeOutcome).toBe("won");
     expect(inv?.status).toBe("paid");
-    expect(notifyTenantOfIncident).not.toHaveBeenCalled();
+    expect(incidentDocs(TENANT, "INV-4")).toHaveLength(0);
   });
 
   it("status='lost' → clears disputed, sets outcome=lost, flips status to refunded", async () => {
@@ -648,16 +660,15 @@ describe("handleDisputeClosed", () => {
     expect(inv?.status).toBe("refunded");
     expect(inv?.refundedAmountCents).toBe(11300);
     expect(inv?.refundedAt).toBeDefined();
-    expect(notifyTenantOfIncident).toHaveBeenCalledTimes(1);
-    expect(notifyTenantOfIncident).toHaveBeenCalledWith({
-      tenantId: TENANT,
-      invoiceId: "INV-5",
+    expect(
+      docs.get(
+        `tenants/${TENANT}/invoices/INV-5/paymentIncidents/dispute-lost_dp_1`,
+      ),
+    ).toMatchObject({
       kind: "dispute-lost",
-      details: {
-        amountCents: 11300,
-        disputeId: "dp_1",
-        outcomeStatus: "lost",
-      },
+      amountCents: 11300,
+      disputeId: "dp_1",
+      outcomeStatus: "lost",
     });
   });
 
@@ -673,16 +684,15 @@ describe("handleDisputeClosed", () => {
     const inv = docs.get(`tenants/${TENANT}/invoices/INV-6`);
     expect(inv?.status).toBe("refunded");
     expect(inv?.disputeOutcome).toBe("lost");
-    expect(notifyTenantOfIncident).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "dispute-lost",
-        details: expect.objectContaining({
-          outcomeStatus: "charge_refunded",
-          amountCents: 11300,
-          disputeId: "dp_1",
-        }),
-      }),
-    );
+    expect(
+      docs.get(
+        `tenants/${TENANT}/invoices/INV-6/paymentIncidents/dispute-lost_dp_1`,
+      ),
+    ).toMatchObject({
+      kind: "dispute-lost",
+      outcomeStatus: "charge_refunded",
+      amountCents: 11300,
+    });
   });
 });
 

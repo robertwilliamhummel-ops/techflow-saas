@@ -10,7 +10,7 @@ import type { MembershipRole } from "../shared/auth";
 import { isValidEmail, lowerEmail } from "../shared/email";
 import { generateOpaqueToken } from "../shared/tokens";
 import * as logger from "firebase-functions/logger";
-import { sendInvitationEmail } from "../emails/send";
+import { EMAIL_SECRETS, sendInvitationEmail } from "../emails/send";
 import type { TenantSnapshotForEmail } from "../emails/send";
 
 interface Input {
@@ -86,6 +86,7 @@ export async function createInvitationHandler(
     logoUrl?: string | null;
     emailFooter?: string | null;
     primaryColor?: string | null;
+    contactEmail?: string | null;
   } | undefined;
   const tenant: TenantSnapshotForEmail = {
     name: metaData?.name ?? tenantId,
@@ -117,12 +118,19 @@ export async function createInvitationHandler(
     inviterName,
     role,
     acceptUrl,
+    replyTo: metaData?.contactEmail ?? null,
+    tenantId,
+    // One email per invitation, even if the callable is retried.
+    idempotencyKey: `invitation:${tenantId}:${invitationRef.id}`,
   });
 
   return { invitationId: invitationRef.id };
 }
 
-export const createInvitation = onCall<Input>(createInvitationHandler);
+export const createInvitation = onCall<Input>(
+  { secrets: EMAIL_SECRETS },
+  createInvitationHandler,
+);
 
 function buildAcceptUrl(
   baseUrl: string,

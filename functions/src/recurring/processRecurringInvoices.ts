@@ -16,7 +16,6 @@ import { defineSecret } from "firebase-functions/params";
 import { sign } from "jsonwebtoken";
 import { createElement } from "react";
 import { render } from "@react-email/render";
-import { Resend } from "resend";
 import * as logger from "firebase-functions/logger";
 import { db, FieldValue, Timestamp } from "../shared/admin";
 import { resolveFeature } from "../shared/features";
@@ -29,20 +28,15 @@ import {
 } from "../shared/invoice";
 import { computeNextRunAt, addDaysToISODate } from "../shared/recurring";
 import { SCHEDULER_REGION } from "../shared/globalOptions";
-import { sanitizeEmailField, sanitizeHeaderValue } from "../emails/sanitize";
-import { isValidEmail } from "../shared/email";
-import {
-  RecurringInvoiceSent,
-  buildRecurringInvoiceSentPreviewText,
-} from "../emails/templates/RecurringInvoiceSent";
+import { sanitizeEmailField } from "../emails/sanitize";
+import { EMAIL_SECRETS, pickReplyTo, sendEmail } from "../emails/send";
+import { formatCurrency } from "../emails/format";
+import { RecurringInvoiceSent } from "../emails/templates/RecurringInvoiceSent";
 import type { TenantSnapshotForEmail } from "../emails/components/TenantEmailLayout";
 
 const PAY_TOKEN_SECRET = defineSecret("PAY_TOKEN_SECRET");
-const RESEND_API_KEY = defineSecret("RESEND_API_KEY");
 
 const MAX_CONSECUTIVE_FAILURES = 3;
-const FROM_DOMAIN = "techflowsolutions.ca";
-const FROM_EMAIL = `notifications@${FROM_DOMAIN}`;
 
 // Exported for direct testing — the onSchedule wrapper just calls this.
 export async function processRecurringInvoicesHandler(): Promise<void> {
@@ -364,40 +358,19 @@ async function sendRecurringEmail(
 
   const safeTenantName =
     sanitizeEmailField(tenantSnapshot.name, 100) || "TechFlow";
-  const subject = `Invoice ${invoiceId} from ${safeTenantName} — ${totalFormatted}`;
 
-  let replyTo: string | undefined;
-  const metaEmail = meta.emailFrom ?? meta.etransferEmail;
-  if (metaEmail) {
-    const cleaned = sanitizeHeaderValue(metaEmail, 200);
-    if (cleaned && isValidEmail(cleaned)) {
-      replyTo = cleaned;
-    }
-  }
-
-  const resend = new Resend(RESEND_API_KEY.value());
-  const idempotencyKey = `recurringInvoiceEmail:${tenantId}:${invoiceId}`;
-
-  const payload: Parameters<typeof resend.emails.send>[0] = {
-    from: `${safeTenantName} <${FROM_EMAIL}>`,
+  // Idempotent per generated invoice — a retried run never double-sends.
+  await sendEmail({
     to: templateData.customer.email,
-    subject,
+    subject: `Invoice ${invoiceId} from ${safeTenantName} — ${totalFormatted}`,
     html,
     text,
-  };
-  if (replyTo) payload.replyTo = replyTo;
-
-  const headers: Record<string, string> = {
-    "Idempotency-Key": idempotencyKey,
-  };
-
-  await resend.emails.send(payload, { headers } as never);
-
-  logger.info("processRecurringInvoices: email sent", {
-    to: templateData.customer.email,
-    invoiceId,
+    fromName: safeTenantName,
+    replyTo: pickReplyTo(meta.contactEmail, meta.etransferEmail),
+    category: "recurring-invoice",
     tenantId,
-    preview: buildRecurringInvoiceSentPreviewText(props),
+    documentId: invoiceId,
+    idempotencyKey: `recurringInvoiceEmail:${tenantId}:${invoiceId}`,
   });
 
   // Transition invoice draft → sent.
@@ -441,23 +414,12 @@ async function recordFailure(
   });
 }
 
-function formatCurrency(amount: number, currency: string): string {
-  try {
-    return new Intl.NumberFormat("en-CA", {
-      style: "currency",
-      currency: currency.toUpperCase(),
-    }).format(amount);
-  } catch {
-    return `$${amount.toFixed(2)}`;
-  }
-}
-
 export const processRecurringInvoices = onSchedule(
   {
     schedule: "every day 06:00",
     timeZone: "UTC",
     region: SCHEDULER_REGION,
-    secrets: [PAY_TOKEN_SECRET, RESEND_API_KEY],
+    secrets: [PAY_TOKEN_SECRET, ...EMAIL_SECRETS],
   },
   processRecurringInvoicesHandler,
 );

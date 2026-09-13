@@ -82,6 +82,7 @@ async function seedTenantDocs() {
     name: BUSINESS_NAME,
     logoUrl: null,
     address: null,
+    contactEmail: OWNER_EMAIL,
     primaryColor: "#0066CC",
     secondaryColor: "#F5F5F5",
     fontFamily: "Inter",

@@ -98,7 +98,7 @@ describe("sanitizeHeaderValue", () => {
 
   it("still removes CRLF from header values", () => {
     // Header value stays single-line: no CR, no LF. The space is fine —
-    // Resend's replyTo validator will reject "a@b.com Bcc: ..." as not an
+    // pickReplyTo's email validator will reject "a@b.com Bcc: ..." as not an
     // email, which is the right failure mode.
     const out = sanitizeHeaderValue("a@b.com\r\nBcc: evil@x", 200);
     expect(out).not.toContain("\n");
