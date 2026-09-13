@@ -257,36 +257,25 @@ function daysInMonth(year: number, month: number): number {
 }
 
 /**
- * Compute the next future run date from today for reactivation (paused → active).
- * For monthly/quarterly/annually: finds the next anchorDay occurrence after `now`.
- * For weekly/biweekly: returns now + interval days.
+ * First run strictly after `now` on the template's existing schedule, for
+ * resuming a paused template (A-10). Advances from the stored slot with
+ * computeNextRunAt, so the anchor day, weekday, and 00:00 UTC time are kept
+ * and missed periods are skipped, never backfilled. A slot still in the future
+ * is returned unchanged. (Counting "now + 7 days" instead would move a weekly
+ * template off its weekday and off midnight, so the 06:00 processor would
+ * pick it up a day late from then on.)
  */
-export function computeNextFutureRunAt(
+export function computeResumeRunAt(
+  scheduled: Date,
   now: Date,
   interval: RecurringInterval,
   anchorDay: number,
 ): Date {
-  switch (interval) {
-    case "weekly":
-      return addDays(now, 7);
-    case "biweekly":
-      return addDays(now, 14);
-    case "monthly":
-    case "quarterly":
-    case "annually": {
-      // Try anchorDay this month first.
-      const lastDay = daysInMonth(now.getUTCFullYear(), now.getUTCMonth());
-      const day = Math.min(anchorDay, lastDay);
-      const candidate = new Date(
-        Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), day),
-      );
-      if (candidate > now) return candidate;
-      // Already passed this month — advance by one period.
-      const months =
-        interval === "monthly" ? 1 : interval === "quarterly" ? 3 : 12;
-      return advanceMonths(candidate, months, anchorDay);
-    }
+  let next = scheduled;
+  while (next <= now) {
+    next = computeNextRunAt(next, interval, anchorDay);
   }
+  return next;
 }
 
 /**

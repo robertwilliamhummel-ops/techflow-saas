@@ -63,9 +63,9 @@
 
 | Phase | Status | Remaining |
 |---|---|---|
-| 1 Schema, rules, claims | Mostly done — 42 Firestore + 18 Storage rules tests; indexes and TTL policies in `firestore.indexes.json`, pinned to their queries by tests | Customer + recurring-management callables (A-10) |
+| 1 Schema, rules, claims | Done — 58 Firestore + 18 Storage rules tests; indexes and TTL policies in `firestore.indexes.json`, pinned to their queries by tests; customer + recurring-management callables (A-10) | — |
 | 1.5 Design system | Done | — |
-| 2 Cloud Functions | Mostly done — 246 callable, 55 email, 54 shared tests | `getCustomerQuotes` (P6), MagicLinkSignIn + PaymentReceipt templates, App Check + send rate limits (R4), Sentry in functions |
+| 2 Cloud Functions | Mostly done — 312 callable, 55 email, 85 shared tests | `getCustomerQuotes` (P6), MagicLinkSignIn + PaymentReceipt templates, App Check + send rate limits (R4), Sentry in functions |
 | 3 Frontend architecture | Contexts, guards, auth recovery done | 12 placeholder pages: `/dashboard`, `/invoices`, `/invoices/new`, `/invoices/[id]`, `/customers`, `/quotes/[id]`, `/portal`, `/portal/invoices/[id]`, `/portal/quotes/[id]`, `/pay/[token]`, `/pay/[token]/success`, `/pay/[token]/cancelled`; dashboard navigation |
 | 4 Stripe Connect | Backend done (D1 applied); webhook money bugs A-02, A-03, A-08 fixed | Public pay page UI |
 | 5 Onboarding & domains | Signup, login, settings, team, domain, billing UI done; host-routing proxy loads | Customer magic-link sign-in (portal login is password-only today) |
@@ -77,7 +77,6 @@
 
 | Ref | Bug | Where | Fix |
 |---|---|---|---|
-| A-10 | No callables to create/update/delete customers or pause/resume/cancel recurring templates, while rules block client writes | `functions/src/index.ts`, `firestore.rules` | `upsertCustomer`, `deleteCustomer`, `updateRecurringInvoice` |
 | A-12 | Smaller: `useAuth.ts` types roles as `member`/`platform_admin`; `deleteInvoice` hard-deletes sent invoices (should become `void`); `createQuote` prefix only maps `INV→QT`; the `onSignup` membership check isn't transactional | various | — |
 
 Closed by the D-decisions: A-09 (surcharge shown vs charged — D3), A-11 (email sending duplicated in five places — D5), forced `business_type: "company"` on Stripe accounts (D1), P10 (email delivery feedback — D5).
@@ -99,6 +98,8 @@ Fixed: A-05 (2026-09-13) — customers could see draft invoices through `getCust
 Fixed: A-06 (2026-09-13) — invoice, quote, and recurring emails embedded the snapshot's base64 logo (up to 500 KB). Gmail clips any email over 102 KB and embedded base64 images are the most common cause, and support for `data:` images varies by client. `functions/src/shared/logo.ts` now freezes the logo two ways at creation (`createInvoice`, `createQuote`, `convertQuoteToInvoice`, `processRecurringInvoices`): the base64 `logo` for PDFs, plus an immutable copy at `tenants/{t}/snapshots/logos/{sha256}.{ext}` whose token URL is stored as `logoUrl` with `logoContentType`. The path comes from the bytes and the download token from the tenant and hash, so a copy is never overwritten and concurrent creates can't rotate a token another document stored. Emails use `emailLogoUrl()`: the hosted copy for PNG, JPEG, GIF, and WebP; the business name for SVG (Gmail's apps don't show SVG for Google accounts). Logo URLs that don't return an image are now rejected. Covered by `functions/test/callables/logoSnapshot.test.ts` (the URL serves the bytes without auth, stable across documents, email HTML never contains `data:image`) and `inlineLogo.test.ts`.
 
 Fixed: A-07 (2026-09-13) — the custom-domain cache keys `domain:{host}` contained `:` and `.`, but Vercel only accepts keys matching `^[\w-]+$` (≤ 256 chars), so every write was rejected and every portal request on a custom domain hit Firestore. `domainCacheKey()` (identical in `src/lib` and `functions/src/shared`, pinned by a test that imports both) encodes the host as `domain_` + host with `.` → `_` — hostnames can't contain `_`, so keys can't collide — and returns null for anything that isn't a plain hostname or would exceed 256 chars, which then skips the cache. Same pass: Vercel renamed Edge Config to **Global Config** (same store; old names keep working, but connecting a store now creates `GLOBAL_CONFIG`), so the proxy reads through the `@vercel/global-config` SDK with `GLOBAL_CONFIG` falling back to `EDGE_CONFIG`, writes use `/v1/global-config`, and the proxy's self-heal write is limited to once per host per instance per 10 minutes (writes are billed and capped at 100/hour on Pro). Covered by `functions/test/shared/domainCacheKey.test.ts`, `src/lib/__tests__/edgeConfig.test.ts`, `src/__tests__/proxySelfHeal.test.ts`, and the updated proxy and `setupCustomDomain` tests.
+
+Fixed: A-10 (2026-09-13) — rules block client writes to `customers` and `recurringInvoices`, but no callable could create, edit, or delete a customer or stop a recurring template (the only pause was the processor's automatic one after three failures). Added `upsertCustomer` (any role; not feature-gated because customers are part of every plan; emails aren't unique because one address can front several billing entities), `deleteCustomer` (owner/admin; hard delete — invoices, quotes, and templates carry their own customer copy), and `updateRecurringInvoice` with `pause` (any role), `resume` (any role, needs `recurringInvoices`), and `cancel` (owner/admin, final). Pause and cancel work with the feature off, so a tenant can always stop billing; repeating an action that already holds is a no-op. Resume never backfills: `computeResumeRunAt` advances from the stored slot on the same anchor to the first run strictly after now, and a template whose end date or count ran out while paused becomes `completed`. The helper it replaces counted weekly resumes as "now + 7 days", which would have moved a template off its weekday and off midnight UTC for good. Caller-supplied ids go through `requireDocId` (no `/`, no reserved `__…__` ids). Covered by `functions/test/callables/customers.test.ts` and `recurring.test.ts`.
 
 ### Platform deadlines
 
@@ -348,7 +349,9 @@ tenants/{tenantId}                         ← tenantId = business-name slug (+ 
   ├─ entitlements/current         (doc)    ← platform admin edits in Firebase Console
   │    { plan, maxInvoicesPerMonth, features: { …overrides }, updatedAt }
   ├─ counters/invoice, counters/quote      ← { value, updatedAt }
-  ├─ customers/{id}                        ← read-only to clients; callables pending (A-10)
+  ├─ customers/{id}                        ← { name, email (lowercased), phone, address, notes,
+  │                                           createdAt, createdBy, updatedAt, updatedBy };
+  │                                           written only by upsertCustomer / deleteCustomer
   ├─ invoices/{invoiceNumber}              ← see "Invoice document" below
   │    ├─ payAttempts/{id}                 ← { createdAt, expireAt, sessionId } — TTL 48h
   │    └─ paymentIncidents/{kind}_{stripeObjectId}
@@ -492,7 +495,7 @@ Platform admins have no `tenantId` claim. No rule lets any client — platform a
 
 ### Security rules (as built)
 
-`firestore.rules` is authoritative, verified by 42 emulator tests in `functions/test/rules/firestore.test.ts`. The April sketch that used to live here allowed client writes to `meta`, `customers`, `recurringInvoices`, and `invitations`; the build tightened every one of them to callable-only writes.
+`firestore.rules` is authoritative, verified by 58 emulator tests in `functions/test/rules/firestore.test.ts`. The April sketch that used to live here allowed client writes to `meta`, `customers`, `recurringInvoices`, and `invitations`; the build tightened every one of them to callable-only writes.
 
 Two identity patterns are enforced:
 
@@ -844,11 +847,14 @@ Region: callables, HTTP functions, and Firestore triggers run in `northamerica-n
 | `deleteQuote` | `quotes` | owner/admin |
 | `convertQuoteToInvoice` | `quotes` + `invoices` | any role |
 | `createRecurringInvoice` | `recurringInvoices` | any role |
+| `updateRecurringInvoice` | `recurringInvoices` to `resume` only | `{ recurringInvoiceId, action }`: `pause` any role, `resume` any role (next future slot on the same anchor, no backfill; `completed` if the end date or count ran out), `cancel` owner/admin and final; repeats are no-ops (A-10) |
+| `upsertCustomer` | — | any role; creates, or updates when `customerId` is given; email lowercased, not unique (A-10) |
+| `deleteCustomer` | — | owner/admin; hard delete — documents keep their own customer copy (A-10) |
 | `startConnectOnboarding`, `completeConnectOnboarding` | `stripePayments` | owner/admin (D1 account configuration) |
 | `setupCustomDomain` | `customDomain` | owner/admin |
 | `removeCustomDomain`, `recheckCustomDomain` | — | owner/admin |
 
-Not built: `upsertCustomer`, `deleteCustomer`, `updateRecurringInvoice` (A-10). The April plan's tenant-initiated `createCheckoutSession` was dropped — every card payment goes through the pay link.
+Caller-supplied document ids go through `requireDocId` (`functions/src/shared/docId.ts`): `[A-Za-z0-9_-]{1,128}`, no reserved `__…__` ids, so an id can't address another path. The April plan's tenant-initiated `createCheckoutSession` was dropped — every card payment goes through the pay link.
 
 **Customer-facing callables** (require `email_verified`, no `tenantId` claim)
 

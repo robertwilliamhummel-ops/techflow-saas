@@ -227,6 +227,66 @@ export interface Quote {
   lastEmailStatusAt?: Timestamp;
 }
 
+// tenants/{tenantId}/customers/{customerId} — written by upsertCustomer (A-10).
+// Invoices, quotes, and templates copy the customer at creation.
+export interface Customer {
+  name: string;
+  email: string; // always stored lowercased
+  phone: string | null;
+  address: string | null;
+  notes: string | null;
+  createdAt: Timestamp;
+  createdBy: string;
+  updatedAt: Timestamp | null;
+  updatedBy: string | null;
+}
+
+export type RecurringInterval =
+  | "weekly"
+  | "biweekly"
+  | "monthly"
+  | "quarterly"
+  | "annually";
+
+// paused: updateRecurringInvoice, or the processor after 3 consecutive
+// failures. completed: end date or count reached. cancelled: owner/admin, final.
+export type RecurringInvoiceStatus =
+  | "active"
+  | "paused"
+  | "completed"
+  | "cancelled";
+
+// tenants/{tenantId}/recurringInvoices/{id}
+export interface RecurringInvoice {
+  customer: DocumentCustomer;
+  lineItems: LineItem[];
+  applyTax: boolean;
+  totals: DocumentTotals; // preview — recomputed from meta at each run
+  notes: string | null;
+  internalDescription: string | null;
+  daysUntilDue: number;
+  interval: RecurringInterval;
+  anchorDay: number;
+  startDate: string; // YYYY-MM-DD
+  nextRunAt: Timestamp;
+  endAfterCount: number | null;
+  endDate: string | null; // YYYY-MM-DD
+  autoSend: boolean;
+  status: RecurringInvoiceStatus;
+  createdAt: Timestamp;
+  createdBy: string;
+  updatedAt: Timestamp | null;
+  updatedBy?: string; // set by updateRecurringInvoice
+  pausedAt: Timestamp | null;
+  cancelledAt: Timestamp | null;
+  generatedCount: number;
+  lastRunAt: Timestamp | null;
+  lastRunStatus: "success" | "failed" | "skipped" | null;
+  lastRunError: string | null;
+  consecutiveFailures: number;
+  lastGeneratedInvoiceId: string | null;
+}
+
 export type MembershipRole = "owner" | "admin" | "staff";
 
 // userTenantMemberships/{uid}_{tenantId}

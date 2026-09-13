@@ -34,6 +34,11 @@ export { convertQuoteToInvoice } from "./quotes/convertQuoteToInvoice";
 export { createRecurringInvoice } from "./recurring/createRecurringInvoice";
 export { processRecurringInvoices } from "./recurring/processRecurringInvoices";
 
+// A-10 — Customer records + recurring template pause/resume/cancel.
+export { upsertCustomer } from "./customers/upsertCustomer";
+export { deleteCustomer } from "./customers/deleteCustomer";
+export { updateRecurringInvoice } from "./recurring/updateRecurringInvoice";
+
 // Bundle F — Customer-facing + send callables (Phase 2).
 export { getCustomerInvoices } from "./portal/getCustomerInvoices";
 export { getCustomerInvoiceDetail } from "./portal/getCustomerInvoiceDetail";

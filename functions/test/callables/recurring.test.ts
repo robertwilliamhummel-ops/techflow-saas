@@ -44,9 +44,10 @@ import { FieldValue, Timestamp } from "firebase-admin/firestore";
 
 import { createRecurringInvoiceHandler } from "../../src/recurring/createRecurringInvoice";
 import { processRecurringInvoicesHandler } from "../../src/recurring/processRecurringInvoices";
+import { updateRecurringInvoiceHandler } from "../../src/recurring/updateRecurringInvoice";
 import {
   computeNextRunAt,
-  computeNextFutureRunAt,
+  computeResumeRunAt,
   extractAnchorDay,
   addDaysToISODate,
 } from "../../src/shared/recurring";
@@ -226,23 +227,70 @@ describe("computeNextRunAt", () => {
   });
 });
 
-describe("computeNextFutureRunAt", () => {
-  it("monthly: returns anchorDay this month if still in future", () => {
-    const now = new Date("2026-04-10T00:00:00Z");
-    const next = computeNextFutureRunAt(now, "monthly", 15);
-    expect(next.toISOString()).toBe("2026-04-15T00:00:00.000Z");
-  });
-
-  it("monthly: advances to next month if anchorDay already passed", () => {
-    const now = new Date("2026-04-20T00:00:00Z");
-    const next = computeNextFutureRunAt(now, "monthly", 15);
+describe("computeResumeRunAt (A-10)", () => {
+  it("keeps a scheduled run that is still in the future", () => {
+    const next = computeResumeRunAt(
+      new Date("2026-05-15T00:00:00Z"),
+      new Date("2026-04-20T12:00:00Z"),
+      "monthly",
+      15,
+    );
     expect(next.toISOString()).toBe("2026-05-15T00:00:00.000Z");
   });
 
-  it("weekly: returns now + 7 days", () => {
-    const now = new Date("2026-04-15T00:00:00Z");
-    const next = computeNextFutureRunAt(now, "weekly", 15);
-    expect(next.toISOString()).toBe("2026-04-22T00:00:00.000Z");
+  it("monthly: skips missed periods and keeps the anchor day", () => {
+    // Jan 31 → Feb 28 → Mar 31 → Apr 30 (first slot after Apr 10).
+    const next = computeResumeRunAt(
+      new Date("2026-01-31T00:00:00Z"),
+      new Date("2026-04-10T09:00:00Z"),
+      "monthly",
+      31,
+    );
+    expect(next.toISOString()).toBe("2026-04-30T00:00:00.000Z");
+  });
+
+  it("never re-runs today's slot once it has passed", () => {
+    const next = computeResumeRunAt(
+      new Date("2026-04-15T00:00:00Z"),
+      new Date("2026-04-15T03:00:00Z"),
+      "monthly",
+      15,
+    );
+    expect(next.toISOString()).toBe("2026-05-15T00:00:00.000Z");
+  });
+
+  it("weekly: keeps the weekday and midnight UTC", () => {
+    // 2026-04-06 is a Monday; resuming on a Monday afternoon.
+    const next = computeResumeRunAt(
+      new Date("2026-04-06T00:00:00Z"),
+      new Date("2026-04-20T14:30:00Z"),
+      "weekly",
+      6,
+    );
+    expect(next.toISOString()).toBe("2026-04-27T00:00:00.000Z");
+    expect(next.getUTCDay()).toBe(1);
+  });
+
+  it("biweekly: stays on the original fortnight", () => {
+    // Apr 1 → Apr 15 → Apr 29 → May 13.
+    const next = computeResumeRunAt(
+      new Date("2026-04-01T00:00:00Z"),
+      new Date("2026-05-02T00:00:00Z"),
+      "biweekly",
+      1,
+    );
+    expect(next.toISOString()).toBe("2026-05-13T00:00:00.000Z");
+  });
+
+  it("annually: a Feb 29 anchor clamps on non-leap years", () => {
+    // 2028-02-29 → 2029-02-28 → 2030-02-28 → 2031-02-28.
+    const next = computeResumeRunAt(
+      new Date("2028-02-29T00:00:00Z"),
+      new Date("2030-03-01T00:00:00Z"),
+      "annually",
+      29,
+    );
+    expect(next.toISOString()).toBe("2031-02-28T00:00:00.000Z");
   });
 });
 
@@ -731,5 +779,213 @@ describe("processRecurringInvoices", () => {
     expect(invoice.totals.taxRate).toBe(0.05);
     expect(invoice.totals.taxAmount).toBe(10);
     expect(invoice.totals.total).toBe(210);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// updateRecurringInvoice (A-10)
+// ---------------------------------------------------------------------------
+
+describe("updateRecurringInvoice (A-10)", () => {
+  const staffAuth = {
+    uid: "u_staff",
+    claims: { email: "staff@acme.test", tenantId: TENANT, role: "staff" as const },
+  };
+  const adminAuth = {
+    uid: "u_admin",
+    claims: { email: "admin@acme.test", tenantId: TENANT, role: "admin" as const },
+  };
+  const outsiderAuth = {
+    uid: "u_outsider",
+    claims: { email: "owner@other.test", tenantId: "other-tenant", role: "owner" as const },
+  };
+
+  type Auth = typeof ownerAuth | typeof staffAuth | typeof adminAuth | typeof outsiderAuth;
+
+  function call(
+    recurringInvoiceId: string,
+    action: string,
+    auth: Auth = ownerAuth,
+  ) {
+    return updateRecurringInvoiceHandler(
+      fakeRequest({ recurringInvoiceId, action }, auth),
+    );
+  }
+
+  async function template(id: string) {
+    return (
+      await testDb.doc(`tenants/${TENANT}/recurringInvoices/${id}`).get()
+    ).data()!;
+  }
+
+  async function invoiceCount(): Promise<number> {
+    return (await testDb.collection(`tenants/${TENANT}/invoices`).get()).size;
+  }
+
+  beforeEach(async () => {
+    await clearFirestore();
+    mockSesSend.mockClear();
+  });
+
+  it("rejects unauthenticated calls", async () => {
+    await expect(
+      updateRecurringInvoiceHandler(
+        fakeRequest({ recurringInvoiceId: "r1", action: "pause" }, null),
+      ),
+    ).rejects.toThrow(/sign in required/i);
+  });
+
+  it("validates the id and the action", async () => {
+    await seedTenant();
+    const id = await seedRecurringTemplate();
+    await expect(call(id, "delete")).rejects.toThrow(/action must be one of/);
+    await expect(call("", "pause")).rejects.toThrow(/recurringInvoiceId required/);
+    await expect(call(`${id}/x/y`, "pause")).rejects.toThrow(
+      /recurringInvoiceId is invalid/,
+    );
+  });
+
+  it("answers not-found for an unknown template or another tenant's", async () => {
+    await seedTenant();
+    const id = await seedRecurringTemplate();
+    await expect(call("missing", "pause")).rejects.toThrow(/not found/i);
+    await expect(call(id, "pause", outsiderAuth)).rejects.toThrow(/not found/i);
+    expect((await template(id)).status).toBe("active");
+  });
+
+  it("pause: any role stops generation, and pausing again changes nothing", async () => {
+    await seedTenant();
+    const id = await seedRecurringTemplate(); // due: nextRunAt is in the past
+
+    const res = await call(id, "pause", staffAuth);
+    expect(res).toMatchObject({ recurringInvoiceId: id, status: "paused", changed: true });
+    expect(res.nextRunAt).toBe("2026-04-01T00:00:00.000Z");
+
+    const t = await template(id);
+    expect(t.status).toBe("paused");
+    expect(t.pausedAt).toBeTruthy();
+    expect(t.updatedBy).toBe("u_staff");
+
+    await processRecurringInvoicesHandler();
+    expect(await invoiceCount()).toBe(0);
+
+    await expect(call(id, "pause")).resolves.toMatchObject({
+      status: "paused",
+      changed: false,
+    });
+  });
+
+  it("resume: reactivates on the next future slot and never backfills", async () => {
+    await seedTenant();
+    // Auto-paused after failures; monthly on the 1st, last slot 2026-04-01.
+    const id = await seedRecurringTemplate({
+      status: "paused",
+      pausedAt: Timestamp.now(),
+      consecutiveFailures: 3,
+      lastRunStatus: "failed",
+      lastRunError: "Auto-paused after 3 consecutive failures: boom",
+    });
+
+    const before = Date.now();
+    const res = await call(id, "resume", staffAuth);
+    expect(res).toMatchObject({ status: "active", changed: true });
+
+    const t = await template(id);
+    const next = (t.nextRunAt as Timestamp).toDate();
+    expect(t.status).toBe("active");
+    expect(t.pausedAt).toBeNull();
+    expect(t.consecutiveFailures).toBe(0);
+    expect(t.updatedBy).toBe("u_staff");
+    expect(res.nextRunAt).toBe(next.toISOString());
+
+    // Same anchor (1st, 00:00 UTC), strictly in the future, within one period.
+    expect(next.getUTCDate()).toBe(1);
+    expect(next.getUTCHours()).toBe(0);
+    expect(next.getTime()).toBeGreaterThan(before);
+    expect(next.getTime() - before).toBeLessThanOrEqual(31 * 24 * 60 * 60 * 1000);
+
+    // Nothing is due, so the processor makes no catch-up invoice.
+    await processRecurringInvoicesHandler();
+    expect(await invoiceCount()).toBe(0);
+  });
+
+  it("resume keeps a scheduled run that is still ahead", async () => {
+    await seedTenant();
+    const future = Timestamp.fromDate(new Date("2099-01-01T00:00:00Z"));
+    const id = await seedRecurringTemplate({ status: "paused", nextRunAt: future });
+
+    await call(id, "resume");
+    expect((await template(id)).nextRunAt.isEqual(future)).toBe(true);
+  });
+
+  it("resume needs the recurringInvoices feature; pause and cancel don't", async () => {
+    await seedTenant({ recurringFeature: false });
+    const pausedId = await seedRecurringTemplate({ status: "paused" });
+    const activeId = await seedRecurringTemplate();
+
+    await expect(call(pausedId, "resume")).rejects.toThrow(/not enabled/i);
+    expect((await template(pausedId)).status).toBe("paused");
+
+    await expect(call(activeId, "pause")).resolves.toMatchObject({ status: "paused" });
+    await expect(call(pausedId, "cancel")).resolves.toMatchObject({ status: "cancelled" });
+  });
+
+  it("resume completes a template whose invoice count was reached while paused", async () => {
+    await seedTenant();
+    const id = await seedRecurringTemplate({
+      status: "paused",
+      endAfterCount: 3,
+      generatedCount: 3,
+    });
+
+    await expect(call(id, "resume")).resolves.toMatchObject({
+      status: "completed",
+      nextRunAt: null,
+      changed: true,
+    });
+    expect((await template(id)).status).toBe("completed");
+  });
+
+  it("resume completes a template whose end date passed while paused", async () => {
+    await seedTenant();
+    const id = await seedRecurringTemplate({ status: "paused", endDate: "2026-04-15" });
+
+    await expect(call(id, "resume")).resolves.toMatchObject({ status: "completed" });
+    const t = await template(id);
+    expect(t.status).toBe("completed");
+    expect(t.pausedAt).toBeNull();
+  });
+
+  it("cancel: owner or admin only, and final", async () => {
+    await seedTenant();
+    const id = await seedRecurringTemplate();
+
+    await expect(call(id, "cancel", staffAuth)).rejects.toThrow(/requires one of/i);
+    expect((await template(id)).status).toBe("active");
+
+    await expect(call(id, "cancel", adminAuth)).resolves.toMatchObject({
+      status: "cancelled",
+      nextRunAt: null,
+      changed: true,
+    });
+    const t = await template(id);
+    expect(t.cancelledAt).toBeTruthy();
+    expect(t.updatedBy).toBe("u_admin");
+
+    await expect(call(id, "cancel")).resolves.toMatchObject({ changed: false });
+    await expect(call(id, "resume")).rejects.toThrow(/cannot resume/i);
+    await expect(call(id, "pause")).rejects.toThrow(/cannot pause/i);
+
+    await processRecurringInvoicesHandler();
+    expect(await invoiceCount()).toBe(0);
+  });
+
+  it("a completed template can't be paused, resumed, or cancelled", async () => {
+    await seedTenant();
+    const id = await seedRecurringTemplate({ status: "completed" });
+    await expect(call(id, "pause")).rejects.toThrow(/cannot pause/i);
+    await expect(call(id, "resume")).rejects.toThrow(/cannot resume/i);
+    await expect(call(id, "cancel")).rejects.toThrow(/cannot cancel/i);
+    expect((await template(id)).status).toBe("completed");
   });
 });
