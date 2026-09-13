@@ -6,7 +6,7 @@
 //
 // Only token-shape failures (invalid signature, expired JWT, missing invoice)
 // throw — those are genuine "cannot continue" states. Legitimate render
-// states (already paid, regenerated, draft) return structured outcomes.
+// states (already paid, regenerated, void, draft) return structured outcomes.
 
 import {
   onCall,
@@ -15,6 +15,7 @@ import {
 } from "firebase-functions/v2/https";
 import { defineSecret } from "firebase-functions/params";
 import { db } from "../shared/admin";
+import { isPayableInvoiceStatus } from "../shared/invoiceStatus";
 import { verifyPayToken } from "../shared/payToken";
 import { loadFeatures } from "../shared/requireFeature";
 import { effectiveCardSurcharge } from "../shared/surcharge";
@@ -48,12 +49,9 @@ export type VerifyResult =
   | { outcome: "ok"; invoice: PayPagePayload }
   | { outcome: "paid"; paidAt: number; invoiceNumber: string }
   | { outcome: "refunded"; refundedAt: number; invoiceNumber: string }
+  | { outcome: "void"; invoiceNumber: string }
   | { outcome: "regenerated" }
   | { outcome: "not-available" };
-
-// Statuses that are valid payment targets. Draft/archived invoices must NOT
-// be payable even if a tenant accidentally shared the pay link.
-const PAYABLE_STATUSES = ["sent", "unpaid", "overdue", "partial"] as const;
 
 // ---------------------------------------------------------------------------
 // Handler
@@ -88,6 +86,12 @@ export async function verifyInvoicePayTokenHandler(
   // must render, not errors.
   if (invoice.deletedAt) return { outcome: "not-available" };
 
+  // A-12: checked before the version so an older link to a voided invoice says
+  // "void" rather than pointing the customer at a newer link.
+  if (invoice.status === "void") {
+    return { outcome: "void", invoiceNumber: snap.id };
+  }
+
   if (invoice.payTokenVersion !== payload.v) return { outcome: "regenerated" };
 
   if (
@@ -109,9 +113,9 @@ export async function verifyInvoicePayTokenHandler(
     };
   }
 
-  if (
-    !PAYABLE_STATUSES.includes(invoice.status as (typeof PAYABLE_STATUSES)[number])
-  ) {
+  // Draft or any other non-payable status must NOT be payable even if a tenant
+  // accidentally shared the pay link.
+  if (!isPayableInvoiceStatus(invoice.status)) {
     return { outcome: "not-available" };
   }
 

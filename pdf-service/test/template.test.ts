@@ -253,6 +253,24 @@ describe("invoice template", () => {
     expect(html).toContain("$50.05");
   });
 
+  it("A-12: a void invoice is marked and offers no way to pay", async () => {
+    const html = await buildInvoiceHtml({
+      ...baseInvoice,
+      data: { ...baseInvoice.data, status: "void" },
+    });
+    expect(html).toContain("Void — do not pay");
+    expect(html).not.toContain("How to pay");
+    expect(html).not.toContain("Interac e-Transfer");
+    expect(html).not.toContain("Credit card");
+    expect(html).not.toContain('class="qr"');
+  });
+
+  it("A-12: a sent invoice is not marked void", async () => {
+    const html = await buildInvoiceHtml(baseInvoice);
+    expect(html).not.toContain("Void — do not pay");
+    expect(html).toContain("How to pay");
+  });
+
   it("includes CSP meta tag", async () => {
     const html = await buildInvoiceHtml(baseInvoice);
     expect(html).toContain('http-equiv="Content-Security-Policy"');

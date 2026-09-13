@@ -64,7 +64,7 @@ export async function updateInvoiceHandler(
     const doc = existing.data()!;
 
     // Cannot update paid/refunded invoices.
-    const immutableStatuses = ["paid", "refunded", "partially-refunded"];
+    const immutableStatuses = ["paid", "refunded", "partially-refunded", "void"];
     if (immutableStatuses.includes(doc.status as string)) {
       throw new HttpsError(
         "failed-precondition",

@@ -230,6 +230,23 @@ describe("GET /api/pdf/invoice", () => {
     expect(body.data.payUrl).toBe("https://app.example.test/pay/pay-tok-1");
   });
 
+  it("A-12: a void invoice's PDF gets no pay link", async () => {
+    seedTenantEntitlements("acme");
+    seedInvoice("acme", "INV-1", { status: "void" });
+    verifyIdToken.mockResolvedValueOnce({ uid: "u1", tenantId: "acme" });
+    pdfReply();
+
+    const res = await invoiceGET(
+      makeRequest("https://app.example.test/api/pdf/invoice?tenantId=acme&invoiceId=INV-1", {
+        authorization: "Bearer good",
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.data.status).toBe("void");
+    expect(body.data.payUrl).toBeNull();
+  });
+
   it("200 for matching customer email (case-insensitive)", async () => {
     seedTenantEntitlements("acme");
     seedInvoice("acme", "INV-1");

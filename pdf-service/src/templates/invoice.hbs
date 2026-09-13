@@ -108,6 +108,7 @@
       <div class="docmeta">
         <div class="doctype">Invoice</div>
         <div class="docid">{{data.invoiceId}}</div>
+        {{#if sections.void}}<div class="row" style="color:#b42318;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;">Void — do not pay</div>{{/if}}
         <div class="row">Issued: {{data.issueDate}}</div>
         <div class="row">Due: {{data.dueDate}}</div>
         {{#if snapshot.businessNumber}}<div class="row">Business #: {{snapshot.businessNumber}}</div>{{/if}}

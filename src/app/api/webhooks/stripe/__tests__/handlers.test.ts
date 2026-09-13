@@ -650,18 +650,22 @@ describe("handleCheckoutCompleted", () => {
     });
   });
 
-  it("refunds a payment for an invoice that isn't open for payment", async () => {
-    seedInvoice({ status: "draft" });
-    refundsCreate.mockResolvedValue({ id: "re_draft" });
+  // A-12: a void invoice is cancelled, so a checkout left open on it is refunded.
+  it.each(["draft", "void"])(
+    "refunds a payment for a %s invoice, which isn't open for payment",
+    async (status) => {
+      seedInvoice({ status });
+      refundsCreate.mockResolvedValue({ id: `re_${status}` });
 
-    await handleCheckoutCompleted(TENANT, event(session(paidMeta())));
+      await handleCheckoutCompleted(TENANT, event(session(paidMeta())));
 
-    expect(docs.get(`tenants/${TENANT}/invoices/${INVOICE}`)?.status).toBe("draft");
-    expect(refundIncident()).toMatchObject({
-      kind: "auto-refund-not-payable",
-      invoiceStatus: "draft",
-    });
-  });
+      expect(docs.get(`tenants/${TENANT}/invoices/${INVOICE}`)?.status).toBe(status);
+      expect(refundIncident()).toMatchObject({
+        kind: "auto-refund-not-payable",
+        invoiceStatus: status,
+      });
+    },
+  );
 
   it("records and refunds nothing when the session has no captured payment", async () => {
     seedInvoice();

@@ -4,6 +4,9 @@
 // JWT, overwrites payToken + payTokenExpiresAt. Invalidates any prior tokens
 // for the same invoice. The webhook detects version mismatches and auto-refunds
 // (C2 guard — see Phase 4 spec).
+//
+// A-12: refused once the invoice can't be paid (void, paid, refunded) — a new
+// link there would only mislead the customer.
 
 import {
   onCall,
@@ -13,6 +16,7 @@ import {
 import { defineSecret } from "firebase-functions/params";
 import { db, Timestamp } from "../shared/admin";
 import { readClaims, requireTenant, requireRole } from "../shared/auth";
+import { isPayableInvoiceStatus } from "../shared/invoiceStatus";
 import { requireFeature } from "../shared/requireFeature";
 import { signPayToken } from "../shared/payToken";
 
@@ -38,6 +42,14 @@ export async function regenerateInvoicePayLinkHandler(
   }
 
   const data = snap.data()!;
+  const status = String(data.status ?? "");
+  if (status !== "draft" && !isPayableInvoiceStatus(status)) {
+    throw new HttpsError(
+      "failed-precondition",
+      `Cannot issue a pay link for a ${status || "unknown"} invoice.`,
+    );
+  }
+
   const newVersion = (data.payTokenVersion ?? 0) + 1;
   const expiresAtMs = Date.now() + 60 * 24 * 60 * 60 * 1000; // 60 days
 

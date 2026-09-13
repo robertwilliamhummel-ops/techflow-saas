@@ -110,7 +110,7 @@ service cloud.firestore {
         allow read: if belongsToTenant(tenantId)
           || (emailVerified()
               && resource.data.customer.email.lower() == authEmailLower()
-              && resource.data.status in ['sent', 'unpaid', 'overdue', 'partial', 'paid', 'refunded', 'partially-refunded']);
+              && resource.data.status in ['sent', 'unpaid', 'overdue', 'partial', 'paid', 'refunded', 'partially-refunded', 'void']);
         allow write: if false;
 
         // payAttempts — rate-limit ledger for createPayTokenCheckoutSession.

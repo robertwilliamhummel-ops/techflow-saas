@@ -3,9 +3,12 @@
 // Manual fallback for payments outside Stripe (cash, e-transfer).
 // Owner/admin only. Separate code path from the Stripe webhook — intentionally.
 //
-// On transition to paid the pay token is implicitly invalidated: the verify
-// path checks `status !== 'paid'` before accepting a checkout attempt.
-// No need to rotate the token itself (blueprint Phase 2).
+// On transition to paid the pay token is implicitly invalidated: verify and
+// checkout only accept payable statuses. No need to rotate the token itself
+// (blueprint Phase 2).
+//
+// A-12: only payable statuses can be marked paid (a void or refunded invoice
+// used to be accepted), checked in the same transaction as the write.
 
 import {
   HttpsError,
@@ -14,6 +17,8 @@ import {
 } from "firebase-functions/v2/https";
 import { db, FieldValue } from "../shared/admin";
 import { readClaims, requireTenant, requireRole } from "../shared/auth";
+import { requireDocId } from "../shared/docId";
+import { isPayableInvoiceStatus } from "../shared/invoiceStatus";
 import { requireFeature } from "../shared/requireFeature";
 import type { ManualPaymentMethod } from "../shared/invoice";
 
@@ -32,10 +37,7 @@ export async function markInvoicePaidHandler(
   await requireFeature(tenantId, "invoices");
 
   const data = request.data as Record<string, unknown> | undefined;
-  const invoiceId = String(data?.invoiceId ?? "").trim();
-  if (!invoiceId) {
-    throw new HttpsError("invalid-argument", "invoiceId required.");
-  }
+  const invoiceId = requireDocId(data?.invoiceId, "invoiceId");
 
   const method = String(data?.paymentMethod ?? "manual");
   if (!ALLOWED_METHODS.includes(method as ManualPaymentMethod)) {
@@ -48,30 +50,39 @@ export async function markInvoicePaidHandler(
   const invoiceRef = db.doc(
     `tenants/${tenantId}/invoices/${invoiceId}`,
   );
-  const snap = await invoiceRef.get();
-  if (!snap.exists) {
-    throw new HttpsError("not-found", "Invoice not found.");
-  }
 
-  const current = snap.data()!;
-  if (current.status === "paid") {
-    throw new HttpsError(
-      "failed-precondition",
-      "Invoice is already marked as paid.",
-    );
-  }
-  if (current.status === "draft") {
-    throw new HttpsError(
-      "failed-precondition",
-      "Cannot mark a draft invoice as paid — send it first.",
-    );
-  }
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(invoiceRef);
+    if (!snap.exists) {
+      throw new HttpsError("not-found", "Invoice not found.");
+    }
 
-  await invoiceRef.update({
-    status: "paid",
-    paidAt: FieldValue.serverTimestamp(),
-    paymentMethod: method,
-    updatedAt: FieldValue.serverTimestamp(),
+    const status = String(snap.data()!.status ?? "");
+    if (status === "paid") {
+      throw new HttpsError(
+        "failed-precondition",
+        "Invoice is already marked as paid.",
+      );
+    }
+    if (status === "draft") {
+      throw new HttpsError(
+        "failed-precondition",
+        "Cannot mark a draft invoice as paid — send it first.",
+      );
+    }
+    if (!isPayableInvoiceStatus(status)) {
+      throw new HttpsError(
+        "failed-precondition",
+        `Cannot mark a ${status || "unknown"} invoice as paid.`,
+      );
+    }
+
+    tx.update(invoiceRef, {
+      status: "paid",
+      paidAt: FieldValue.serverTimestamp(),
+      paymentMethod: method,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
   });
 
   return { invoiceId, status: "paid" };

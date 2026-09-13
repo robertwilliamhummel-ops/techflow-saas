@@ -71,7 +71,11 @@ export async function previewInvoicePDFHandler(
   const customer = (invoice.customer as Record<string, unknown> | undefined) ?? {};
   const appUrl =
     process.env.APP_URL ?? "https://portal.techflowsolutions.ca";
-  const payToken = typeof invoice.payToken === "string" ? invoice.payToken : null;
+  // A-12: a void invoice's PDF must not offer a way to pay it.
+  const payToken =
+    typeof invoice.payToken === "string" && invoice.status !== "void"
+      ? invoice.payToken
+      : null;
   const payUrl = payToken
     ? `${appUrl.replace(/\/+$/, "")}/pay/${payToken}`
     : null;

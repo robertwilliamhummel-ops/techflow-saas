@@ -24,6 +24,7 @@ const INVOICE_MAP: Record<InvoiceStatus, StatusBadgeProps> = {
   paid: { variant: "success", label: "Paid" },
   refunded: { variant: "secondary", label: "Refunded" },
   "partially-refunded": { variant: "warning", label: "Partially refunded" },
+  void: { variant: "secondary", label: "Void" },
 };
 
 const QUOTE_MAP: Record<QuoteStatus, StatusBadgeProps> = {

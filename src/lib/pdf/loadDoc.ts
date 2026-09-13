@@ -57,7 +57,11 @@ export async function loadInvoiceForPdf(
       resolveFeature("cardSurcharge", overrides),
   };
 
-  const payToken = typeof data.payToken === "string" ? data.payToken : null;
+  // A-12: a void invoice's PDF must not offer a way to pay it.
+  const payToken =
+    typeof data.payToken === "string" && data.status !== "void"
+      ? data.payToken
+      : null;
   const payUrl = payToken
     ? `${platformBaseUrl.replace(/\/+$/, "")}/pay/${payToken}`
     : null;

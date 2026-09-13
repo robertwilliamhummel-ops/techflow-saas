@@ -19,13 +19,16 @@ export async function buildInvoiceHtml(
   const { snapshot, data } = body;
   const template = loadTemplate("invoice");
 
-  const qrDataUrl = data.payUrl
-    ? await QRCode.toDataURL(data.payUrl, { width: 120, margin: 1 })
+  // A-12: a void invoice is marked and offers no way to pay, even if the
+  // caller still sent a pay URL.
+  const isVoid = data.status === "void";
+  const showCard = !isVoid && !!data.payUrl;
+  const qrDataUrl = showCard
+    ? await QRCode.toDataURL(data.payUrl!, { width: 120, margin: 1 })
     : null;
 
-  const showEtransfer = !!snapshot.etransferEmail;
+  const showEtransfer = !isVoid && !!snapshot.etransferEmail;
   const taxMarkers = hasMixedTaxability(data.lineItems);
-  const showCard = !!data.payUrl;
   const showSurchargeNote = snapshot.chargeCustomerCardFees && showCard;
 
   const surchargeAmount =
@@ -53,6 +56,7 @@ export async function buildInvoiceHtml(
     qrDataUrl,
     cssVars: cssVarsFor(snapshot),
     sections: {
+      void: isVoid,
       etransfer: showEtransfer,
       card: showCard,
       surchargeNote: showSurchargeNote,

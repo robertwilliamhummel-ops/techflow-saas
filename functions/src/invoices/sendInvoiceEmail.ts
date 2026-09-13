@@ -48,6 +48,14 @@ export async function sendInvoiceEmailHandler(
     );
   }
 
+  // A-12: a void invoice is cancelled; sending it would ask for payment.
+  if (invoice.status === "void") {
+    throw new HttpsError(
+      "failed-precondition",
+      "This invoice is void and can't be sent.",
+    );
+  }
+
   // Phase 4 Bundle E — refuse to send if the customer would have no way to
   // pay. Card payments require stripeStatus.chargesEnabled === true; e-transfer
   // requires meta.etransferEmail. If neither is available, sending the invoice

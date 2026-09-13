@@ -77,7 +77,7 @@
 
 | Ref | Bug | Where | Fix |
 |---|---|---|---|
-| A-12 | Smaller: `deleteInvoice` hard-deletes sent invoices (should become `void`); the `onSignup` membership check isn't transactional | various | — |
+| A-12 | Smaller: the `onSignup` membership check isn't transactional | various | — |
 
 Closed by the D-decisions: A-09 (surcharge shown vs charged — D3), A-11 (email sending duplicated in five places — D5), forced `business_type: "company"` on Stripe accounts (D1), P10 (email delivery feedback — D5).
 
@@ -104,6 +104,8 @@ Fixed: A-10 (2026-09-13) — rules block client writes to `customers` and `recur
 Fixed: A-12, part 1 (2026-09-13) — `useAuth.ts` typed roles as `member` / `platform_admin`, which Cloud Functions never write, and cast whatever the token held. `AuthClaims.role` now uses the schema's `MembershipRole` (`owner | admin | staff`); `extractClaims` drops unknown roles and wrongly typed values and reads platform admins from the separate `platformAdmin` claim. Covered by `src/lib/__tests__/authClaims.test.ts`.
 
 Fixed: A-12, part 2 (2026-09-13) — `createQuote` derived the quote prefix with `invoicePrefix.replace("INV", "QT")`, so any custom prefix (`ACME`) numbered quotes exactly like invoices (`ACME-0001` twice, from separate counters). `quotePrefixFor` keeps `QT` for the default `INV` and appends `-QT` to anything else (`ACME-QT-0001`), matching the common practice of giving quotes their own prefix. The settings page now shows both formats. Covered by `functions/test/callables/quotes.test.ts`.
+
+Fixed: A-12, part 3 (2026-09-13) — `deleteInvoice` hard-deleted any unpaid invoice, including ones already sent, which erased the record and left a gap in the numbering. The CRA expects sales invoices kept for six years, and Stripe only lets drafts be deleted. `deleteInvoice` now deletes drafts only. The new `voidInvoice` (owner/admin) cancels a `sent`, `unpaid`, or `overdue` invoice and keeps it (`status: 'void'`, `voidedAt`, `voidedBy`, `voidReason`); it refuses anything with a recorded payment, and repeating it is a no-op. A void invoice can't be marked paid, edited, sent, or given a new pay link. Its pay link answers `void` (checked before the link version), customers still see it in the portal, its PDF says "Void — do not pay" with no payment block or QR code, and the Stripe webhook refunds a checkout that completes on it. The same pass closed two adjacent gaps: `markInvoicePaid` accepted every status except draft and paid, so a refunded invoice could be marked paid — it now accepts only payable statuses, inside a transaction — and `regenerateInvoicePayLink` had no status check. Status groups live in `functions/src/shared/invoiceStatus.ts`. Covered by `functions/test/callables/voidInvoice.test.ts`, `invoices.test.ts`, `customerFacing.test.ts`, the Firestore rules tests, `pdf-service/test/template.test.ts`, and the PDF route and Stripe webhook handler tests.
 
 ### Platform deadlines
 
@@ -399,7 +401,8 @@ platformAdmins/{uid}          { uid, email, grantedAt, grantedBy }
             taxes: [{ name, rate, taxableAmount, amount }], total },
   tenantSnapshot: { …frozen branding — see next section },
   status: 'draft' | 'sent' | 'unpaid' | 'overdue' | 'partial' | 'paid'
-          | 'refunded' | 'partially-refunded',
+          | 'refunded' | 'partially-refunded' | 'void',
+  voidedAt, voidedBy, voidReason,          ← set by voidInvoice (A-12)
   issueDate, dueDate,                       ← 'YYYY-MM-DD'
   notes,
   payToken, payTokenExpiresAt (display only), payTokenVersion,
@@ -518,7 +521,7 @@ Two identity patterns are enforced:
 | `platformAdmins/*` | `platformAdmin` claim | none |
 | anything else | none | none |
 
-Customer-visible statuses (A-05): invoices `sent`, `unpaid`, `overdue`, `partial`, `paid`, `refunded`, `partially-refunded`; quotes `sent`, `accepted`, `declined`, `expired`, `converted`. The rules repeat the allow-lists in `functions/src/shared/customerVisibility.ts`, and the rules tests iterate those constants.
+Customer-visible statuses (A-05): invoices `sent`, `unpaid`, `overdue`, `partial`, `paid`, `refunded`, `partially-refunded`, `void` (A-12 — a cancelled invoice stays visible so the customer knows not to pay it); quotes `sent`, `accepted`, `declined`, `expired`, `converted`. The rules repeat the allow-lists in `functions/src/shared/customerVisibility.ts`, and the rules tests iterate those constants.
 
 **Storage (`storage.rules`, 18 emulator tests in `functions/test/rules/storage.test.ts`):**
 
@@ -757,6 +760,7 @@ Invoice and quote status badges use the shadcn `Badge` component with these vari
 | `partial` | `warning` | `--warning` |
 | `refunded` | `secondary` | `--muted` |
 | `partially-refunded` | `warning` | `--warning` |
+| `void` | `secondary` | `--muted` |
 | `draft` | `outline` | `--border` |
 | `sent` | `default` | `--primary` |
 
@@ -845,7 +849,7 @@ Region: callables, HTTP functions, and Firestore triggers run in `northamerica-n
 | `updateTenantBranding` | — | owner/admin; business info, branding, tax, currency, `contactEmail` |
 | `updatePaymentSettings` | `cardSurcharge` to switch surcharging on (D3) | owner/admin; e-Transfer email, surcharge settings |
 | `createInvoice`, `updateInvoice` | `invoices` | any role |
-| `deleteInvoice`, `markInvoicePaid`, `regenerateInvoicePayLink` | `invoices` | owner/admin |
+| `deleteInvoice` (drafts only), `voidInvoice`, `markInvoicePaid`, `regenerateInvoicePayLink` | `invoices` | owner/admin |
 | `sendInvoiceEmail`, `previewInvoicePDF` | `invoices` | any role |
 | `createQuote`, `updateQuote`, `sendQuoteEmail`, `previewQuotePDF` | `quotes` | any role |
 | `deleteQuote` | `quotes` | owner/admin |
@@ -873,7 +877,7 @@ Not built: `getCustomerQuotes` (P6). Customer PDF download is the Next.js route 
 
 | Function | Notes |
 |---|---|
-| `verifyInvoicePayToken` | Returns a discriminated `VerifyResult` (`ok` \| `paid` \| `refunded` \| `regenerated` \| `not-available`); surcharge from the snapshot plus the `cardSurcharge` kill switch (D3) |
+| `verifyInvoicePayToken` | Returns a discriminated `VerifyResult` (`ok` \| `paid` \| `refunded` \| `void` \| `regenerated` \| `not-available`; `void` is checked before the link version, A-12); surcharge from the snapshot plus the `cardSurcharge` kill switch (D3) |
 | `createPayTokenCheckoutSession` | `stripePayments` of the invoice's tenant; max 10 sessions per invoice per 24h; direct charge on the tenant's Stripe account |
 
 There is intentionally no `payInvoice` callable. The portal's "Pay Now" redirects to `/pay/{payToken}` — one checkout code path.
@@ -904,9 +908,11 @@ All invoice and quote mutations go through dedicated callables; direct client wr
 
 **`updateInvoice`** accepts only mutable fields (customer, line items, `applyTax`, dates, notes) and recomputes totals from the **frozen snapshot's** tax rate and name — never current meta. Paid and refunded invoices are immutable. It runs in a transaction, and when a non-draft invoice's total or customer email changes it re-issues the pay link (`payTokenVersion` + 1, new `payToken` and `payTokenExpiresAt`) and returns `payLinkRegenerated: true` so the UI can prompt a resend (A-08).
 
-**`deleteInvoice`** — owner/admin; hard delete; refuses `paid` (A-12: sent invoices should be voided instead).
+**`deleteInvoice`** — owner/admin; drafts only, checked in a transaction. A draft was never issued, so no customer holds its number (A-12).
 
-**`markInvoicePaid`** — owner/admin manual fallback for payments outside Stripe (`manual` | `etransfer` | `cash`); refuses drafts and double payment. The pay token is implicitly dead afterwards because verify and checkout only accept `sent | unpaid | overdue | partial`.
+**`voidInvoice`** — owner/admin; `{ invoiceId, reason? }` (reason ≤ 500 characters). Cancels a `sent | unpaid | overdue` invoice and keeps the record: `status: 'void'`, `voidedAt`, `voidedBy`, `voidReason`. Final; repeating it is a no-op. Refuses drafts (delete them) and anything with a recorded payment (refund it). The CRA expects sales invoices kept for six years, and Stripe draws the same line: drafts are deleted, finalized invoices voided. A void invoice can't be marked paid, edited, sent, or given a new pay link. Its pay link answers `void`, the portal still lists it so the customer knows not to pay, its PDF says "Void — do not pay" with no payment section, and a checkout that completes on it is refunded by the webhook (A-12).
+
+**`markInvoicePaid`** — owner/admin manual fallback for payments outside Stripe (`manual` | `etransfer` | `cash`). Accepts only `sent | unpaid | overdue | partial` (`functions/src/shared/invoiceStatus.ts`), checked in a transaction, so drafts, void, paid, and refunded invoices are refused. The pay token is implicitly dead afterwards because verify and checkout accept the same statuses.
 
 Quotes mirror this (`createQuote`, `updateQuote`, `deleteQuote`; no pay token). `convertQuoteToInvoice` reuses the snapshot and counter logic and carries per-line taxability through.
 
@@ -940,6 +946,7 @@ type VerifyResult =
   | { outcome: 'ok'; invoice: PayPagePayload }                          // ready to pay
   | { outcome: 'paid'; paidAt: number; invoiceNumber: string }          // already paid
   | { outcome: 'refunded'; refundedAt: number; invoiceNumber: string }  // refunded after payment
+  | { outcome: 'void'; invoiceNumber: string }                          // cancelled by the business (A-12)
   | { outcome: 'regenerated' }                                          // newer link exists
   | { outcome: 'not-available' };                                       // draft/archived/deleted
 
@@ -967,6 +974,8 @@ export const verifyInvoicePayToken = onCall({ secrets: [PAY_TOKEN_SECRET] }, asy
   // Structured-status branching — these are legitimate states the pay page must render,
   // not errors. Throwing and catching on the client would be fragile (P1 fix).
   if (invoice.deletedAt) return { outcome: 'not-available' };
+  // A-12 — before the version check, so an older link to a voided invoice says "void".
+  if (invoice.status === 'void') return { outcome: 'void', invoiceNumber: snap.id };
   if (invoice.payTokenVersion !== payload.v) return { outcome: 'regenerated' };
   if (invoice.status === 'refunded' || invoice.status === 'partially-refunded') {
     return {
@@ -1011,7 +1020,7 @@ export const verifyInvoicePayToken = onCall({ secrets: [PAY_TOKEN_SECRET] }, asy
 });
 ```
 
-**Pay page branches on `outcome`:** `ok` → render pay UI; `paid` → "Thanks, this invoice was paid on {date}"; `refunded` → "This invoice was refunded on {date}"; `regenerated` → "This pay link is no longer valid. Check your email for a newer invoice, or contact {tenant.name}."; `not-available` → generic "This invoice is not currently available for payment. Contact {tenant.name} if you believe this is an error." The success page at `/pay/[token]/success` polls with backoff (max 5 attempts, 1s apart) until it sees `outcome === 'paid'` — no string matching required.
+**Pay page branches on `outcome`:** `ok` → render pay UI; `paid` → "Thanks, this invoice was paid on {date}"; `refunded` → "This invoice was refunded on {date}"; `regenerated` → "This pay link is no longer valid. Check your email for a newer invoice, or contact {tenant.name}."; `void` → "{tenant.name} cancelled this invoice — there's nothing to pay." (A-12); `not-available` → generic "This invoice is not currently available for payment. Contact {tenant.name} if you believe this is an error." The success page at `/pay/[token]/success` polls with backoff (max 5 attempts, 1s apart) until it sees `outcome === 'paid'` — no string matching required.
 
 **P3 — JWT `exp` is the authoritative expiry.** The `payTokenExpiresAt` Firestore timestamp is **display-only** (used in the dashboard to show tenants "this invoice's pay link expires in N days" and in the `regenerateInvoicePayLink` CTA logic). The `verify()` call enforces expiry via the JWT `exp` claim — if the two ever diverge (manual Firestore edit, clock skew, migration bug), the JWT wins because that's what the verify path actually checks. Do not add code that reads `payTokenExpiresAt` for authorization decisions.
 
@@ -2078,7 +2087,7 @@ The PDF is the document customers save, print, and forward to their accountant. 
 
 ### Payment methods block (bottom of PDF, above the footer)
 
-Every invoice PDF includes a "How to pay" block with both methods, in this order (matching the pay page ordering):
+Every invoice PDF includes a "How to pay" block with both methods, in this order (matching the pay page ordering). The one exception is a void invoice (A-12): its PDF says "Void — do not pay" under the invoice number and has no payment block or QR code — `pdf-service` hides both for `status: 'void'`, and both PDF callers also stop sending a pay URL.
 
 ```
 ────────────────────────────────────────────────

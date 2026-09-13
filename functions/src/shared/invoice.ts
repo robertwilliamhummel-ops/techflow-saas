@@ -89,7 +89,8 @@ export type InvoiceStatus =
   | "partial"
   | "paid"
   | "refunded"
-  | "partially-refunded";
+  | "partially-refunded"
+  | "void"; // A-12 — issued, then cancelled; final (voidInvoice)
 
 export type ManualPaymentMethod = "manual" | "etransfer" | "cash";
 
@@ -112,6 +113,10 @@ export interface InvoiceDoc {
   paymentMethod?: ManualPaymentMethod | "card" | null;
   sourceQuoteId?: string | null;
   sourceRecurringInvoiceId?: string | null;
+  // A-12 — set by voidInvoice.
+  voidedAt?: Timestamp | FieldValue | null;
+  voidedBy?: string | null;
+  voidReason?: string | null;
 
   // Stripe payment reconciliation — written by the Connect webhook.
   // paidAmountCents + surchargeAmountCents split is preserved so accounting

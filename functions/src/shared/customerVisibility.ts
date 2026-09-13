@@ -15,6 +15,8 @@ export const CUSTOMER_VISIBLE_INVOICE_STATUSES = [
   "paid",
   "refunded",
   "partially-refunded",
+  // A-12: a voided invoice stays visible so the customer sees it's cancelled.
+  "void",
 ] as const;
 
 export const CUSTOMER_VISIBLE_QUOTE_STATUSES = [

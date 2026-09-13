@@ -145,7 +145,8 @@ export type InvoiceStatus =
   | "partial"
   | "paid"
   | "refunded"
-  | "partially-refunded";
+  | "partially-refunded"
+  | "void"; // A-12 — issued, then cancelled; final
 
 export type PaymentMethod = "manual" | "etransfer" | "cash" | "card";
 
@@ -189,6 +190,11 @@ export interface Invoice {
   disputedAt?: Timestamp | null;
   disputeReason?: string | null;
   disputeOutcome?: "won" | "lost" | null;
+
+  // A-12 — set by voidInvoice.
+  voidedAt?: Timestamp | null;
+  voidedBy?: string | null;
+  voidReason?: string | null;
 
   lastEmailStatus?: EmailDeliveryStatus;
   lastEmailStatusDetail?: string | null;

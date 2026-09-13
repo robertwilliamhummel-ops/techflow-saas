@@ -496,6 +496,17 @@ describe("verifyInvoicePayToken", () => {
     expect(result.outcome).toBe("refunded");
   });
 
+  it("A-12: returns void for a voided invoice, even through an older link", async () => {
+    await testDb.doc(`tenants/${TENANT}/invoices/INV-0001`).update({
+      status: "void",
+      payTokenVersion: 2,
+    });
+    const result = await verifyInvoicePayTokenHandler(
+      fakeRequest({ token: validToken }, null),
+    );
+    expect(result).toEqual({ outcome: "void", invoiceNumber: "INV-0001" });
+  });
+
   it("throws on invalid token", async () => {
     await expect(
       verifyInvoicePayTokenHandler(

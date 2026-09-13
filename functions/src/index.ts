@@ -23,6 +23,7 @@ export { createInvoice } from "./invoices/createInvoice";
 export { updateInvoice } from "./invoices/updateInvoice";
 export { deleteInvoice } from "./invoices/deleteInvoice";
 export { markInvoicePaid } from "./invoices/markInvoicePaid";
+export { voidInvoice } from "./invoices/voidInvoice";
 
 // Bundle E — Quote CRUD (Phase 2).
 export { createQuote } from "./quotes/createQuote";

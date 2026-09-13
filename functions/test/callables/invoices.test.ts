@@ -591,18 +591,25 @@ describe("deleteInvoice", () => {
     expect(snap.exists).toBe(false);
   });
 
-  it("rejects deletion of a paid invoice", async () => {
-    const { invoiceId } = await createInvoiceHandler(
-      fakeRequest(validInvoiceData(), ownerAuth),
-    );
-    await testDb
-      .doc(`tenants/${TENANT}/invoices/${invoiceId}`)
-      .update({ status: "paid" });
+  it.each(["sent", "unpaid", "overdue", "partial", "paid", "refunded", "void"])(
+    "A-12: refuses to delete a %s invoice, which stays on record",
+    async (status) => {
+      const { invoiceId } = await createInvoiceHandler(
+        fakeRequest(validInvoiceData(), ownerAuth),
+      );
+      const ref = testDb.doc(`tenants/${TENANT}/invoices/${invoiceId}`);
+      await ref.update({ status });
 
-    await expect(
-      deleteInvoiceHandler(fakeRequest({ invoiceId }, ownerAuth)),
-    ).rejects.toThrow(/Cannot delete a paid invoice/);
-  });
+      await expect(
+        deleteInvoiceHandler(fakeRequest({ invoiceId }, ownerAuth)),
+      ).rejects.toThrow(
+        status === "void"
+          ? /void and stays on record/
+          : /Only drafts can be deleted\. Void this/,
+      );
+      expect((await ref.get()).exists).toBe(true);
+    },
+  );
 
   it("rejects staff role (requires owner/admin)", async () => {
     const { invoiceId } = await createInvoiceHandler(

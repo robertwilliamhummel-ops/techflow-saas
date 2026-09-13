@@ -1,6 +1,9 @@
-// deleteInvoice — Phase 2 Bundle D.
+// deleteInvoice — Phase 2 Bundle D; drafts only since A-12.
 //
-// Hard delete for MVP (soft-delete UI deferred). Owner/admin role required.
+// Owner/admin. Hard-deletes a draft, which was never issued, so no customer
+// holds its number. Anything issued is voided instead (voidInvoice) so the
+// record stays — the same split Stripe makes between deleting drafts and
+// voiding finalized invoices.
 
 import {
   HttpsError,
@@ -9,6 +12,7 @@ import {
 } from "firebase-functions/v2/https";
 import { db } from "../shared/admin";
 import { readClaims, requireTenant, requireRole } from "../shared/auth";
+import { requireDocId } from "../shared/docId";
 import { requireFeature } from "../shared/requireFeature";
 
 export async function deleteInvoiceHandler(
@@ -20,29 +24,31 @@ export async function deleteInvoiceHandler(
   await requireFeature(tenantId, "invoices");
 
   const data = request.data as Record<string, unknown> | undefined;
-  const invoiceId = String(data?.invoiceId ?? "").trim();
-  if (!invoiceId) {
-    throw new HttpsError("invalid-argument", "invoiceId required.");
-  }
+  const invoiceId = requireDocId(data?.invoiceId, "invoiceId");
 
   const invoiceRef = db.doc(
     `tenants/${tenantId}/invoices/${invoiceId}`,
   );
-  const snap = await invoiceRef.get();
-  if (!snap.exists) {
-    throw new HttpsError("not-found", "Invoice not found.");
-  }
 
-  // Prevent deleting paid invoices — these are legal/tax records.
-  const status = (snap.data()!.status as string) ?? "";
-  if (status === "paid") {
-    throw new HttpsError(
-      "failed-precondition",
-      "Cannot delete a paid invoice. Refund it first if needed.",
-    );
-  }
+  // Transaction: a draft sent between the check and the delete must survive.
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(invoiceRef);
+    if (!snap.exists) {
+      throw new HttpsError("not-found", "Invoice not found.");
+    }
 
-  await invoiceRef.delete();
+    const status = String(snap.data()!.status ?? "");
+    if (status !== "draft") {
+      throw new HttpsError(
+        "failed-precondition",
+        status === "void"
+          ? "This invoice is void and stays on record."
+          : `Only drafts can be deleted. Void this ${status || "issued"} invoice instead.`,
+      );
+    }
+
+    tx.delete(invoiceRef);
+  });
 
   return { deleted: true };
 }
