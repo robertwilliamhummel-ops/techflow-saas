@@ -23,13 +23,19 @@ export const config = {
   matcher: [
     "/((?!_next/static|_next/image|favicon.ico|robots.txt|sitemap.xml|api/|.*\\..*).*)",
   ],
+  // Node.js middleware is stable since Next 15.5 (Next 16's proxy.ts is
+  // Node-only, so this line goes away with that upgrade).
+  runtime: "nodejs",
 };
 
-export const runtime = "nodejs";
+// Request header the portal layouts trust for tenant branding. Only routes the
+// matcher covers may read it — excluded paths never pass through the strip below.
+const TENANT_HEADER = "x-tenant-id";
 
 // Hosts that bypass tenant resolution. The generic portal serves the platform
 // brand and resolves tenantId from the signed-in user's claims after login.
-// Any non-portal host (the marketing site, Vercel preview URLs) also bypasses.
+// Local dev and Vercel preview URLs also bypass. The marketing site is a
+// separate Vercel project and never reaches this app.
 function isGenericHost(host: string): boolean {
   const generic = process.env.PORTAL_GENERIC_HOST ?? "portal.techflowsolutions.ca";
   if (host === generic) return true;
@@ -99,8 +105,15 @@ async function resolveTenantId(host: string): Promise<string | null> {
 export async function middleware(req: NextRequest): Promise<NextResponse> {
   const host = (req.headers.get("host") ?? "").toLowerCase();
 
+  // Never let a client-supplied tenant header through — otherwise anyone on
+  // the generic host could render another tenant's branding by sending it.
+  // Headers on the *request* (via NextResponse.next({ request: { headers } }))
+  // replace the incoming set and propagate into Server Components via `headers()`.
+  const requestHeaders = new Headers(req.headers);
+  requestHeaders.delete(TENANT_HEADER);
+
   if (isGenericHost(host)) {
-    return NextResponse.next();
+    return NextResponse.next({ request: { headers: requestHeaders } });
   }
 
   const tenantId = await resolveTenantId(host);
@@ -110,10 +123,6 @@ export async function middleware(req: NextRequest): Promise<NextResponse> {
     return new NextResponse("Not found", { status: 404 });
   }
 
-  // Inject tenant ID for downstream layouts/RSC. Headers on the *request*
-  // (via NextResponse.next({ request: { headers } })) propagate into Server
-  // Components via `headers()`.
-  const requestHeaders = new Headers(req.headers);
-  requestHeaders.set("x-tenant-id", tenantId);
+  requestHeaders.set(TENANT_HEADER, tenantId);
   return NextResponse.next({ request: { headers: requestHeaders } });
 }

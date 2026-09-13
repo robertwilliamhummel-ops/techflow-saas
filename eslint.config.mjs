@@ -18,6 +18,9 @@ const eslintConfig = [
       "out/**",
       "build/**",
       "next-env.d.ts",
+      // Compiled output of the sibling packages (untracked tsc builds).
+      "functions/lib/**",
+      "pdf-service/dist/**",
     ],
   },
 ];

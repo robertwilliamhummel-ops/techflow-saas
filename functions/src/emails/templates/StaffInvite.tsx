@@ -45,7 +45,7 @@ export function StaffInvite(props: StaffInviteProps) {
             color: "#111111",
           }}
         >
-          You've been invited to {safeTenantName}
+          You&apos;ve been invited to {safeTenantName}
         </Text>
         <Text
           style={{
@@ -75,7 +75,7 @@ export function StaffInvite(props: StaffInviteProps) {
             margin: "16px 0 0 0",
           }}
         >
-          This invite expires in 7 days. If you weren't expecting this email,
+          This invite expires in 7 days. If you weren&apos;t expecting this email,
           you can safely ignore it.
         </Text>
       </Section>

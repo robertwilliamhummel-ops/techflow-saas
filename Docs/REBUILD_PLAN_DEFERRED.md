@@ -14,7 +14,7 @@
 | R3 `PDF_SERVICE_URL` drift | Superseded — Cloud Run domain mappings aren't offered in `northamerica-northeast2` (D2); the deterministic `*.run.app` URL survives service recreation (REBUILD_PLAN Deploy Runbook) |
 | R4 Rate limiting / App Check | Open — only the pay-attempt limit (10 per invoice per 24h) exists |
 | R5 Split webhook endpoints | Done — `/api/webhooks/stripe/platform` and `/connect` with separate secrets; event scopes corrected by D1 |
-| R6 Middleware Admin SDK singleton + Next version | Done in code (module singleton, Node runtime, Next ≥ 15.2) — but `middleware.ts` sits at the repo root and isn't loaded (A-01) |
+| R6 Middleware Admin SDK singleton + Next version | Done — `src/middleware.ts` (module singleton, Node runtime), Next 15.5.25; A-01 fixed 2026-09-13 |
 | R7 `deletedAt` without rule enforcement | Open — `deletedAt: null` is still written on meta and memberships; rules don't filter on it |
 | R8 Portal pagination / projection | Partial — list rows are projected, no cursor; drafts and base64 logos are returned (A-05) |
 | P1 Null logo in PDF | Done — templates show the tenant name when `logo` is null |
@@ -29,7 +29,7 @@
 | P10 Email typo → invoice never reachable | Done — D5 `sesEventsWebhook` records `lastEmailStatus` |
 | P11 Second-tab stale token | Accepted for MVP |
 | P12 Magic link for unverified password accounts | Open — customer magic link isn't built yet |
-| P13 Sentry quota | Deploy Runbook item; Sentry isn't loading yet (A-01) |
+| P13 Sentry quota | Deploy Runbook item; Next.js Sentry loads from `src/instrumentation*.ts` once a DSN is set |
 | P14 Portal list unbounded | Same as R8 |
 
 The per-item narratives below are the original audit text, kept for rationale. Code samples in them (Resend, Express, `us-central1`, `tenants/{id}/meta`) predate the build — see the status table and REBUILD_PLAN for what is current.

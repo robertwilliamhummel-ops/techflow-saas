@@ -67,7 +67,7 @@
 | 2 Cloud Functions | Mostly done — 246 callable, 55 email, 54 shared tests | `getCustomerQuotes` (P6), MagicLinkSignIn + PaymentReceipt templates, App Check + send rate limits (R4), Sentry in functions |
 | 3 Frontend architecture | Contexts, guards, auth recovery done | 12 placeholder pages: `/dashboard`, `/invoices`, `/invoices/new`, `/invoices/[id]`, `/customers`, `/quotes/[id]`, `/portal`, `/portal/invoices/[id]`, `/portal/quotes/[id]`, `/pay/[token]`, `/pay/[token]/success`, `/pay/[token]/cancelled`; dashboard navigation |
 | 4 Stripe Connect | Backend done (D1 applied) | Public pay page UI; A-02, A-03, A-08 |
-| 5 Onboarding & domains | Signup, login, settings, team, domain, billing UI done | Customer magic-link sign-in (portal login is password-only today); A-01, A-07 |
+| 5 Onboarding & domains | Signup, login, settings, team, domain, billing UI done; host-routing middleware loads | Customer magic-link sign-in (portal login is password-only today); A-07 |
 | 6 PDF | Code done — 222 tests | Deploy; Node 22 base image |
 | 7 Testing & first onboarding | Bundles A–E done | Test matrix, staging project, backup restore drill, first onboarding |
 | Deploy | Nothing deployed | "Environment Strategy & Deploy Runbook" |
@@ -76,13 +76,12 @@
 
 | Ref | Bug | Where | Fix |
 |---|---|---|---|
-| A-01 | `middleware.ts`, `instrumentation.ts`, `instrumentation-client.ts` sit at the repo root while the app is in `src/`, so Next.js ignores them (empty middleware manifest): custom domains never resolve and Sentry never initialises | repo root | Move into `src/` (Next 16: `src/proxy.ts`) |
 | A-02 | Payment saves `session.payment_intent` (`pi_…`) as `stripeChargeId`; refund and dispute handlers look up `charge.id` (`ch_…`), so they never match | `src/app/api/webhooks/stripe/handlers.ts` | Store `stripePaymentIntentId`; look up by `charge.payment_intent` |
 | A-03 | Event sentinel is written before the handler runs; a failed handler is never retried (redelivery sees "duplicate") | `src/lib/stripe/idempotency.ts`, webhook routes | `processing` → `done` states; release on failure |
 | A-04 | `processRecurringInvoices` collection-group query (`status ==` + `nextRunAt <=`) has no composite index — fails in production (the emulator doesn't enforce indexes) | `firestore.indexes.json` | Add the `recurringInvoices` COLLECTION_GROUP index |
 | A-05 | `getCustomerInvoices` (and the customer rule branch) include drafts; list rows carry full base64 logos (callable 10 MB limit at ~20 rows) | `functions/src/portal/getCustomerInvoices.ts`, `firestore.rules` | Exclude `draft`; project a small logo URL |
 | A-06 | Emails embed the snapshot's base64 `data:` logo, which Gmail web and Outlook block | `sendInvoiceEmail.ts`, `sendQuoteEmail.ts`, `processRecurringInvoices.ts` | Copy the logo to an immutable public Storage path at snapshot time; use that https URL in email |
-| A-07 | Edge Config keys `domain:{host}` contain `:` and `.`, but keys must match `^[\w-]+$` — every write fails silently | `middleware.ts`, `functions/src/domain/setupCustomDomain.ts` | Encode the host into a valid key in one shared helper |
+| A-07 | Edge Config keys `domain:{host}` contain `:` and `.`, but keys must match `^[\w-]+$` — every write fails silently | `src/middleware.ts`, `functions/src/domain/setupCustomDomain.ts` | Encode the host into a valid key in one shared helper |
 | A-08 | Sent invoices can be edited (amount, customer email) without bumping `payTokenVersion`; the webhook marks paid without comparing `amount_total` | `updateInvoice.ts`, `handlers.ts` | Bump the version on edits of a sent invoice; verify the amount before marking paid |
 | A-10 | No callables to create/update/delete customers or pause/resume/cancel recurring templates, while rules block client writes | `functions/src/index.ts`, `firestore.rules` | `upsertCustomer`, `deleteCustomer`, `updateRecurringInvoice` |
 | A-12 | Smaller: `useAuth.ts` types roles as `member`/`platform_admin`; `deleteInvoice` hard-deletes sent invoices (should become `void`); `createQuote` prefix only maps `INV→QT`; the `onSignup` membership check isn't transactional | various | — |
@@ -91,14 +90,16 @@ Closed by the D-decisions: A-09 (surcharge shown vs charged — D3), A-11 (email
 
 Fixed: A-13 (2026-09-13) — `storage.rules` used `logo.{ext}`, invalid path syntax, so the ruleset never loaded. It now matches `/tenants/{tenantId}/{fileName}` and validates the file name, content type, and size; covered by `functions/test/rules/storage.test.ts`.
 
+Fixed: A-01 (2026-09-13) — `middleware.ts`, `instrumentation.ts`, and `instrumentation-client.ts` moved into `src/`, so Next.js loads them (the build's functions-config manifest lists `/_middleware` on the Node.js runtime). The middleware now also strips any client-supplied `x-tenant-id` before routing. Covered by `src/__tests__/middleware.test.ts`.
+
 ### Platform deadlines
 
-- **Next.js:** installed 15.5.15 predates the May, July, and August 2026 security releases (critical RCE fixed in 15.5.24), and Next 15 reaches end of life on 2026-10-21. Upgrade to ≥15.5.25 now, then Next 16 (`middleware.ts` becomes `proxy.ts`).
+- **Next.js:** on 15.5.25 (includes the May–August 2026 security releases; the critical RCE was fixed in 15.5.24). Next 15 reaches end of life on 2026-10-21 — move to Next 16 before then (`src/middleware.ts` becomes `src/proxy.ts`, which is Node-only, so its `config.runtime` line is removed).
 - **Node.js:** Cloud Functions decommissions Node 20 on 2026-10-30. Move `functions/package.json` engines, `firebase.json` runtime, and the `pdf-service` Dockerfile to Node 22 (firebase-functions 7 and firebase-admin 14 require it).
 
 ### Path to launch (in order)
 
-1. Next 15.5.25 and move the A-01 files into `src/`.
+1. ~~Next 15.5.25 and move the A-01 files into `src/`.~~ Done 2026-09-13.
 2. Platform upgrade: Node 22, firebase-functions 7, firebase-admin 14, firebase-tools 15, Next 16.
 3. Backend fixes A-02 → A-12, each with a test that would have caught it.
 4. Product screens: Phase 3 placeholders, public pay page, portal magic-link sign-in.
@@ -1420,7 +1421,7 @@ When 50 tenants run on the same codebase, "the PDF is broken" from one tenant wi
 4. For Cloud Functions: `npm install @sentry/node` in `functions/`, init in the function entry point, wrap handlers with `Sentry.withScope` to tag tenantId per request.
 5. Separate Sentry projects per environment (`techflow-saas-dev`, `techflow-saas-staging`, `techflow-saas-prod`) so dev noise doesn't pollute prod alerts.
 
-**As built:** the Next.js side uses `instrumentation.ts` / `instrumentation-client.ts` rather than the wizard's `sentry.*.config.ts`, but those files sit at the repo root and are not loaded yet (A-01). Cloud Functions Sentry (step 4) is not wired.
+**As built:** the Next.js side uses `src/instrumentation.ts` / `src/instrumentation-client.ts` rather than the wizard's `sentry.*.config.ts` (DSNs from `SENTRY_DSN` / `NEXT_PUBLIC_SENTRY_DSN`; no DSN means Sentry no-ops). Cloud Functions Sentry (step 4) is not wired.
 
 **Cost:** Sentry free tier (5k events/month) is enough for MVP. Paid tier ($26/month) when usage outgrows free.
 
@@ -1846,10 +1847,10 @@ Two domain tiers per tenant:
 - **`customDomain` field in tenant meta.** Set by Reggie (platform admin) during onboarding or by tenant in `/settings` (if on a plan that includes custom domains — feature-gated via `entitlements`).
 - **`customDomains/{domain}` Firestore collection.** Reverse lookup: `domain → tenantId`. Written by the `setupCustomDomain` callable (owner/admin, `customDomain` feature) and removed by `removeCustomDomain`. The middleware reads it only on an Edge Config miss.
 - **Vercel domain provisioning.** Cloud Function calls the [Vercel Domains API](https://vercel.com/docs/rest-api/endpoints/domains) to add/remove the domain from the Vercel project when `customDomain` is set/changed.
-- **Next.js middleware** (`src/middleware.ts` — currently misplaced at the repo root and not loaded, A-01; becomes `src/proxy.ts` on Next 16):
-  1. On every request, read `Host` header.
-  2. If host is not `portal.techflowsolutions.ca` (the generic domain), query `customDomains/{host}` to get `tenantId`.
-  3. If found, inject `tenantId` into request headers / cookies so the login page and portal can load that tenant's branding.
+- **Next.js middleware** (`src/middleware.ts`, Node.js runtime via `config.runtime`; becomes `src/proxy.ts` on Next 16):
+  1. On every request, read `Host` header and **delete any incoming `x-tenant-id`** — portal layouts trust that header, so a client-supplied value must never reach them.
+  2. If host is not `portal.techflowsolutions.ca` (the generic domain; also `localhost`, `127.0.0.1`, `*.vercel.app`), look up `tenantId` (Edge Config, then `customDomains/{host}`).
+  3. If found, inject `x-tenant-id` into the forwarded request headers so the login page and portal can load that tenant's branding.
   4. If not found, 404.
 
   **R3 — `config.matcher` MUST exclude static assets and API routes:**
