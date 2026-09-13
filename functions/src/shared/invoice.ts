@@ -61,7 +61,11 @@ export interface InvoiceTotals {
 export interface TenantSnapshot {
   version: number;
   name: string;
-  logo: string | null; // base64 data URL (inlined at creation) or null
+  logo: string | null; // base64 data URL (inlined at creation) or null — PDFs
+  // A-06: https URL of the immutable Storage copy of the same logo (emails,
+  // portal) and its MIME type; null when there is no logo.
+  logoUrl: string | null;
+  logoContentType: string | null;
   address: string | null;
   primaryColor: string;
   secondaryColor: string;
@@ -346,7 +350,10 @@ export function buildTenantSnapshot(
   return {
     version: 1,
     name: String(meta.name ?? ""),
-    logo: null, // Caller fills via inlineLogoOrThrow when meta.logoUrl is set.
+    // Caller fills all three via applyLogoToSnapshot when meta.logoUrl is set.
+    logo: null,
+    logoUrl: null,
+    logoContentType: null,
     address: meta.address != null ? String(meta.address) : null,
     primaryColor: String(meta.primaryColor ?? "#667eea"),
     secondaryColor: String(meta.secondaryColor ?? "#764ba2"),
@@ -366,44 +373,5 @@ export function buildTenantSnapshot(
   };
 }
 
-// ---------------------------------------------------------------------------
-// Logo inlining — fetches the logo URL and converts to a base64 data URL
-// so the invoice survives future logo rotations/deletions (frozen-document
-// model). Phase 6: throws on any failure so the caller (createInvoice etc.)
-// fails atomically rather than persisting a snapshot with a missing logo.
-// ---------------------------------------------------------------------------
-
-export const LOGO_MAX_BYTES = 500 * 1024;
-
-export async function inlineLogoOrThrow(logoUrl: string): Promise<string> {
-  if (!/^https:\/\//i.test(logoUrl)) {
-    throw new HttpsError(
-      "failed-precondition",
-      "Logo URL must use https://. Re-upload the logo in settings.",
-    );
-  }
-  let res: Response;
-  try {
-    res = await fetch(logoUrl, { signal: AbortSignal.timeout(5000) });
-  } catch (err) {
-    throw new HttpsError(
-      "failed-precondition",
-      `Logo fetch failed: ${String(err)}`,
-    );
-  }
-  if (!res.ok) {
-    throw new HttpsError(
-      "failed-precondition",
-      `Logo fetch returned status ${res.status}.`,
-    );
-  }
-  const contentType = res.headers.get("content-type") ?? "image/png";
-  const buffer = Buffer.from(await res.arrayBuffer());
-  if (buffer.byteLength > LOGO_MAX_BYTES) {
-    throw new HttpsError(
-      "failed-precondition",
-      "Logo exceeds 500KB. Re-upload a smaller version in settings.",
-    );
-  }
-  return `data:${contentType};base64,${buffer.toString("base64")}`;
-}
+// Logo snapshot helpers live in ./logo (A-06); re-exported for existing imports.
+export { LOGO_MAX_BYTES, inlineLogoOrThrow } from "./logo";

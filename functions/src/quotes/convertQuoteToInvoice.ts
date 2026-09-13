@@ -23,9 +23,9 @@ import {
   computeInvoiceTotals,
   computeLineItems,
   buildTenantSnapshot,
-  inlineLogoOrThrow,
   resolveLineItems,
 } from "../shared/invoice";
+import { applyLogoToSnapshot } from "../shared/logo";
 
 const PAY_TOKEN_SECRET = defineSecret("PAY_TOKEN_SECRET");
 
@@ -66,9 +66,13 @@ export async function convertQuoteToInvoiceHandler(
     throw new Error("Tenant meta not found — corrupt tenant state.");
   }
   const meta = metaSnap.data()!;
+  // Freeze the logo: base64 for the PDF, immutable https copy for emails (A-06).
   const snapshot = buildTenantSnapshot(meta, features);
-  const logoUrl = (meta.logoUrl as string | null) ?? null;
-  snapshot.logo = logoUrl ? await inlineLogoOrThrow(logoUrl) : null;
+  await applyLogoToSnapshot(
+    snapshot,
+    tenantId,
+    (meta.logoUrl as string | null) ?? null,
+  );
 
   // Recompute totals from quote line items (per-line taxable carried over, D4)
   // + current meta tax.

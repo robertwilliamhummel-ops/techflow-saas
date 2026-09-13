@@ -50,6 +50,29 @@ describe("inlineLogoOrThrow", () => {
     ).rejects.toMatchObject({ code: "failed-precondition" });
   });
 
+  it("rejects a response that isn't an image (e.g. an HTML error page)", async () => {
+    mockFetch(async () =>
+      new Response("<html>not found</html>", {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" },
+      }),
+    );
+    await expect(
+      inlineLogoOrThrow("https://cdn.example.com/logo.png"),
+    ).rejects.toMatchObject({ code: "failed-precondition" });
+  });
+
+  it("drops content-type parameters from the data URL", async () => {
+    mockFetch(async () =>
+      new Response(Buffer.from([1, 2, 3]), {
+        status: 200,
+        headers: { "content-type": "Image/PNG; charset=binary" },
+      }),
+    );
+    const out = await inlineLogoOrThrow("https://cdn.example.com/logo.png");
+    expect(out.startsWith("data:image/png;base64,")).toBe(true);
+  });
+
   it("throws on non-2xx response", async () => {
     mockFetch(async () => new Response("not found", { status: 404 }));
     await expect(

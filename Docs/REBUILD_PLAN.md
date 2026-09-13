@@ -77,7 +77,6 @@
 
 | Ref | Bug | Where | Fix |
 |---|---|---|---|
-| A-06 | Emails embed the snapshot's base64 `data:` logo, which Gmail web and Outlook block | `sendInvoiceEmail.ts`, `sendQuoteEmail.ts`, `processRecurringInvoices.ts` | Copy the logo to an immutable public Storage path at snapshot time; use that https URL in email |
 | A-07 | Edge Config keys `domain:{host}` contain `:` and `.`, but keys must match `^[\w-]+$` — every write fails silently | `src/proxy.ts`, `functions/src/domain/setupCustomDomain.ts` | Encode the host into a valid key in one shared helper |
 | A-10 | No callables to create/update/delete customers or pause/resume/cancel recurring templates, while rules block client writes | `functions/src/index.ts`, `firestore.rules` | `upsertCustomer`, `deleteCustomer`, `updateRecurringInvoice` |
 | A-12 | Smaller: `useAuth.ts` types roles as `member`/`platform_admin`; `deleteInvoice` hard-deletes sent invoices (should become `void`); `createQuote` prefix only maps `INV→QT`; the `onSignup` membership check isn't transactional | various | — |
@@ -97,6 +96,8 @@ Fixed: A-08 (2026-09-13) — a sent invoice could be edited without invalidating
 Fixed: A-04 (2026-09-13) — `processRecurringInvoices` queries `collectionGroup('recurringInvoices')` with `status ==` and `nextRunAt <=` but had no composite index, so it would fail on its first production run (the emulator never enforces indexes). Added the COLLECTION_GROUP index (`status` ASC, `nextRunAt` ASC). An audit of every query found no other gap. The three TTL policies (`stripeEvents`, `payAttempts`, `emailSends` on `expireAt`) moved from a manual runbook step into `firestore.indexes.json` field overrides (`ttl: true`, indexing disabled per Google's hotspot guidance), so the indexes deploy creates them. `functions/test/shared/firestoreIndexes.test.ts` pins each query and each `expireAt` writer to its index or TTL entry.
 
 Fixed: A-05 (2026-09-13) — customers could see draft invoices through `getCustomerInvoices`, `getCustomerInvoiceDetail`, and the Firestore customer branch, and list rows carried each invoice's full base64 logo (a callable response is capped at 10 MB). Customer-visible statuses now live in `functions/src/shared/customerVisibility.ts` as allow-lists (drafts and any future status stay hidden until listed); `firestore.rules` mirrors them for invoices and quotes. The list pages through the existing `(customer.email, createdAt)` index and filters while paging — no new composite index, still fills to 100 rows, at most 10 pages scanned — and returns `tenantBranding.logoUrl` instead of the base64 logo. The detail callable answers not-found for drafts. Covered by the rules tests (every visible status, drafts denied, members still read drafts) and `customerFacing.test.ts`.
+
+Fixed: A-06 (2026-09-13) — invoice, quote, and recurring emails embedded the snapshot's base64 logo (up to 500 KB). Gmail clips any email over 102 KB and embedded base64 images are the most common cause, and support for `data:` images varies by client. `functions/src/shared/logo.ts` now freezes the logo two ways at creation (`createInvoice`, `createQuote`, `convertQuoteToInvoice`, `processRecurringInvoices`): the base64 `logo` for PDFs, plus an immutable copy at `tenants/{t}/snapshots/logos/{sha256}.{ext}` whose token URL is stored as `logoUrl` with `logoContentType`. The path comes from the bytes and the download token from the tenant and hash, so a copy is never overwritten and concurrent creates can't rotate a token another document stored. Emails use `emailLogoUrl()`: the hosted copy for PNG, JPEG, GIF, and WebP; the business name for SVG (Gmail's apps don't show SVG for Google accounts). Logo URLs that don't return an image are now rejected. Covered by `functions/test/callables/logoSnapshot.test.ts` (the URL serves the bytes without auth, stable across documents, email HTML never contains `data:image`) and `inlineLogo.test.ts`.
 
 ### Platform deadlines
 
@@ -414,6 +415,9 @@ platformAdmins/{uid}          { uid, email, grantedAt, grantedBy }
   // ... invoice data (customer, lineItems, totals, status, etc.) ...
 
   tenantSnapshot: {
+    logoUrl, logoContentType,              // ← A-06: token URL of the immutable Storage copy
+                                           //   (tenants/{t}/snapshots/logos/{sha256}.{ext})
+                                           //   and its MIME type — emails and the portal
     name, logo, address,                   // ← `logo` is an inlined base64 data URL frozen at
                                            //   snapshot time. See "Immutable logo snapshot" in
                                            //   Phase 6 — storing the current mutable Storage
@@ -516,7 +520,7 @@ Customer-visible statuses (A-05): invoices `sent`, `unpaid`, `overdue`, `partial
 | `tenants/{t}/**` (snapshots, anything nested) | members of `t` | none (Admin SDK only) |
 | anything else | none | none |
 
-Customers and the PDF service never read Storage directly — they use the public download URLs stored in meta or the base64 logo in the snapshot. `src/lib/storage/uploadBrandingAsset.ts` maps content type to extension with the same allowlist and refuses anything else before uploading.
+Customers, email clients, and the PDF service never read Storage through the rules — they use token-bearing download URLs (`meta.logoUrl`, and the immutable `tenantSnapshot.logoUrl` copies under `tenants/{t}/snapshots/logos/`, A-06) or the base64 logo in the snapshot. `src/lib/storage/uploadBrandingAsset.ts` maps content type to extension with the same allowlist and refuses anything else before uploading.
 
 ### Critical rule properties
 1. **Customer access is read-only.** The `|| email_verified` branch only appears in `allow read`, never in `allow write`.
@@ -883,7 +887,7 @@ All invoice and quote mutations go through dedicated callables; direct client wr
 
 1. `readClaims` → `requireTenant`; `requireFeature(tenantId, "invoices")` returns the resolved feature map.
 2. `validateInvoiceInput` — customer name/email (email lowercased at the write boundary, C2); 1–100 line items through the shared `validateLineItems`, where each line's `taxable` defaults to `applyTax` (D4); `dueDate` and optional `issueDate` as `YYYY-MM-DD`; notes ≤ 2000 characters.
-3. Read `meta/settings`. `buildTenantSnapshot(meta, features)` freezes branding, tax, currency, e-Transfer email, and the effective surcharge flag (D3); `inlineLogoOrThrow` embeds the logo as a ≤ 500 KB base64 data URL and fails the whole create if the logo can't be fetched.
+3. Read `meta/settings`. `buildTenantSnapshot(meta, features)` freezes branding, tax, currency, e-Transfer email, and the effective surcharge flag (D3); `applyLogoToSnapshot` (A-06) embeds the logo as a ≤ 500 KB base64 data URL for the PDF, stores the same bytes as an immutable Storage copy for emails and the portal (`logoUrl`, `logoContentType`), and fails the whole create if the logo can't be fetched, isn't an image, or can't be stored.
 4. `computeLineItems` and `computeInvoiceTotals(lineItems, { rate: meta.taxRate, name: meta.taxName })` — server math only; client totals are never accepted.
 5. One transaction: increment `counters/invoice.value`, create `invoices/{prefix}-{0001}` with `status: 'draft'`, and sign the pay-token JWT (`PAY_TOKEN_SECRET`, 60 days, `payTokenVersion: 1`).
 
@@ -1049,7 +1053,7 @@ functions/src/emails/
 
 **Payment incident alerts:** the Stripe Connect webhook writes `paymentIncidents/{kind}_{stripeObjectId}` (`auto-refund-version-mismatch`, `auto-refund-amount-mismatch`, `auto-refund-duplicate-payment`, `auto-refund-not-payable`, `dispute-created`, `dispute-lost`, `tenant-mismatch`). The `onPaymentIncidentCreated` trigger emails every active owner when the document is created; `tenant-mismatch` is logged, not emailed. Auto-refund emails say "Refund needed" and ask for a manual refund when the automatic refund failed. Deterministic ids mean a webhook redelivery updates the doc rather than re-triggering.
 
-**`<TenantEmailLayout>` contract:** props `tenant` (name, address, logoUrl, emailFooter, primaryColor), `preview`, `children`. The header shows the logo (max 200×60px) or the tenant name; the footer shows name, address, `emailFooter`, and "Questions? Reply to this email." `color-scheme: light` meta tags prevent Apple Mail and Outlook dark-mode inversion. Logos are currently passed as base64 data URLs, which Gmail and Outlook block (A-06).
+**`<TenantEmailLayout>` contract:** props `tenant` (name, address, logoUrl, emailFooter, primaryColor), `preview`, `children`. The header shows the logo (max 200×60px) or the tenant name; the footer shows name, address, `emailFooter`, and "Questions? Reply to this email." `color-scheme: light` meta tags prevent Apple Mail and Outlook dark-mode inversion. Senders pass `emailLogoUrl(snapshot)` (A-06): the hosted immutable copy for PNG, JPEG, GIF, or WebP logos, otherwise null so the header shows the name. Never the base64 logo — it can push an email past Gmail's 102 KB clipping limit on its own.
 
 **Email design principles (enforced by convention and code review):**
 
@@ -2029,6 +2033,8 @@ Pros: doc size stays small. Cons: an extra Storage object per invoice; Storage b
 **Which to use:** Option A for MVP. Doc-size growth is bounded (500KB cap), and "fully self-contained invoice" matches the frozen-document mental model better than "the doc points at a file we promised not to delete."
 
 Either way, the `tenantSnapshot.logoUrl` stored *must not* be a mutable Firebase Storage download URL of the tenant's current-logo file. That rule is now part of the `createInvoice`/`createQuote` spec.
+
+**As built (A-06): both options, each for what it's good at.** `applyLogoToSnapshot` in `functions/src/shared/logo.ts` stores Option A's base64 `logo` (PDFs render with no network fetch) and a variant of Option B for everything else: one content-addressed copy per distinct logo at `tenants/{tenantId}/snapshots/logos/{sha256}.{ext}` rather than per invoice, so Storage grows with logo changes, not invoice count. The object carries `cacheControl: public, max-age=31536000, immutable` and a download token derived from the tenant and hash, so re-saving the same logo never rotates a token an earlier document stored; the URL uses the same format as firebase-admin's `getDownloadURL`. Clients cannot write or delete under `snapshots/` (`storage.rules`). Emails and the portal list read `logoUrl`; PDFs read `logo`.
 
 ### Porting checklist (from old Vite repo's Cloud Run service)
 

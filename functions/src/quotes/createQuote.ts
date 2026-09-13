@@ -12,8 +12,8 @@ import {
   computeInvoiceTotals,
   computeLineItems,
   buildTenantSnapshot,
-  inlineLogoOrThrow,
 } from "../shared/invoice";
+import { applyLogoToSnapshot } from "../shared/logo";
 import { validateQuoteInput } from "../shared/quote";
 
 export async function createQuoteHandler(
@@ -33,9 +33,13 @@ export async function createQuoteHandler(
   }
   const meta = metaSnap.data()!;
 
+  // Freeze the logo: base64 for the PDF, immutable https copy for emails (A-06).
   const snapshot = buildTenantSnapshot(meta, features);
-  const logoUrl = (meta.logoUrl as string | null) ?? null;
-  snapshot.logo = logoUrl ? await inlineLogoOrThrow(logoUrl) : null;
+  await applyLogoToSnapshot(
+    snapshot,
+    tenantId,
+    (meta.logoUrl as string | null) ?? null,
+  );
 
   const lineItems = computeLineItems(input.lineItems);
   const totals = computeInvoiceTotals(input.lineItems, {

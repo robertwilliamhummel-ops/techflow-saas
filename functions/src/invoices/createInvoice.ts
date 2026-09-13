@@ -19,8 +19,8 @@ import {
   computeInvoiceTotals,
   computeLineItems,
   buildTenantSnapshot,
-  inlineLogoOrThrow,
 } from "../shared/invoice";
+import { applyLogoToSnapshot } from "../shared/logo";
 
 const PAY_TOKEN_SECRET = defineSecret("PAY_TOKEN_SECRET");
 
@@ -43,11 +43,15 @@ export async function createInvoiceHandler(
   }
   const meta = metaSnap.data()!;
 
-  // Inline the logo as base64 so the invoice survives future logo changes.
-  // Fails atomically — no half-snapshot persisted if the logo can't be fetched.
+  // Freeze the logo (base64 for the PDF, immutable https copy for emails, A-06)
+  // so the invoice survives future logo changes. Fails atomically — no
+  // half-snapshot persisted if the logo can't be fetched or stored.
   const snapshot = buildTenantSnapshot(meta, features);
-  const logoUrl = (meta.logoUrl as string | null) ?? null;
-  snapshot.logo = logoUrl ? await inlineLogoOrThrow(logoUrl) : null;
+  await applyLogoToSnapshot(
+    snapshot,
+    tenantId,
+    (meta.logoUrl as string | null) ?? null,
+  );
 
   const lineItems = computeLineItems(input.lineItems);
   const totals = computeInvoiceTotals(input.lineItems, {

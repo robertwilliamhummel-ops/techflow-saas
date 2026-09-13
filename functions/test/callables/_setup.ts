@@ -15,9 +15,15 @@ process.env.FIRESTORE_EMULATOR_HOST =
   process.env.FIRESTORE_EMULATOR_HOST ?? "127.0.0.1:8080";
 process.env.FIREBASE_AUTH_EMULATOR_HOST =
   process.env.FIREBASE_AUTH_EMULATOR_HOST ?? "127.0.0.1:9099";
+process.env.FIREBASE_STORAGE_EMULATOR_HOST =
+  process.env.FIREBASE_STORAGE_EMULATOR_HOST ?? "127.0.0.1:9199";
 
 if (!getApps().length) {
-  initializeApp({ projectId: PROJECT_ID });
+  // storageBucket: logo snapshots (A-06) write to the default bucket.
+  initializeApp({
+    projectId: PROJECT_ID,
+    storageBucket: `${PROJECT_ID}.appspot.com`,
+  });
 }
 
 export const testDb = getFirestore();

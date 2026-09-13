@@ -86,7 +86,10 @@ export interface TenantCounter {
 export interface TenantSnapshot {
   version: number;
   name: string;
-  logo: string | null; // base64 data URL
+  logo: string | null; // base64 data URL — PDFs
+  // A-06: https URL of the immutable Storage copy (emails, portal) + MIME type.
+  logoUrl: string | null;
+  logoContentType: string | null;
   address: string | null;
   primaryColor: string;
   secondaryColor: string;

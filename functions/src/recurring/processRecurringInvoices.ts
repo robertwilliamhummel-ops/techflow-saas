@@ -23,9 +23,9 @@ import {
   computeInvoiceTotals,
   computeLineItems,
   buildTenantSnapshot,
-  inlineLogoOrThrow,
   resolveLineItems,
 } from "../shared/invoice";
+import { applyLogoToSnapshot, emailLogoUrl } from "../shared/logo";
 import { computeNextRunAt, addDaysToISODate } from "../shared/recurring";
 import { SCHEDULER_REGION } from "../shared/globalOptions";
 import { sanitizeEmailField } from "../emails/sanitize";
@@ -162,14 +162,18 @@ async function processOneTemplate(
   const tenantSnapshot = buildTenantSnapshot(meta, {
     cardSurcharge: resolveFeature("cardSurcharge", features),
   });
-  const logoUrl = (meta.logoUrl as string | null) ?? null;
   try {
-    tenantSnapshot.logo = logoUrl ? await inlineLogoOrThrow(logoUrl) : null;
+    // Base64 for the PDF, immutable https copy for the email (A-06).
+    await applyLogoToSnapshot(
+      tenantSnapshot,
+      tenantId,
+      (meta.logoUrl as string | null) ?? null,
+    );
   } catch (err) {
     await recordFailure(
       recurringRef,
       data,
-      `Logo inline failed: ${String(err)}`,
+      `Logo snapshot failed: ${String(err)}`,
     );
     return;
   }
@@ -336,7 +340,8 @@ async function sendRecurringEmail(
   const tenant: TenantSnapshotForEmail = {
     name: tenantSnapshot.name ?? "",
     address: tenantSnapshot.address ?? null,
-    logoUrl: tenantSnapshot.logo ?? null,
+    // A-06: hosted copy, never the base64 logo (Gmail clips emails over 102 KB).
+    logoUrl: emailLogoUrl(tenantSnapshot),
     emailFooter: tenantSnapshot.emailFooter ?? null,
     primaryColor: tenantSnapshot.primaryColor ?? null,
   };

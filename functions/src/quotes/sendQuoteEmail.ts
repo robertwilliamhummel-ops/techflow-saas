@@ -16,6 +16,7 @@ import { requireFeature } from "../shared/requireFeature";
 import { sanitizeEmailField } from "../emails/sanitize";
 import { EMAIL_SECRETS, pickReplyTo, sendEmail } from "../emails/send";
 import { formatCurrency } from "../emails/format";
+import { emailLogoUrl } from "../shared/logo";
 import { QuoteSent } from "../emails/templates/QuoteSent";
 import type { TenantSnapshotForEmail } from "../emails/components/TenantEmailLayout";
 
@@ -51,7 +52,8 @@ export async function sendQuoteEmailHandler(
   const tenant: TenantSnapshotForEmail = {
     name: snapshot.name ?? "",
     address: snapshot.address ?? null,
-    logoUrl: snapshot.logo ?? null,
+    // A-06: hosted copy, never the base64 logo (Gmail clips emails over 102 KB).
+    logoUrl: emailLogoUrl(snapshot),
     emailFooter: snapshot.emailFooter ?? null,
     primaryColor: snapshot.primaryColor ?? null,
   };
