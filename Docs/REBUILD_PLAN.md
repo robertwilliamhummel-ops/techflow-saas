@@ -75,9 +75,7 @@
 
 ### Confirmed open bugs (fix before the first tenant)
 
-| Ref | Bug | Where | Fix |
-|---|---|---|---|
-| A-12 | Smaller: the `onSignup` membership check isn't transactional | various | — |
+None open — every audit bug is closed or fixed below.
 
 Closed by the D-decisions: A-09 (surcharge shown vs charged — D3), A-11 (email sending duplicated in five places — D5), forced `business_type: "company"` on Stripe accounts (D1), P10 (email delivery feedback — D5).
 
@@ -106,6 +104,8 @@ Fixed: A-12, part 1 (2026-09-13) — `useAuth.ts` typed roles as `member` / `pla
 Fixed: A-12, part 2 (2026-09-13) — `createQuote` derived the quote prefix with `invoicePrefix.replace("INV", "QT")`, so any custom prefix (`ACME`) numbered quotes exactly like invoices (`ACME-0001` twice, from separate counters). `quotePrefixFor` keeps `QT` for the default `INV` and appends `-QT` to anything else (`ACME-QT-0001`), matching the common practice of giving quotes their own prefix. The settings page now shows both formats. Covered by `functions/test/callables/quotes.test.ts`.
 
 Fixed: A-12, part 3 (2026-09-13) — `deleteInvoice` hard-deleted any unpaid invoice, including ones already sent, which erased the record and left a gap in the numbering. The CRA expects sales invoices kept for six years, and Stripe only lets drafts be deleted. `deleteInvoice` now deletes drafts only. The new `voidInvoice` (owner/admin) cancels a `sent`, `unpaid`, or `overdue` invoice and keeps it (`status: 'void'`, `voidedAt`, `voidedBy`, `voidReason`); it refuses anything with a recorded payment, and repeating it is a no-op. A void invoice can't be marked paid, edited, sent, or given a new pay link. Its pay link answers `void` (checked before the link version), customers still see it in the portal, its PDF says "Void — do not pay" with no payment block or QR code, and the Stripe webhook refunds a checkout that completes on it. The same pass closed two adjacent gaps: `markInvoicePaid` accepted every status except draft and paid, so a refunded invoice could be marked paid — it now accepts only payable statuses, inside a transaction — and `regenerateInvoicePayLink` had no status check. Status groups live in `functions/src/shared/invoiceStatus.ts`. Covered by `functions/test/callables/voidInvoice.test.ts`, `invoices.test.ts`, `customerFacing.test.ts`, the Firestore rules tests, `pdf-service/test/template.test.ts`, and the PDF route and Stripe webhook handler tests.
+
+Fixed: A-12, part 4 (2026-09-13) — `onSignup` checked for an existing membership outside any transaction, and `generateTenantId` read candidate ids in a transaction that wrote nothing, so no id was reserved: two businesses with the same name signing up together got the same tenant id and the second batch overwrote the first tenant's settings, and a double submit could create two tenants for one user. Everything now happens in one transaction. `signups/{uid}` (new, admin-SDK only) and every tenant document are written with `create()`, which fails the transaction if the document exists (Firestore Node.js reference). Firestore's transaction runner retries only ABORTED and transient errors, not ALREADY_EXISTS (checked in the library source), so `onSignup` retries that case up to 3 times and then sees the winner's documents: a same-name signup takes the next suffix and a double submit returns the same tenant. A repeat call re-applies the claims, so a signup whose claims write failed now recovers on retry, and a display name saved before signup is kept. Covered by `functions/test/callables/onSignup.test.ts` (concurrent same-name signups, double submit, lost claims, invited member, a token that already has a tenant) and the Firestore rules tests.
 
 ### Platform deadlines
 
@@ -381,6 +381,9 @@ users/{uid}                                ← tenant users only; customers have
 userTenantMemberships/{uid}_{tenantId}     ← one per (user, tenant); MVP allows one active tenant
   { uid, tenantId, role: 'owner' | 'admin' | 'staff', invitedBy, createdAt, deletedAt }
 
+signups/{uid}                              ← one per self-signup; created with the tenant in
+  { uid, tenantId, createdAt }               onSignup's transaction (A-12); admin-SDK only
+
 customDomains/{domain}        { tenantId, createdAt }                 ← middleware fallback lookup
 stripeAccounts/{accountId}    { tenantId, linkedAt }                  ← Connect webhook routing;
                                                                         written at account creation
@@ -517,7 +520,7 @@ Two identity patterns are enforced:
 | `tenants/{t}/invoices/{id}`, `tenants/{t}/quotes/{id}` | members of `t`, **or** an `email_verified` user whose lowercased email equals `customer.email` and the document is in a customer-visible status (never `draft`, A-05) | none |
 | `tenants/{t}/invoices/{id}/paymentIncidents/*` | members of `t` | none |
 | `tenants/{t}/invoices/{id}/payAttempts/*` | none | none |
-| `customDomains/*`, `stripeAccounts/*`, `stripeEvents/*`, `emailSends/*` | none | none |
+| `customDomains/*`, `stripeAccounts/*`, `stripeEvents/*`, `emailSends/*`, `signups/*` | none | none |
 | `platformAdmins/*` | `platformAdmin` claim | none |
 | anything else | none | none |
 
@@ -840,7 +843,7 @@ Region: callables, HTTP functions, and Firestore triggers run in `northamerica-n
 
 | Function | Feature gate | Role / notes |
 |---|---|---|
-| `onSignup` | — | signed-in user without a membership; creates the tenant (Phase 5) |
+| `onSignup` | — | signed-in user without a membership; creates the tenant in one transaction, and a repeat call returns the same tenant (Phase 5, A-12) |
 | `setUserRole` | — | owner |
 | `updateUserProfile` | — | self; `displayName` only |
 | `createInvitation` | — | owner/admin; invite email via SES, one send per invitation |
@@ -1750,19 +1753,24 @@ await user.getIdToken(true);                                    // pull the new 
 router.replace("/dashboard");
 ```
 
-**tenantId generation (C4):** slug of the business name (lowercase, non-alphanumeric runs → `-`, trimmed, max 40 characters, fallback `tenant`) with `-1`, `-2`, … on collision, chosen inside a transaction that checks `tenants/{candidate}/meta/settings` (`functions/src/shared/tenantId.ts`). Readable ids show up in Firestore paths, Stripe metadata, Sentry tags, and support conversations.
+**tenantId generation (C4):** slug of the business name (lowercase, non-alphanumeric runs → `-`, trimmed, max 40 characters, fallback `tenant`) with `-1`, `-2`, … on collision (`pickTenantId` in `functions/src/shared/tenantId.ts`). The candidate is picked and claimed in the signup transaction: `tenants/{id}/meta/settings` is written with `create()`, so two businesses with the same name can't share an id (A-12). Readable ids show up in Firestore paths, Stripe metadata, Sentry tags, and support conversations.
 
 **Server side** (`functions/src/tenants/onSignup.ts`):
 
-1. Requires auth with an email; rejects a user who already has a membership (not yet transactional — A-12).
-2. Validates `businessName` (2–100 characters) and generates the tenantId.
-3. One batch writes:
-   - `tenants/{id}/meta/settings` ← `defaultTenantMeta(businessName, ownerEmail)` (`functions/src/shared/meta.ts`)
-   - `tenants/{id}/entitlements/current` ← `{ plan: "starter", maxInvoicesPerMonth: 10, features: {} }`
-   - `tenants/{id}/counters/invoice` and `counters/quote` ← `{ value: 0 }` (C5 — the first numbering transaction never reads a missing doc)
-   - `users/{uid}` ← `{ uid, email, displayName: null, defaultTenantId }`
-   - `userTenantMemberships/{uid}_{id}` ← `{ uid, tenantId, role: "owner", invitedBy: null, deletedAt: null }`
-4. Sets custom claims `{ tenantId, role: "owner" }` **after** the batch commits, so a partial failure never leaves claims pointing at a tenant that doesn't exist.
+1. Requires auth with an email; rejects a token that already carries `tenantId`; validates `businessName` (2–100 characters).
+2. One transaction (A-12):
+   - If `signups/{uid}` exists, this is a repeat call: return that tenant and re-apply its claims, so a signup whose claims write failed recovers on retry.
+   - Reject a user who already has a membership (an invited member).
+   - Pick the tenantId, then create:
+     - `signups/{uid}` ← `{ uid, tenantId, createdAt }`
+     - `tenants/{id}/meta/settings` ← `defaultTenantMeta(businessName, ownerEmail)` (`functions/src/shared/meta.ts`)
+     - `tenants/{id}/entitlements/current` ← `{ plan: "starter", maxInvoicesPerMonth: 10, features: {} }`
+     - `tenants/{id}/counters/invoice` and `counters/quote` ← `{ value: 0 }` (C5 — the first numbering transaction never reads a missing doc)
+     - `userTenantMemberships/{uid}_{id}` ← `{ uid, tenantId, role: "owner", invitedBy: null, deletedAt: null }`
+   - Merge `users/{uid}` ← `{ uid, email, displayName, defaultTenantId }`, keeping a display name saved before signup (`updateUserProfile` can create the doc first).
+
+   `create()` fails if the document already exists. A losing commit gets ALREADY_EXISTS, which Firestore's transaction runner doesn't retry, so `onSignup` retries up to 3 times and then sees the winner's documents: a double submit returns the same tenant, and a same-name signup takes the next suffix.
+3. Sets custom claims `{ tenantId, role }` **after** the transaction commits, so a partial failure never leaves claims pointing at a tenant that doesn't exist.
 
 **`defaultTenantMeta` initialises every field.** If any snapshot field were `undefined`, the first invoice would freeze it and PDFs or tax math would break silently — the most expensive-to-debug bug class in the plan. Defaults: `contactEmail` = owner email, `primaryColor #667eea`, `secondaryColor #764ba2`, `fontFamily Inter`, `taxRate 0.13`, `taxName HST`, `invoicePrefix INV`, `currency CAD`, `customDomainStatus.stage unverified`, `stripeStatus` all false, `chargeCustomerCardFees false`, `cardFeePercent 2.4`, every nullable field `null`. Do not remove defaults.
 

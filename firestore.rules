@@ -43,6 +43,15 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // ---------- signups/{uid} ----------
+    // One record per self-signup (A-12). onSignup creates it in the same
+    // transaction as the tenant, so a double submit can't create two tenants.
+    // Admin-SDK only.
+    match /signups/{uid} {
+      allow read: if false;
+      allow write: if false;
+    }
+
     // ---------- customDomains/{domain} ----------
     match /customDomains/{domain} {
       allow read: if false;

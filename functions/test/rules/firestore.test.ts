@@ -103,6 +103,23 @@ describe("userTenantMemberships/{uid}_{tenantId}", () => {
   });
 });
 
+describe("signups/{uid} (A-12)", () => {
+  it("clients can't read or write signup records, even their own", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "signups/alice"), {
+        uid: "alice",
+        tenantId: "t1",
+      });
+    });
+    await assertFails(
+      getDoc(doc(authed("alice", { tenantId: "t1" }), "signups/alice")),
+    );
+    await assertFails(
+      setDoc(doc(authed("bob"), "signups/bob"), { uid: "bob", tenantId: "t2" }),
+    );
+  });
+});
+
 describe("tenants/{tenantId}/meta", () => {
   it("member reads meta", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {
