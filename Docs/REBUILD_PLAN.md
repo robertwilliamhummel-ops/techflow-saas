@@ -1,9 +1,9 @@
 # TechFlow SaaS — Rebuild Plan
 
-**Status:** Planning locked, execution not started
-**Date:** 2026-04-11
+**Status:** Backend largely built, product screens not built, nothing deployed — see "Build Status, Decisions & Conventions" (audit 2026-09-13)
+**Plan date:** 2026-04-11 · **Last reconciled with code:** 2026-09-13 (decisions D1–D5)
 **Owner:** Reggie (solo dev)
-**Scope:** Full rebuild of TechFlow Solutions invoicing SaaS into a multi-tenant Next.js + Tailwind app on a new repo, one pass, pre-launch.
+**Scope:** Full rebuild of the TechFlow Solutions invoicing SaaS ("InvoicePro") into a multi-tenant Next.js + Tailwind app on a new repo, one pass, pre-launch.
 
 ---
 
@@ -15,12 +15,94 @@
 4. **PDF generation:** Dedicated **Cloud Run** service running full Chrome + Puppeteer in a Docker container. Not Vercel. Separate microservice, protected by an API key, called from the Next.js app. This choice is locked — see "PDF Generation Strategy" section below.
 5. **Firestore schema:** Nested per-tenant subcollections — `tenants/{tenantId}/invoices/{id}`, etc. Path-based tenant isolation.
 6. **Tenant routing:** Implicit from auth claims. User logs in, `tenantId` is in their JWT, all queries scope to it. URLs stay generic (`/dashboard`, `/invoices`). Path/subdomain routing deferred.
-7. **Stripe model:** Stripe Connect Express. Tenants onboard their own Stripe account; platform takes no fee initially (toggleable later).
+7. **Stripe model:** Stripe Connect with Standard-equivalent controller properties (full Stripe Dashboard, direct charges, Stripe carries negative-balance liability) — D1, replacing Express. Tenants onboard their own Stripe account; platform takes no fee initially (toggleable later).
 8. **Feature flags / entitlements:** Baked in from day one. Separate `entitlements` sub-document per tenant (platform-admin-only). Canonical feature list lives in code, tenant docs only store overrides. Frontend and Cloud Functions both enforce.
 9. **CSS:** Tailwind. No plain CSS files. No `@import` chains.
 10. **Customer portal access:** Contractors' end-customers (the homeowners being invoiced) authenticate via Firebase Auth magic link, have **no `tenantId` claim**, and can only read invoices/quotes where the document's `customer.email` matches their verified auth email. Separate `/portal` route group. Same auth backend, different authorization pattern.
 11. **Firestore backup strategy:** Multi-tenant means one blast radius. Daily scheduled exports to Cloud Storage (30-day retention) + PITR (7 days) + documented manual-snapshot-before-risky-deploy convention. Enabled from day one, not "later."
 12. **Pre-launch reality:** Zero real customers, zero real revenue. Current Firestore data is test-only and can be discarded. No regression risk from rewriting money-handling code.
+13. **Post-build decisions (2026-09-13):** D1 Stripe account configuration, D2 Canadian regions, D3 card surcharging gated off, D4 per-line tax, D5 Amazon SES — see "Build Status, Decisions & Conventions". They override conflicting text elsewhere in this plan.
+
+---
+
+## Build Status, Decisions & Conventions (as of 2026-09-13)
+
+> **Read this first.** This section records what was actually built (full audit 2026-09-13) and the post-build decisions D1–D5. Where older text in this plan conflicts with this section, **this section wins**. For exact document shapes and rule logic the code is authoritative: `firestore.rules`, `storage.rules`, `firestore.indexes.json`, `functions/src/shared/schema.ts`, `functions/src/shared/invoice.ts`, `src/lib/schema/tenant.ts`. Planning history (timeline estimates, April session notes, the plan revision log) moved to `REBUILD_PLAN_DEFERRED.md` → Appendix.
+
+### Decision log — post-build (2026-09-13)
+
+| # | Decision | Why | Where it lives |
+|---|---|---|---|
+| D1 | Stripe connected accounts use **controller properties equivalent to Standard**: `losses.payments=stripe`, `fees.payer=account`, `requirement_collection=stripe`, `stripe_dashboard.type=full`. Direct charges unchanged. Replaces legacy `type: "express"`. | Legacy Express made TechFlow liable for every tenant's negative balance and paid per-account Connect fees while taking no platform fee, and Stripe deprecated the account `type` parameter. Contractors are merchant of record and handle refunds/disputes in their own full Stripe Dashboard. Dashboard type is immutable per account, so it had to be right before the first tenant. | `functions/src/stripe/startConnectOnboarding.ts`; account lifecycle events on the Connect webhook (`src/app/api/webhooks/stripe/connect/route.ts`, `handlers.ts`) |
+| D2 | **All compute in Canada.** Firestore `northamerica-northeast2` (Toronto); callables, HTTP functions, and Firestore triggers `northamerica-northeast2`; scheduled functions `northamerica-northeast1` (Montréal — Cloud Scheduler is not offered in Toronto); Cloud Run `pdf-service` `northamerica-northeast2`; Vercel functions `yul1`; SES `ca-central-1`. | Functions next to Firestore (latency), Canadian data residency for law/accounting/dental clients, and the Firestore location is permanent per project. | `functions/src/shared/globalOptions.ts` (first import in `functions/src/index.ts`), `src/lib/firebase/client.ts`, `vercel.json`, `functions/test/shared/regions.test.ts` |
+| D3 | **Card surcharging ships disabled** behind the `cardSurcharge` feature flag (default `false`). The frozen `tenantSnapshot` is the single source for the surcharge shown and charged; the flag is a kill switch on top. | Checkout cannot tell credit from debit/prepaid, which Visa/Mastercard forbid surcharging, and Quebec is not auto-excluded. Re-enable per tenant only once card-funding detection (Stripe automatic surcharge or a compliance partner) is integrated. | `functions/src/shared/features.ts`, `surcharge.ts` (`effectiveCardSurcharge`), `updatePaymentSettings.ts`, `createPayTokenCheckoutSession.ts`, `verifyInvoicePayToken.ts`, `/settings/payments` |
+| D4 | **Per-line tax.** Every line item stores `taxable` (defaults to the document's `applyTax`); totals carry `taxableSubtotal` and `taxes[]` (one entry per tax) alongside aggregate `taxRate`/`taxAmount`. PDFs render one row per tax and mark exempt lines when an invoice mixes both. | Mixed taxable/exempt supplies are common (e.g. HST-exempt dental services). Invoices are frozen legal documents, so the shape had to be right before real data. `taxes[]` makes GST+PST/QST provinces an additive change; rates stay single-tax (GTA HST) for MVP. | `functions/src/shared/invoice.ts` (`validateLineItems`, `resolveLineItems`, `computeInvoiceTotals`), `pdf-service/src/templates/*.hbs` |
+| D5 | **Amazon SES replaces Resend** (supersedes Decision #3 below). React Email templates unchanged; transport, idempotency, bounce feedback, and owner incident alerts rebuilt on SES. | Production SES access with `techflowsolutions.ca` verified; SES tenant isolation gives per-tenant reputation protection; one email credential location (Cloud Functions only). | `functions/src/emails/send.ts`, `sesEvents.ts`, `functions/src/stripe/onPaymentIncidentCreated.ts` — see Phase 2 "React Email + Amazon SES" |
+
+### As-built conventions (override older code samples in this plan)
+
+| Topic | As built |
+|---|---|
+| Tenant settings doc | `tenants/{tenantId}/meta/settings` (not `tenants/{id}/meta`) |
+| Entitlements doc | `tenants/{tenantId}/entitlements/current` — `{ plan, maxInvoicesPerMonth, features: {}, updatedAt }`; missing feature keys fall through to code defaults |
+| Counters | `tenants/{tenantId}/counters/invoice` and `counters/quote`, field `value` |
+| Document ids | Invoice id = invoice number (`{invoicePrefix}-0001`); quote id `QT-0001` (custom prefixes: A-12) |
+| Roles | `owner` \| `admin` \| `staff` (older text says `member`) |
+| Platform admin | Custom claim `platformAdmin: true` + `platformAdmins/{uid}`, granted by `functions/src/scripts/setPlatformAdmin.ts` (older text says `role: platform_admin`). No rule lets any client write entitlements; plans and feature overrides are edited in the Firebase Console. |
+| User doc | `users/{uid}` — `{ uid, email, displayName, defaultTenantId, createdAt }` (older text says `primaryTenantId`) |
+| Writes | Every tenant collection is `allow write: if false`; all mutations go through callables |
+| Money | Dollars rounded to cents server-side; Stripe amounts in cents (`paidAmountCents`, `surchargeAmountCents`) |
+| Payment method | `manual` \| `etransfer` \| `cash` \| `card` (the Stripe webhook writes `card`) |
+| Custom-domain stage | `unverified` \| `dns_pending` \| `ssl_pending` \| `verified` \| `error` |
+| Stripe webhooks | `/api/webhooks/stripe/platform` (platform scope, no handlers today) and `/api/webhooks/stripe/connect` (connected-account scope: payments, refunds, disputes, `account.updated`, `account.application.deauthorized`) |
+| Email | Amazon SES from Cloud Functions only; From `"{Tenant}" <notifications@techflowsolutions.ca>`, Reply-To `meta.contactEmail` → `meta.etransferEmail` |
+| Firebase projects | `techflow-saas-dev` (exists), `techflow-saas-staging`, `techflow-saas-prod` (`.firebaserc` aliases `dev`, `staging`, `prod`) |
+
+### Phase status
+
+| Phase | Status | Remaining |
+|---|---|---|
+| 1 Schema, rules, claims | Mostly done — 42 rules tests | Recurring collection-group index (A-04); storage rules path bug (A-13); customer + recurring-management callables (A-10) |
+| 1.5 Design system | Done | — |
+| 2 Cloud Functions | Mostly done — 246 callable, 55 email, 54 shared tests | `getCustomerQuotes` (P6), MagicLinkSignIn + PaymentReceipt templates, App Check + send rate limits (R4), Sentry in functions |
+| 3 Frontend architecture | Contexts, guards, auth recovery done | 12 placeholder pages: `/dashboard`, `/invoices`, `/invoices/new`, `/invoices/[id]`, `/customers`, `/quotes/[id]`, `/portal`, `/portal/invoices/[id]`, `/portal/quotes/[id]`, `/pay/[token]`, `/pay/[token]/success`, `/pay/[token]/cancelled`; dashboard navigation |
+| 4 Stripe Connect | Backend done (D1 applied) | Public pay page UI; A-02, A-03, A-08 |
+| 5 Onboarding & domains | Signup, login, settings, team, domain, billing UI done | Customer magic-link sign-in (portal login is password-only today); A-01, A-07 |
+| 6 PDF | Code done — 222 tests | Deploy; Node 22 base image |
+| 7 Testing & first onboarding | Bundles A–E done | Test matrix, staging project, backup restore drill, first onboarding |
+| Deploy | Nothing deployed | "Environment Strategy & Deploy Runbook" |
+
+### Confirmed open bugs (fix before the first tenant)
+
+| Ref | Bug | Where | Fix |
+|---|---|---|---|
+| A-01 | `middleware.ts`, `instrumentation.ts`, `instrumentation-client.ts` sit at the repo root while the app is in `src/`, so Next.js ignores them (empty middleware manifest): custom domains never resolve and Sentry never initialises | repo root | Move into `src/` (Next 16: `src/proxy.ts`) |
+| A-02 | Payment saves `session.payment_intent` (`pi_…`) as `stripeChargeId`; refund and dispute handlers look up `charge.id` (`ch_…`), so they never match | `src/app/api/webhooks/stripe/handlers.ts` | Store `stripePaymentIntentId`; look up by `charge.payment_intent` |
+| A-03 | Event sentinel is written before the handler runs; a failed handler is never retried (redelivery sees "duplicate") | `src/lib/stripe/idempotency.ts`, webhook routes | `processing` → `done` states; release on failure |
+| A-04 | `processRecurringInvoices` collection-group query (`status ==` + `nextRunAt <=`) has no composite index — fails in production (the emulator doesn't enforce indexes) | `firestore.indexes.json` | Add the `recurringInvoices` COLLECTION_GROUP index |
+| A-05 | `getCustomerInvoices` (and the customer rule branch) include drafts; list rows carry full base64 logos (callable 10 MB limit at ~20 rows) | `functions/src/portal/getCustomerInvoices.ts`, `firestore.rules` | Exclude `draft`; project a small logo URL |
+| A-06 | Emails embed the snapshot's base64 `data:` logo, which Gmail web and Outlook block | `sendInvoiceEmail.ts`, `sendQuoteEmail.ts`, `processRecurringInvoices.ts` | Copy the logo to an immutable public Storage path at snapshot time; use that https URL in email |
+| A-07 | Edge Config keys `domain:{host}` contain `:` and `.`, but keys must match `^[\w-]+$` — every write fails silently | `middleware.ts`, `functions/src/domain/setupCustomDomain.ts` | Encode the host into a valid key in one shared helper |
+| A-08 | Sent invoices can be edited (amount, customer email) without bumping `payTokenVersion`; the webhook marks paid without comparing `amount_total` | `updateInvoice.ts`, `handlers.ts` | Bump the version on edits of a sent invoice; verify the amount before marking paid |
+| A-10 | No callables to create/update/delete customers or pause/resume/cancel recurring templates, while rules block client writes | `functions/src/index.ts`, `firestore.rules` | `upsertCustomer`, `deleteCustomer`, `updateRecurringInvoice` |
+| A-12 | Smaller: `useAuth.ts` types roles as `member`/`platform_admin`; `deleteInvoice` hard-deletes sent invoices (should become `void`); `createQuote` prefix only maps `INV→QT`; the `onSignup` membership check isn't transactional | various | — |
+| A-13 | `storage.rules` uses `match /tenants/{tenantId}/logo.{ext}` — invalid path syntax (the emulator rejects the ruleset), so logo/favicon upload rules don't load | `storage.rules` | Match `/{fileName}` and validate `fileName.matches('^(logo\|favicon)\\.(png\|jpe?g\|webp\|svg\|ico)$')`; add storage rules tests |
+
+Closed by the D-decisions: A-09 (surcharge shown vs charged — D3), A-11 (email sending duplicated in five places — D5), forced `business_type: "company"` on Stripe accounts (D1), P10 (email delivery feedback — D5).
+
+### Platform deadlines
+
+- **Next.js:** installed 15.5.15 predates the May, July, and August 2026 security releases (critical RCE fixed in 15.5.24), and Next 15 reaches end of life on 2026-10-21. Upgrade to ≥15.5.25 now, then Next 16 (`middleware.ts` becomes `proxy.ts`).
+- **Node.js:** Cloud Functions decommissions Node 20 on 2026-10-30. Move `functions/package.json` engines, `firebase.json` runtime, and the `pdf-service` Dockerfile to Node 22 (firebase-functions 7 and firebase-admin 14 require it).
+
+### Path to launch (in order)
+
+1. Next 15.5.25 and move the A-01 files into `src/`.
+2. Platform upgrade: Node 22, firebase-functions 7, firebase-admin 14, firebase-tools 15, Next 16.
+3. Backend fixes A-02 → A-13, each with a test that would have caught it.
+4. Product screens: Phase 3 placeholders, public pay page, portal magic-link sign-in.
+5. Stand up staging, then prod, per the Deploy Runbook.
+6. Phase 7 test matrix, backup restore drill, first onboarding.
 
 ---
 
@@ -133,11 +215,11 @@ CMD ["node", "src/index.js"]
   3. Load invoice/quote doc from Firestore (server-side with Admin SDK)
   4. POST to Cloud Run with `{ snapshot, data }` + `X-Api-Key`
   5. Stream the PDF buffer back to the caller
-- Env var: `PDF_SERVICE_URL` (e.g. `https://pdf-service-prod-abc123.a.run.app`) and `PDF_SERVICE_API_KEY`, set per Vercel environment scope.
+- Env var: `PDF_SERVICE_URL` (the deterministic `https://pdf-service-prod-<PROJECT_NUMBER>.northamerica-northeast2.run.app`) and `PDF_SERVICE_API_KEY`, set per Vercel environment scope.
 
 ### Deployment
 
-- `gcloud run deploy pdf-service-prod --source ./pdf-service --region us-central1` (or whichever region the Firebase project lives in).
+- `gcloud run deploy pdf-service-prod --source ./pdf-service --region northamerica-northeast2` (D2 — same region as Firestore). Full flags and the deterministic service URL are in the Deploy Runbook.
 - One service per environment (dev/staging/prod), same as Firebase projects.
 - Script this alongside the Cloud Functions deploy script (see "Environment Strategy" → Cloud Functions deployment).
 
@@ -155,7 +237,7 @@ All confirmed:
 |---|---|
 | Schema shape | **Nested subcollections** — `tenants/{tenantId}/invoices/{id}` |
 | Tenant routing | **Implicit from auth claims.** `tenantId` in JWT, queries scope automatically |
-| Stripe model | **Stripe Connect Express.** Tenants onboard via Stripe, money flows to their account |
+| Stripe model | **Stripe Connect, Standard-equivalent controller properties (D1; was Express).** Tenants onboard via Stripe, money flows to their account |
 | Feature flags | **Separate `entitlements` sub-doc, platform-admin-only, code-canonical feature list** |
 | Branding surface | **Full branding required from Phase 1.** Name, logo, address, email-from, primaryColor, secondaryColor, fontFamily, faviconUrl. Not deferred — core to the bundled website + portal offering |
 | Custom domains | Field in meta from Phase 1. Vercel domain provisioning + branded login middleware in Phase 5. Two tiers: generic `portal.techflowsolutions.ca` (immediate) and custom `invoices.smithplumbing.ca` (DNS + SSL) |
@@ -209,14 +291,16 @@ Already decided — see "Outstanding Security Debt" section above. Path A (ship 
 
 **Recommendation:** Option B — Resend. It's built for this, free tier covers MVP, and it's the single biggest deliverability risk-mitigation the plan can make. Postmark is also fine but Resend has the nicer DX.
 
+**⚠️ SUPERSEDED 2026-09-13 by D5 — Amazon SES.** Resend was never deployed. Production SES access with `techflowsolutions.ca` verified made SES the better fit: per-tenant reputation isolation through SES tenants and a single email credential location in Cloud Functions. See Phase 2 "React Email + Amazon SES". The April analysis below is kept for rationale.
+
 **✅ RESOLVED 2026-04-13 — Resend.** Decision made jointly with Gemini review. Rationale: pairs natively with React Email (the template system locked in Phase 2) — templates are JSX components using the same design tokens as the dashboard, so a "Paid" badge in an email renders identically to one in the portal. Eliminates hand-rolled HTML tables. Free tier (3k/month) covers MVP.
 
-**Downstream changes if Option B is adopted:**
-- Replace `ZOHO_EMAIL_USER` / `ZOHO_EMAIL_PASSWORD` env vars with `RESEND_API_KEY`.
-- `sendInvoiceEmail`, `sendQuoteEmail`, `sendMagicLinkEmail` (wrapper), and `createInvitation` all use the Resend SDK with `from: notifications@...`, `replyTo: meta.emailFrom || meta.emailFooter`.
-- Verify `techflowsolutions.ca` as a sending domain in Resend (DKIM + SPF + DMARC records in DNS).
+**Downstream changes (as built with SES, D5):**
+- Cloud Functions secrets `AWS_SES_ACCESS_KEY_ID` / `AWS_SES_SECRET_ACCESS_KEY`; no email credentials on Vercel.
+- `sendInvoiceEmail`, `sendQuoteEmail`, the recurring processor, `createInvitation`, and owner incident alerts all send through `functions/src/emails/send.ts` with `From: "{Tenant}" <notifications@techflowsolutions.ca>` and `Reply-To: meta.contactEmail` (falling back to `meta.etransferEmail`). A branded magic-link sender is not built yet.
+- Verify `techflowsolutions.ca` in SES `ca-central-1` (Easy DKIM, custom MAIL FROM, existing DMARC) — see the Deploy Runbook.
 
-**Status:** Needs Reggie's decision before Phase 2.
+**Status:** Decided — Resend (2026-04-13), superseded by Amazon SES (D5, 2026-09-13).
 
 ---
 
@@ -224,113 +308,93 @@ Already decided — see "Outstanding Security Debt" section above. Path A (ship 
 
 ### Firestore structure
 
+As built (reconciled 2026-09-13). Every collection below is **admin-SDK-write-only** — clients read what `firestore.rules` allows and mutate through callables.
+
 ```
-tenants/{tenantId}
-  ├─ meta                         (doc)  ← tenant-editable (read by tenant admins only)
-  │    {
-  │      name, logoUrl, address,              ← logoUrl is the public https download URL
-  │                                             returned by Firebase Storage getDownloadURL(),
-  │                                             NOT the Storage path. Customers cannot read
-  │                                             Storage directly, so the stored value must be
-  │                                             the token-bearing public URL.
-  │      primaryColor, secondaryColor,        ← branding (required from Phase 1)
-  │      fontFamily,                          ← e.g. "Inter", "DM Sans" — matches client website
-  │      faviconUrl,                          ← tenant favicon for portal + PDF
-  │      customDomain,                        ← e.g. "invoices.smithplumbing.ca" (null until configured)
-  │      customDomainStatus: {                ← null until customDomain is set. Shape:
-  │        stage,                               { stage: 'pending-dns' | 'pending-ssl' |
-  │        message,                                        'verified' | 'error',
-  │        checkedAt                            message: string | null, checkedAt: timestamp }.
-  │      },                                     Updated by `setupCustomDomain` + the scheduled
-  │                                             re-check function. Surfaced in /settings/domain.
-  │      taxRate, taxName,                    ← e.g. 0.13, "HST"
-  │      businessNumber,                      ← GST/HST registration, VAT ID, etc.
-  │      invoicePrefix,                       ← e.g. "INV" or "ACME"
-  │      emailFooter,                         ← appended to outgoing invoice emails
-  │      currency,                            ← ISO 4217, e.g. "CAD", "USD"
-  │      stripeAccountId,                     ← Stripe Connect account ID
-  │      stripeStatus: {                      ← mirrors Stripe Connect account state so the
-  │        chargesEnabled,                       app can preflight payInvoice + show a banner
-  │        payoutsEnabled,                       when charges are disabled. Populated by the
-  │        detailsSubmitted,                     platform webhook `account.updated` handler
-  │        currentlyDue: [],                     (Phase 4). Shape exists in Phase 1 so Phase 2
-  │        disabledReason,                       can read it without refactor. Null-equivalent
-  │        updatedAt                             defaults written by onSignup: chargesEnabled
-  │      },                                      false until Connect onboarding completes.
-  │      etransferEmail,                      ← tenant's Interac e-Transfer email (shown to
-  │                                             customers on the pay page as primary method)
-  │      chargeCustomerCardFees,              ← boolean, default false — when true, passes
-  │                                             credit-card processing fee to customer as a
-  │                                             separate line item on Stripe Checkout
-  │      cardFeePercent,                      ← number, default 2.4, HARD-CAPPED at 2.4 —
-  │                                             Visa/Mastercard Canadian ceiling. Only used
-  │                                             when chargeCustomerCardFees === true
-  │      surchargeAcknowledgedAt,             ← timestamp of one-time modal acknowledgment
-  │                                             (Visa/Mastercard notification responsibility,
-  │                                             Quebec exclusion, 2.4% cap). Null until the
-  │                                             tenant enables surcharging for the first time.
-  │      deletedAt,                           ← null unless tenant soft-deleted
-  │      createdAt
+tenants/{tenantId}                         ← tenantId = business-name slug (+ -1, -2 on collision)
+  ├─ meta/settings                (doc)    ← edited via updateTenantBranding / updatePaymentSettings;
+  │    {                                     read by tenant members
+  │      name, logoUrl, address,            ← logoUrl = public https download URL (getDownloadURL),
+  │                                           never the Storage path
+  │      contactEmail,                      ← Reply-To on customer emails (D5); defaults to the
+  │                                           owner's signup email
+  │      primaryColor, secondaryColor,      ← WCAG AA vs white enforced server-side
+  │      fontFamily, faviconUrl,
+  │      customDomain,
+  │      customDomainStatus: { stage, message, checkedAt },
+  │        stage: 'unverified' | 'dns_pending' | 'ssl_pending' | 'verified' | 'error'
+  │      taxRate, taxName,                  ← e.g. 0.13, "HST"
+  │      businessNumber, invoicePrefix, emailFooter,
+  │      currency,                          ← 'CAD' | 'USD'
+  │      stripeAccountId,
+  │      stripeStatus: { chargesEnabled, payoutsEnabled, detailsSubmitted,
+  │                      currentlyDue[], disabledReason, updatedAt },
+  │      etransferEmail,
+  │      chargeCustomerCardFees,            ← effective only while `cardSurcharge` is on (D3)
+  │      cardFeePercent,                    ← hard-capped at 2.4
+  │      surchargeAcknowledgedAt,
+  │      deletedAt, createdAt, updatedAt
   │    }
-  │
-  ├─ entitlements                 (doc)  ← PLATFORM ADMIN ONLY (read by tenant)
-  │    { features: { quotes: true, ... }, plan: 'free'|'starter'|'pro',
-  │      limits: { maxInvoicesPerMonth: 10 }, updatedAt }
-  │
-  ├─ counters/invoiceCounter      (doc)
-  ├─ counters/quoteCounter        (doc)
-  ├─ customers/{id}                       ← includes deletedAt (null unless soft-deleted)
-  ├─ invoices/{id}                        ← EMBEDS tenant branding snapshot (see below);
-  │                                         includes deletedAt (null unless soft-deleted)
-  ├─ quotes/{id}                          ← EMBEDS tenant branding snapshot (see below);
-  │                                         includes deletedAt (null unless soft-deleted)
-  ├─ recurringInvoices/{id}
-  └─ invitations/{inviteId}               ← staff invitation tokens (see Phase 5)
-       {
-         email, role, token (hashed),
-         invitedBy (uid), createdAt,
-         expiresAt, acceptedAt (null until used)
-       }
+  ├─ entitlements/current         (doc)    ← platform admin edits in Firebase Console
+  │    { plan, maxInvoicesPerMonth, features: { …overrides }, updatedAt }
+  ├─ counters/invoice, counters/quote      ← { value, updatedAt }
+  ├─ customers/{id}                        ← read-only to clients; callables pending (A-10)
+  ├─ invoices/{invoiceNumber}              ← see "Invoice document" below
+  │    ├─ payAttempts/{id}                 ← { createdAt, expireAt, sessionId } — TTL 48h
+  │    └─ paymentIncidents/{kind}_{stripeObjectId}
+  │                                        ← { kind, …details, createdAt } — audit + owner
+  │                                           email trigger (D5)
+  ├─ quotes/{quoteNumber}                  ← invoice shape without pay/payment fields,
+  │                                           plus validUntil, convertedToInvoiceId
+  ├─ recurringInvoices/{id}                ← template: customer, lineItems, applyTax, totals,
+  │                                           notes, internalDescription, daysUntilDue, interval,
+  │                                           anchorDay, startDate, nextRunAt, endAfterCount,
+  │                                           endDate, autoSend, status, generatedCount,
+  │                                           lastRunAt/Status/Error, consecutiveFailures,
+  │                                           lastGeneratedInvoiceId
+  └─ invitations/{inviteId}
+       { tenantId, email (lowercased), role, tokenHash, invitedBy, createdAt,
+         expiresAt, acceptedAt, acceptedBy, revokedAt, revokedBy }
 
-users/{uid}
-  └─ { primaryTenantId,                   ← MVP: pointer into userTenantMemberships used to set
-                                             the `tenantId` custom claim. Post-MVP multi-tenant
-                                             UI will let the user switch active tenant; this
-                                             field is the server-of-record for which one their
-                                             current ID token is scoped to.
-       email }                            ← tenant users only — customers have no doc here
+users/{uid}                                ← tenant users only; customers have no doc
+  { uid, email, displayName, defaultTenantId, createdAt, updatedAt }
 
-userTenantMemberships/{uid}_{tenantId}    ← one doc per (user, tenant) pair. MVP writes exactly
-                                             one per user (the one created by onSignup), but
-                                             having the collection from day one avoids a painful
-                                             migration when bookkeepers/VAs need multi-tenant
-                                             access (P7 in DEFERRED).
-  └─ {
-       uid, tenantId,                     ← both duplicated in the doc for collectionGroup queries
-       role,                              ← 'owner' | 'admin' | 'member' — scoped to THIS tenant
-       invitedBy,                         ← uid of inviter (null for the owner created by onSignup)
-       createdAt,
-       deletedAt                          ← null unless revoked; soft-delete so audit log survives
-     }
+userTenantMemberships/{uid}_{tenantId}     ← one per (user, tenant); MVP allows one active tenant
+  { uid, tenantId, role: 'owner' | 'admin' | 'staff', invitedBy, createdAt, deletedAt }
 
-customDomains/{domain}            ← e.g. "invoices.smithplumbing.ca"
-  └─ { tenantId }                         ← reverse lookup: domain → tenantId
-                                            Written by platform admin or onSignup Cloud Function
-                                            when customDomain is set in tenant meta.
-                                            Used by Next.js middleware to resolve branding
-                                            before auth (login page must show tenant brand).
+customDomains/{domain}        { tenantId, createdAt }                 ← middleware fallback lookup
+stripeAccounts/{accountId}    { tenantId, linkedAt }                  ← Connect webhook routing;
+                                                                        written at account creation
+stripeEvents/{eventId}        { type, account, livemode, receivedAt, expireAt }    ← TTL 30 days
+emailSends/{sha256(key)}      { status, category, tenantId, documentId,
+                                claimedAt, expireAt, messageId, sentAt }           ← TTL 30 days (D5)
+platformAdmins/{uid}          { uid, email, grantedAt, grantedBy }
+```
 
-stripeAccounts/{stripeAccountId}  ← e.g. "acct_1Abc..."
-  └─ { tenantId }                         ← reverse lookup: Stripe Connect account → tenantId.
-                                            Written by the Stripe Connect return-URL handler
-                                            (Phase 4 step 3) at the same time stripeAccountId
-                                            is written to tenant meta. Used by the Stripe
-                                            webhook to route Connect events to the correct
-                                            tenant WITHOUT a collectionGroup('meta') query
-                                            (which would require a composite index and still
-                                            be slower than a direct doc read).
+**Invoice document** — `tenants/{tenantId}/invoices/{invoiceNumber}`:
 
-platformAdmins/{uid}              ← optional; or use custom claim only
+```
+{
+  customer: { name, email (lowercased), phone },
+  lineItems: [{ description, quantity, rate, taxable, amount }],  ← taxable per line (D4)
+  applyTax,                                 ← default taxability for lines that don't specify
+  totals: { subtotal, taxableSubtotal, taxRate, taxAmount,
+            taxes: [{ name, rate, taxableAmount, amount }], total },
+  tenantSnapshot: { …frozen branding — see next section },
+  status: 'draft' | 'sent' | 'unpaid' | 'overdue' | 'partial' | 'paid'
+          | 'refunded' | 'partially-refunded',
+  issueDate, dueDate,                       ← 'YYYY-MM-DD'
+  notes,
+  payToken, payTokenExpiresAt (display only), payTokenVersion,
+  createdAt, createdBy, updatedAt, sentAt,
+  sourceQuoteId, sourceRecurringInvoiceId,
+  paidAt, paymentMethod ('manual' | 'etransfer' | 'cash' | 'card'),
+  paidAmountCents, surchargeAmountCents, stripeChargeId,
+  refundedAt, refundedAmountCents,
+  disputed, disputedAt, disputeReason, disputeOutcome ('won' | 'lost'),
+  lastEmailStatus ('delivered' | 'bounced' | 'complained' | 'delayed' | 'rejected'),
+  lastEmailStatusDetail, lastEmailMessageId, lastEmailStatusAt       ← SES events (D5)
+}
 ```
 
 ### Invoice/quote branding snapshot (denormalization rule)
@@ -351,6 +415,9 @@ platformAdmins/{uid}              ← optional; or use custom claim only
     fontFamily, faviconUrl,                // ← new: full branding
     taxRate, taxName, businessNumber,
     emailFooter, currency,
+    chargeCustomerCardFees, cardFeePercent, // ← effective surcharge frozen at creation (D3)
+    etransferEmail,
+    version: 1,
     // NOTE: stripeAccountId intentionally NOT snapshotted.
     // It's read server-side from meta at checkout creation time.
     // NOTE: customDomain intentionally NOT snapshotted.
@@ -393,132 +460,45 @@ Why a JWT instead of a random token stored in Firestore: the verify path on ever
 
 ### Auth custom claims
 
-Set via `admin.auth().setCustomUserClaims()` at signup time and whenever a user's role changes:
+Set only by Cloud Functions — `onSignup`, `onAcceptInvite`, `setUserRole` — always merged over existing claims:
 
 ```typescript
 {
   tenantId: "acme-plumbing",
-  role: "owner" | "admin" | "member"
+  role: "owner" | "admin" | "staff"
 }
 ```
 
-Separate claim for platform admins (just Reggie):
+Platform admin (Reggie) — granted out-of-band by `functions/src/scripts/setPlatformAdmin.ts` from a trusted machine, never through a deployed endpoint:
+
 ```typescript
-{ role: "platform_admin" }
+{ platformAdmin: true }   // plus a platformAdmins/{uid} doc
 ```
 
-Platform admins have no `tenantId` claim. They're the only role that can write `entitlements`.
+Platform admins have no `tenantId` claim. No rule lets any client — platform admin included — write `entitlements`; plans and feature overrides are edited in the Firebase Console with admin credentials.
 
-### Security rules (sketch)
+### Security rules (as built)
 
-Two distinct auth identity patterns are enforced at the rules layer:
+`firestore.rules` is authoritative, verified by 42 emulator tests in `functions/test/rules/firestore.test.ts`. The April sketch that used to live here allowed client writes to `meta`, `customers`, `recurringInvoices`, and `invitations`; the build tightened every one of them to callable-only writes.
 
-- **Tenant users** (contractors + their staff) have a `tenantId` custom claim and a role of `owner`/`admin`/`member`. They see everything under their tenant path.
-- **Customer users** (homeowners being invoiced) have **no `tenantId` claim**. They authenticate via magic link, their auth token carries `email` + `email_verified`. They can only read invoices/quotes whose `customer.email` matches their verified email. They cannot write anything. They cannot read `meta`, `entitlements`, `counters`, `customers`, or `recurringInvoices`.
+Two identity patterns are enforced:
 
-```
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
+- **Tenant users** (contractors and their staff) carry a `tenantId` claim and see their tenant's documents.
+- **Customer users** (the people being invoiced) carry no `tenantId`; they authenticate with a verified email and can only read invoices/quotes whose `customer.email` equals their lowercased auth email. They never write.
 
-    // Tenant-editable meta — tenant admins only.
-    // Customers never read meta; they read tenantSnapshot embedded in their invoice/quote.
-    match /tenants/{tenantId}/meta {
-      allow read:  if request.auth.token.tenantId == tenantId;
-      allow write: if request.auth.token.tenantId == tenantId
-                   && request.auth.token.role in ['owner', 'admin'];
-    }
+| Path | Read | Write |
+|---|---|---|
+| `users/{uid}` | the user | none |
+| `userTenantMemberships/{uid}_{tenantId}` | the user (doc id prefix match) | none |
+| `tenants/{t}/meta/*`, `entitlements/*`, `counters/*`, `customers/*`, `recurringInvoices/*`, `invitations/*` | members of tenant `t` | none |
+| `tenants/{t}/invoices/{id}`, `tenants/{t}/quotes/{id}` | members of `t`, **or** an `email_verified` user whose lowercased email equals `customer.email` | none |
+| `tenants/{t}/invoices/{id}/paymentIncidents/*` | members of `t` | none |
+| `tenants/{t}/invoices/{id}/payAttempts/*` | none | none |
+| `customDomains/*`, `stripeAccounts/*`, `stripeEvents/*`, `emailSends/*` | none | none |
+| `platformAdmins/*` | `platformAdmin` claim | none |
+| anything else | none | none |
 
-    // Entitlements — read by tenant, write by platform admin only
-    match /tenants/{tenantId}/entitlements {
-      allow read:  if request.auth.token.tenantId == tenantId;
-      allow write: if request.auth.token.role == 'platform_admin';
-    }
-
-    // Invoices — read by tenant users OR the matching customer.
-    // WRITES ARE ADMIN-SDK-ONLY. All mutations (create, update, delete, status
-    // changes, payment marking) go through Cloud Functions: createInvoice,
-    // updateInvoice, deleteInvoice, markInvoicePaid. This is the C1 fix from
-    // round 3 audit — preventing client write means tenantSnapshot, taxRate,
-    // businessNumber, and totals cannot be tampered with after creation.
-    // Email comparison uses lowercase normalization on BOTH sides — see C2 fix.
-    match /tenants/{tenantId}/invoices/{invoiceId} {
-      allow read: if
-        // Tenant user
-        (request.auth.token.tenantId == tenantId
-         && request.auth.token.role in ['owner', 'admin', 'member'])
-        // OR customer whose verified email matches the invoice's customer.email.
-        // Both sides lowercased — Cloud Functions write customer.email lowercased,
-        // and we compare against lowercase(auth.token.email) here.
-        || (request.auth.token.email_verified == true
-            && request.auth.token.email.lower() == resource.data.customer.email);
-      allow write: if false;  // admin SDK only — see Phase 2 invoice CRUD callables
-    }
-
-    // Quotes — same pattern as invoices. Writes admin-SDK-only.
-    match /tenants/{tenantId}/quotes/{quoteId} {
-      allow read: if
-        (request.auth.token.tenantId == tenantId
-         && request.auth.token.role in ['owner', 'admin', 'member'])
-        || (request.auth.token.email_verified == true
-            && request.auth.token.email.lower() == resource.data.customer.email);
-      allow write: if false;  // admin SDK only — see Phase 2 quote CRUD callables
-    }
-
-    // Customers collection, counters, recurringInvoices — tenant-only, no customer access
-    match /tenants/{tenantId}/customers/{doc} {
-      allow read, write: if request.auth.token.tenantId == tenantId
-                         && request.auth.token.role in ['owner', 'admin', 'member'];
-    }
-    match /tenants/{tenantId}/counters/{doc} {
-      allow read:  if request.auth.token.tenantId == tenantId;
-      allow write: if false;  // counters only written by Cloud Functions via admin SDK
-    }
-    match /tenants/{tenantId}/recurringInvoices/{doc} {
-      allow read, write: if request.auth.token.tenantId == tenantId
-                         && request.auth.token.role in ['owner', 'admin', 'member'];
-    }
-
-    // User profile — tenant users only have docs here; customers do not.
-    // WRITES ARE ADMIN-SDK-ONLY. The user doc carries tenantId and role,
-    // which are authorization-adjacent fields. Allowing client writes would
-    // let a user spoof their own tenantId/role (it wouldn't change the JWT
-    // claim, but any code that reads users/{uid} for auth decisions would be
-    // wrong). All writes go through onSignup, setUserRole, onAcceptInvite.
-    // Profile self-edits (display name, etc.) get a dedicated callable
-    // updateUserProfile that whitelists editable fields. C6 fix from round 3.
-    match /users/{uid} {
-      allow read:  if request.auth.uid == uid;
-      allow write: if false;  // admin SDK only
-    }
-
-    // customDomains — reverse lookup for middleware. Admin-SDK-only.
-    // Client-side code must NEVER read this directly. The Next.js middleware
-    // runs server-side with admin credentials (bypasses rules) and injects
-    // the resolved tenantId into request headers/cookies. The branded login
-    // page reads tenant branding via a dedicated Cloud Function (or from a
-    // public-read subset) — not from customDomains.
-    match /customDomains/{domain} {
-      allow read, write: if false;  // admin SDK only
-    }
-
-    // stripeAccounts — reverse lookup for Stripe Connect webhook. Admin-SDK-only.
-    // Written at Connect return time alongside tenant meta.stripeAccountId.
-    // Read only by the webhook handler (server-side, admin credentials).
-    match /stripeAccounts/{stripeAccountId} {
-      allow read, write: if false;  // admin SDK only
-    }
-
-    // Invitations — tenant owners/admins can create/read/revoke; acceptance
-    // happens via a Cloud Function (onAcceptInvite) that runs under admin SDK
-    // and verifies the hashed token. Clients never write acceptedAt directly.
-    match /tenants/{tenantId}/invitations/{inviteId} {
-      allow read, write: if request.auth.token.tenantId == tenantId
-                         && request.auth.token.role in ['owner', 'admin'];
-    }
-  }
-}
-```
+Open issues: the customer branch still matches drafts (A-05). `storage.rules` intends owner/admin uploads of `logo.*`/`favicon.*` images under 2 MB, readable by tenant members, but its path syntax is invalid (A-13). Customers and the PDF service never read Storage directly — they use the public download URLs stored in meta or the base64 logo in the snapshot.
 
 ### Critical rule properties
 1. **Customer access is read-only.** The `|| email_verified` branch only appears in `allow read`, never in `allow write`.
@@ -562,7 +542,7 @@ A simpler fallback if the `request.query` pattern proves fragile: have a Cloud F
 No migration needed. Existing Firestore data is 73 test invoices — discarded. Fresh start in the new Firebase project.
 
 **Deliverables for Phase 1:**
-- New Firebase project provisioned (`techflow-dev`)
+- New Firebase project provisioned (`techflow-saas-dev`, Firestore `northamerica-northeast2`)
 - Firestore rules deployed
 - **Firestore indexes deployed (`firestore.indexes.json`)** — required from day one. The `getCustomerInvoices` query uses a `collectionGroup('invoices')` query with `.where('customer.email', '==', email).orderBy('createdAt', 'desc')`. Without a composite index defined for this collection group, Firestore throws a runtime error on the first customer portal query. Known required indexes:
   - Collection group `invoices`: `customer.email` (ASC) + `createdAt` (DESC)
@@ -571,10 +551,10 @@ No migration needed. Existing Firestore data is 73 test invoices — discarded. 
   - **Note:** the Stripe webhook does NOT require a `collectionGroup('meta')` index because we use the `stripeAccounts/{stripeAccountId}` reverse lookup collection instead. Direct doc read, no composite index needed.
 - **Firebase Storage rules deployed (`storage.rules`)** — separate from Firestore rules. Firebase Storage has its own rules file. Required rules:
   - Tenant users can read/write files under `tenants/{tenantId}/` where their token's `tenantId` matches
-  - Customers cannot access Storage directly. Logos and favicons are served via **Firebase Storage public download URLs** (generated by `getDownloadURL()` at upload time). The download URL includes an access token in the query string and is publicly fetchable without Storage rules, which is why the URL itself (not the Storage path) must be what's stored in `meta.logoUrl` / `meta.faviconUrl` and snapshotted into `tenantSnapshot.logoUrl`. If the Storage path is stored instead, customers' PDFs and portal pages will silently 403 on the logo.
+  - Customers cannot access Storage directly. Logos and favicons are served via **Firebase Storage public download URLs** (generated by `getDownloadURL()` at upload time). The download URL includes an access token in the query string and is publicly fetchable without Storage rules, which is why the URL itself (not the Storage path) must be what's stored in `meta.logoUrl` / `meta.faviconUrl` and fetched when `createInvoice` inlines it into `tenantSnapshot.logo`. If the Storage path is stored instead, customers' PDFs and portal pages will silently 403 on the logo.
   - No unauthenticated access to the Storage bucket itself
 - Custom-claim helpers in Cloud Functions for signup + role changes
-- Platform admin user created (Reggie) with `role: platform_admin` claim
+- Platform admin user created (Reggie) with the `platformAdmin: true` claim (`functions/src/scripts/setPlatformAdmin.ts`)
 
 **Estimated effort:** 4–5 days
 
@@ -739,11 +719,13 @@ Invoice and quote status badges use the shadcn `Badge` component with these vari
 | `paid` | `success` | `--success` |
 | `unpaid` | `default` | `--primary` |
 | `overdue` | `destructive` | `--destructive` |
-| `cancelled` | `secondary` | `--muted` |
+| `partial` | `warning` | `--warning` |
+| `refunded` | `secondary` | `--muted` |
+| `partially-refunded` | `warning` | `--warning` |
 | `draft` | `outline` | `--border` |
 | `sent` | `default` | `--primary` |
 
-Centralized in `src/lib/invoices/statusBadge.ts` as `getStatusBadgeProps(status)`. Never inline status → color logic at the call site.
+Centralized in `src/lib/invoices/statusBadge.ts` as `getInvoiceStatusBadgeProps(status)` and `getQuoteStatusBadgeProps(status)`. Never inline status → color logic at the call site.
 
 **Note on `unpaid` (intentional departure from the old Vite app):** the old app showed unpaid invoices in red, which was aggressive — it alarmed tenants about invoices that weren't even overdue yet. The new mapping reserves red (`destructive`) for `overdue` only, where it carries real signal. `unpaid` uses the tenant's brand color (`--primary`) as a neutral "awaiting payment" state. This matches the Stripe Dashboard, QuickBooks, and FreshBooks conventions. The transition `unpaid → overdue` happens automatically when `Date.now() > invoice.dueDate`, triggered by a scheduled Cloud Function or computed at read time — implementation detail for Phase 2.
 
@@ -755,18 +737,18 @@ Rule: **no domain component reaches for raw HTML form elements or Tailwind color
 
 ### Phase 1.5 deliverables checklist
 
-- [ ] `npx shadcn@latest init` run, base `globals.css` + `tailwind.config.ts` + `components.json` committed
-- [ ] All 14 scoped components scaffolded into `src/components/ui/`
-- [ ] `--success` and `--warning` tokens added to `globals.css` (light + dark)
-- [ ] `Badge` variants extended with `success` and `warning`
-- [ ] `src/lib/design/contrast.ts` with `meetsWcagAA()` + `computeForeground()` + unit tests
-- [ ] `src/lib/invoices/statusBadge.ts` with canonical status → variant mapping
-- [ ] Dashboard layout sets `<html className="dark">`; portal layout sets light
-- [ ] Inter loaded via `next/font/google` in root layout
-- [ ] Curated tenant font list defined in `src/lib/design/fonts.ts` with `next/font` loaders
-- [ ] `Toaster` mounted once in root layout; all toast calls use `sonner`
-- [ ] Tenant override pattern (`--primary`/`--secondary` only, with computed `--primary-foreground`) wired in dashboard + portal layouts
-- [ ] One reference page (e.g., `/dashboard/style-guide`, dev-only, gated by env) renders every primitive in light + dark + with a sample tenant override, for visual regression review
+- [x] `npx shadcn@latest init` run, base `globals.css` + `tailwind.config.ts` + `components.json` committed
+- [x] All 14 scoped components scaffolded into `src/components/ui/`
+- [x] `--success` and `--warning` tokens added to `globals.css` (light + dark)
+- [x] `Badge` variants extended with `success` and `warning`
+- [x] `src/lib/design/contrast.ts` with `meetsWcagAA()` + `computeForeground()` + unit tests
+- [x] `src/lib/invoices/statusBadge.ts` with canonical status → variant mapping
+- [x] Dashboard layout sets `<html className="dark">`; portal layout sets light
+- [x] Inter loaded via `next/font/google` in root layout
+- [x] Curated tenant font list defined in `src/lib/design/fonts.ts` with `next/font` loaders
+- [x] `Toaster` mounted once in root layout; all toast calls use `sonner`
+- [x] Tenant override pattern (`--primary`/`--secondary` only, with computed `--primary-foreground`) wired in dashboard + portal layouts
+- [x] One reference page (e.g., `/dashboard/style-guide`, dev-only, gated by env) renders every primitive in light + dark + with a sample tenant override, for visual regression review
 
 **Estimated effort:** 2 days
 
@@ -791,140 +773,104 @@ export const someFunction = onCall(async (request) => {
 ### `requireFeature()` helper
 
 ```typescript
-import { DEFAULT_FEATURES, resolveFeatures, FeatureKey } from '../shared/features';
+// functions/src/shared/requireFeature.ts (as built)
+export async function loadFeatures(tenantId: string): Promise<ResolvedFeatures> {
+  const snap = await db.doc(`tenants/${tenantId}/entitlements/current`).get();
+  const overrides = snap.exists ? (snap.data()?.features ?? {}) : {};
+  // every FEATURE_DEFAULTS key resolved through resolveFeature(key, overrides)
+}
 
-async function requireFeature(tenantId: string, key: FeatureKey) {
-  const snap = await db.doc(`tenants/${tenantId}/entitlements`).get();
-  const features = resolveFeatures(snap.data());
+export async function requireFeature(
+  tenantId: string,
+  key: FeatureKey,
+): Promise<ResolvedFeatures> {
+  const features = await loadFeatures(tenantId);
   if (!features[key]) {
     throw new HttpsError('permission-denied',
-      `Feature '${key}' not enabled for this tenant.`);
+      `Feature '${key}' is not enabled for this tenant.`);
   }
+  return features; // callers reuse it, e.g. buildTenantSnapshot(meta, features)
 }
 ```
 
-### Functions to rewrite (with feature gates)
+### Function inventory (as built)
 
-**Tenant-facing (require `tenantId` claim):**
+Region: callables, HTTP functions, and Firestore triggers run in `northamerica-northeast2`; scheduled functions in `northamerica-northeast1` (D2). Tenant callables require a `tenantId` claim (`requireTenant`); feature gates use `requireFeature`, which throws `permission-denied` and returns the resolved feature map.
 
-| Function | Feature Gate |
-|---|---|
-| `createInvoice` / `consumeInvoiceNumber` | `invoices` (always true) |
-| `updateInvoice` | `invoices` |
-| `deleteInvoice` | `invoices` |
-| `markInvoicePaid` (manual mark, separate from Stripe webhook) | `invoices` |
-| `sendInvoiceEmail` | `invoices` |
-| `previewInvoicePDF` | `invoices` |
-| `createQuote` / `consumeQuoteNumber` | `quotes` |
-| `updateQuote` | `quotes` |
-| `deleteQuote` | `quotes` |
-| `sendQuoteEmail` | `quotes` |
-| `previewQuotePDF` | `quotes` |
-| `convertQuoteToInvoice` | `quotes` AND `invoices` |
-| `regenerateInvoicePayLink` (invalidates prior tokens, issues a new one — owner/admin only) | `invoices` |
-| `updateTenantBranding` (primaryColor, secondaryColor, logoUrl, fontFamily, etc. — re-validates WCAG contrast server-side) | none |
-| `updatePaymentSettings` (etransferEmail, chargeCustomerCardFees, cardFeePercent, surchargeAcknowledgedAt — caps cardFeePercent at 2.4 server-side regardless of client input) | none |
-| `updateUserProfile` (whitelisted fields: displayName, phone) | none |
-| `createRecurringInvoice` | `recurringInvoices` |
-| `processRecurringInvoices` (scheduled) | `recurringInvoices` (per-tenant check inside loop) |
-| `createCheckoutSession` (tenant-initiated, e.g. charging a saved customer) | `stripePayments` |
-| `onSignup` (create tenant + entitlements + user) | none |
-| `setUserRole` (owner/admin only) | none |
-| `createInvitation` (owner/admin invites staff) | none (owner/admin role check inside) |
-| `onAcceptInvite` (invitee accepts, sets claims) | none (token + email match inside) |
+**Tenant-facing callables**
 
-**Customer-facing (require `email_verified`, NO `tenantId` claim):**
-
-| Function | Feature Gate | Auth Pattern |
+| Function | Feature gate | Role / notes |
 |---|---|---|
-| `getCustomerInvoices` | `invoices` of target tenant | `email_verified == true`, returns invoices across all tenants where `customer.email` matches caller |
-| `getCustomerInvoiceDetail` | `invoices` of target tenant | Verify caller email matches invoice's `customer.email` before returning |
-| `downloadInvoicePDF` (customer-side variant) | `invoices` of target tenant | Verify caller email matches invoice's `customer.email`, stream PDF bytes |
+| `onSignup` | — | signed-in user without a membership; creates the tenant (Phase 5) |
+| `setUserRole` | — | owner |
+| `updateUserProfile` | — | self; `displayName` only |
+| `createInvitation` | — | owner/admin; invite email via SES, one send per invitation |
+| `onAcceptInvite` | — | invitee whose verified email matches |
+| `revokeInvitation` | — | owner/admin; stamps `revokedAt` |
+| `updateTenantBranding` | — | owner/admin; business info, branding, tax, currency, `contactEmail` |
+| `updatePaymentSettings` | `cardSurcharge` to switch surcharging on (D3) | owner/admin; e-Transfer email, surcharge settings |
+| `createInvoice`, `updateInvoice` | `invoices` | any role |
+| `deleteInvoice`, `markInvoicePaid`, `regenerateInvoicePayLink` | `invoices` | owner/admin |
+| `sendInvoiceEmail`, `previewInvoicePDF` | `invoices` | any role |
+| `createQuote`, `updateQuote`, `sendQuoteEmail`, `previewQuotePDF` | `quotes` | any role |
+| `deleteQuote` | `quotes` | owner/admin |
+| `convertQuoteToInvoice` | `quotes` + `invoices` | any role |
+| `createRecurringInvoice` | `recurringInvoices` | any role |
+| `startConnectOnboarding`, `completeConnectOnboarding` | `stripePayments` | owner/admin (D1 account configuration) |
+| `setupCustomDomain` | `customDomain` | owner/admin |
+| `removeCustomDomain`, `recheckCustomDomain` | — | owner/admin |
 
-**Note:** There is intentionally no `payInvoice` callable. All payment paths — email link, portal "Pay Now" button, manual pay link copied by the tenant — route through `createPayTokenCheckoutSession` (token-authenticated, no Firebase auth required). The portal just discovers the pay link for logged-in customers; it does not create a parallel payment path. One checkout-creation codepath = one place to audit, one place to apply surcharge/rate-limit/version-check logic.
+Not built: `upsertCustomer`, `deleteCustomer`, `updateRecurringInvoice` (A-10). The April plan's tenant-initiated `createCheckoutSession` was dropped — every card payment goes through the pay link.
 
-**Token-authenticated (no Firebase auth — token is the auth):**
-
-| Function | Feature Gate | Auth Pattern |
-|---|---|---|
-| `verifyInvoicePayToken` | `invoices` of target tenant | Verifies JWT signature + expiry + `payTokenVersion` match. Returns invoice summary (amount, tenant branding, line items) for rendering the public pay page. No Firebase auth required — the signed token IS the auth for this one action. |
-| `createPayTokenCheckoutSession` | `stripePayments` of target tenant | Re-verifies JWT (never trust a prior verify), creates Stripe Checkout session on tenant's Connect account, applies surcharge line item if `chargeCustomerCardFees === true` and card is chosen. Rate-limited per invoice (max 10 checkout sessions per invoice per 24h to prevent abuse). |
-
-**Infrastructure (no auth — runs under Firebase Admin SDK):**
+**Customer-facing callables** (require `email_verified`, no `tenantId` claim)
 
 | Function | Notes |
 |---|---|
-| `stripeWebhook` | Routes by Stripe `account` field → tenant lookup → invoice update. See Phase 4. |
-| `scheduledFirestoreExport` | Daily backup to Cloud Storage. See Backup section. |
+| `getCustomerInvoices` | collection-group query on the lowercased email, max 100 (drafts + logo size A-05; pagination R8) |
+| `getCustomerInvoiceDetail` | email must match `customer.email`; strips `payToken` |
+
+Not built: `getCustomerQuotes` (P6). Customer PDF download is the Next.js route `GET /api/pdf/invoice` (and `/api/pdf/quote`) with a Firebase ID token and dual auth — tenant claim or verified matching email — replacing the planned `downloadInvoicePDF` callable.
+
+**Token-authenticated callables** (no Firebase auth — the signed pay token is the auth)
+
+| Function | Notes |
+|---|---|
+| `verifyInvoicePayToken` | Returns a discriminated `VerifyResult` (`ok` \| `paid` \| `refunded` \| `regenerated` \| `not-available`); surcharge from the snapshot plus the `cardSurcharge` kill switch (D3) |
+| `createPayTokenCheckoutSession` | `stripePayments` of the invoice's tenant; max 10 sessions per invoice per 24h; direct charge on the tenant's Stripe account |
+
+There is intentionally no `payInvoice` callable. The portal's "Pay Now" redirects to `/pay/{payToken}` — one checkout code path.
+
+**Infrastructure**
+
+| Function | Trigger | Notes |
+|---|---|---|
+| `processRecurringInvoices` | schedule, daily 06:00 UTC | skips tenants without `recurringInvoices`; auto-pauses a template after 3 consecutive failures |
+| `scheduledFirestoreExport` | schedule, daily 03:00 UTC | `gs://{projectId}-firestore-backups/daily/{YYYY-MM-DD}` |
+| `recheckPendingDomains` | schedule, every 5 minutes | Vercel domain status for tenants in `dns_pending` / `ssl_pending` |
+| `onPaymentIncidentCreated` | Firestore create on `tenants/{t}/invoices/{i}/paymentIncidents/{id}` | emails active owners (D5) |
+| `sesEventsWebhook` | HTTPS (SNS subscription) | SES delivery/bounce/complaint events → `lastEmailStatus` (D5) |
+
+Stripe webhooks are Next.js routes, not Cloud Functions — see Phase 4.
 
 ### Invoice/quote CRUD pattern (admin-SDK only — C1 fix)
 
-All invoice and quote mutations go through dedicated callables. Direct client writes are blocked by Firestore rules. This is the C1 fix from the round 3 audit and removes the entire `tenantSnapshot`-forgery and field-tamper class of bugs.
+All invoice and quote mutations go through dedicated callables; direct client writes are blocked by rules. This removes the `tenantSnapshot`-forgery and field-tamper class of bugs entirely.
 
-**Standard create/update shape:**
-```typescript
-export const createInvoice = onCall(async (request) => {
-  const tenantId = request.auth?.token.tenantId;
-  if (!tenantId) throw new HttpsError('unauthenticated', 'No tenant');
-  await requireFeature(tenantId, 'invoices');
+`createInvoice` (`functions/src/invoices/createInvoice.ts`), in order:
 
-  const input = validateInvoiceInput(request.data);  // schema validation
+1. `readClaims` → `requireTenant`; `requireFeature(tenantId, "invoices")` returns the resolved feature map.
+2. `validateInvoiceInput` — customer name/email (email lowercased at the write boundary, C2); 1–100 line items through the shared `validateLineItems`, where each line's `taxable` defaults to `applyTax` (D4); `dueDate` and optional `issueDate` as `YYYY-MM-DD`; notes ≤ 2000 characters.
+3. Read `meta/settings`. `buildTenantSnapshot(meta, features)` freezes branding, tax, currency, e-Transfer email, and the effective surcharge flag (D3); `inlineLogoOrThrow` embeds the logo as a ≤ 500 KB base64 data URL and fails the whole create if the logo can't be fetched.
+4. `computeLineItems` and `computeInvoiceTotals(lineItems, { rate: meta.taxRate, name: meta.taxName })` — server math only; client totals are never accepted.
+5. One transaction: increment `counters/invoice.value`, create `invoices/{prefix}-{0001}` with `status: 'draft'`, and sign the pay-token JWT (`PAY_TOKEN_SECRET`, 60 days, `payTokenVersion: 1`).
 
-  // C2 fix — lowercase email at the write boundary, ALWAYS.
-  const customerEmail = String(input.customer.email || '').trim().toLowerCase();
-  if (!customerEmail) throw new HttpsError('invalid-argument', 'Email required');
+**`updateInvoice`** accepts only mutable fields (customer, line items, `applyTax`, dates, notes) and recomputes totals from the **frozen snapshot's** tax rate and name — never current meta. Paid and refunded invoices are immutable. Editing a *sent* invoice does not yet bump `payTokenVersion` (A-08).
 
-  // Snapshot current tenant branding (frozen legal document)
-  const meta = (await db.doc(`tenants/${tenantId}/meta`).get()).data();
+**`deleteInvoice`** — owner/admin; hard delete; refuses `paid` (A-12: sent invoices should be voided instead).
 
-  // Inline the logo as a base64 data URL so the invoice survives future logo
-  // rotations/deletions. See Phase 6 "Immutable logo snapshot" for rationale.
-  const logoDataUrl = meta.logoUrl ? await inlineLogoOrThrow(meta.logoUrl) : null;
+**`markInvoicePaid`** — owner/admin manual fallback for payments outside Stripe (`manual` | `etransfer` | `cash`); refuses drafts and double payment. The pay token is implicitly dead afterwards because verify and checkout only accept `sent | unpaid | overdue | partial`.
 
-  const tenantSnapshot = {
-    version: 1,                        // P2 fix — schema-version snapshots
-    name: meta.name, logo: logoDataUrl, address: meta.address,
-    primaryColor: meta.primaryColor, secondaryColor: meta.secondaryColor,
-    fontFamily: meta.fontFamily, faviconUrl: meta.faviconUrl,
-    taxRate: meta.taxRate, taxName: meta.taxName,
-    businessNumber: meta.businessNumber, emailFooter: meta.emailFooter,
-    currency: meta.currency,
-  };
-
-  // Server computes totals — never trust client math
-  const totals = computeInvoiceTotals(input.lineItems, meta.taxRate, input.applyTax);
-
-  // Atomic: counter increment + invoice create in one transaction
-  const invoiceId = await db.runTransaction(async (tx) => {
-    const counterRef = db.doc(`tenants/${tenantId}/counters/invoiceCounter`);
-    const counterSnap = await tx.get(counterRef);
-    const next = (counterSnap.exists ? counterSnap.data().count : 0) + 1;
-    tx.set(counterRef, { count: next }, { merge: true });
-
-    const id = `${meta.invoicePrefix}-${String(next).padStart(4, '0')}`;
-    tx.set(db.doc(`tenants/${tenantId}/invoices/${id}`), {
-      ...input,
-      customer: { ...input.customer, email: customerEmail },
-      tenantSnapshot,
-      totals,
-      status: 'draft',
-      createdAt: FieldValue.serverTimestamp(),
-      createdBy: request.auth.uid,
-    });
-    return id;
-  });
-
-  return { invoiceId };
-});
-```
-
-**`updateInvoice`** accepts only mutable fields (line items, customer details, status) — **never `tenantSnapshot`, `createdAt`, `tenantId`, `tenantSnapshot.taxRate`, or computed totals**. Server recomputes totals on every update. If the customer email changes, lowercase it again.
-
-**`deleteInvoice`** is a hard delete for MVP (soft-delete UI deferred). Owner/admin role required.
-
-**`markInvoicePaid`** is a manual fallback for cases where payment happened outside Stripe (cash, e-transfer). Sets `status: 'paid', paidAt: serverTimestamp(), paymentMethod: 'manual' | 'etransfer' | 'cash'`. Owner/admin only. Stripe webhook does the same thing for online payments — they're separate code paths intentionally. **Important:** on transition to `paid`, the invoice's pay token is implicitly invalidated by the verify path checking `status !== 'paid'` before accepting a checkout attempt. No need to rotate the token itself.
-
-Same shape for `createQuote` / `updateQuote` / `deleteQuote`. `convertQuoteToInvoice` (below) reuses the snapshot + counter logic.
+Quotes mirror this (`createQuote`, `updateQuote`, `deleteQuote`; no pay token). `convertQuoteToInvoice` reuses the snapshot and counter logic and carries per-line taxability through.
 
 ### Invoice pay-link generation and verification
 
@@ -1037,107 +983,68 @@ Note: `chargeCustomerCardFees`, `cardFeePercent`, and `etransferEmail` must be a
 
 **Race-condition guarantee (C2):** a customer can have a Stripe Checkout session already open at the moment of regeneration — Stripe Checkout sessions live for 24 hours after creation and can be completed at any point. The session's `metadata.payTokenVersion` is frozen at session-creation time. The webhook (Phase 4) detects this mismatch and auto-refunds. `regenerateInvoicePayLink` itself does NOT need to call `stripe.checkout.sessions.expire()` — letting the webhook handle it keeps the race-guard logic in one place (the webhook) instead of two (regenerate + webhook), and correctly handles the case where the customer was literally in the middle of typing their card number when regenerate fired.
 
-### React Email + Resend — transactional email system
+### React Email + Amazon SES — transactional email system
 
-**All outgoing emails use React Email templates rendered server-side in Cloud Functions, sent through Resend.**
+> **D5 (2026-09-13):** Amazon SES replaced Resend. Templates, design principles, and sanitization rules are unchanged; transport, idempotency, and delivery feedback moved to SES.
 
-Reasoning: email clients render HTML/CSS wildly differently (Gmail strips styles, Outlook mangles tables, Apple Mail auto-inverts in dark mode). React Email is a component library specifically built for cross-client compatibility — it handles the inline-CSS and dark-mode meta-tag mechanics so templates don't break in production. Without a shared template system, every email-sending function will hand-roll its own HTML and the platform ends up with the email equivalent of the old Vite app's dual `cs-toast`/`inv-toast` problem.
+**All outgoing email is rendered with React Email in Cloud Functions and sent through `functions/src/emails/send.ts`.** No other file talks to SES, and the Next.js app sends no email.
 
-**Package layout:**
+Why React Email: email clients render HTML and CSS very differently (Gmail strips styles, Outlook mangles tables, Apple Mail auto-inverts in dark mode). A shared component system handles inline CSS and dark-mode meta tags so templates don't break in production, and every email composes the same layout instead of hand-rolling HTML.
+
+**Package layout (as built):**
 
 ```
-functions/
-  emails/
-    components/
-      TenantEmailLayout.tsx    ← shared shell: <Html>, <Head>, header w/ logo, footer, color-scheme meta
-      Button.tsx               ← primary CTA, tenant primaryColor with computed foreground
-      Divider.tsx
-    templates/
-      InvoiceSent.tsx          ← "Acme sent you an invoice" — primary CTA: "Pay Invoice" (direct pay link)
-      PaymentReceipt.tsx       ← "Payment received" — receipt summary, link to portal
-      MagicLinkSignIn.tsx      ← portal magic-link email
-      StaffInvite.tsx          ← staff invitation email (Phase 5 invitation flow)
-      QuoteSent.tsx            ← "Acme sent you a quote" — CTA: "View Quote" → portal
-      RecurringInvoiceSent.tsx ← "Your monthly invoice from Acme is ready"
-    send.ts                    ← Resend client wrapper with from/replyTo conventions
+functions/src/emails/
+  components/
+    TenantEmailLayout.tsx    ← shared shell: logo header, footer, color-scheme meta
+    Button.tsx               ← primary CTA; tenant primaryColor with computed foreground
+    Divider.tsx
+  templates/
+    InvoiceSent.tsx          ← "Pay Invoice" CTA → /pay/{payToken}
+    QuoteSent.tsx            ← "View Quote" → portal
+    RecurringInvoiceSent.tsx
+    StaffInvite.tsx
+                             ← not built yet: PaymentReceipt.tsx, MagicLinkSignIn.tsx
+  send.ts                    ← SES transport: sendEmail, sendInvitationEmail, pickReplyTo, formatFromHeader
+  sanitize.ts                ← sanitizeEmailField / sanitizeHeaderValue (R4)
+  format.ts                  ← formatCurrency
+  paymentIncident.ts         ← owner alert copy (platform-branded)
+  sesEvents.ts               ← sesEventsWebhook: SNS → lastEmailStatus
 ```
 
-**`<TenantEmailLayout>` contract (the shell every email composes):**
+**`send.ts` contract:**
 
-```tsx
-interface TenantEmailLayoutProps {
-  tenantSnapshot: TenantSnapshot;   // pulled from the invoice/quote doc being referenced,
-                                    // OR from meta for non-document emails (magic link, invite)
-  preview: string;                  // preview text shown in inbox list
-  children: React.ReactNode;        // the specific template body
-}
-```
+- **From** `"{Tenant name}" <EMAIL_FROM_ADDRESS>` (default `notifications@techflowsolutions.ca`). Sending from the verified platform identity keeps SPF/DKIM/DMARC aligned. Printable-ASCII names are quoted; others use RFC 2047 encoding. Owner incident alerts send as `"TechFlow"`.
+- **Reply-To** `pickReplyTo(meta.contactEmail, meta.etransferEmail)` — customer replies reach the contractor, not TechFlow. Non-negotiable for the bundled-website offering.
+- **Tags** `category` (`invoice` | `quote` | `recurring-invoice` | `staff-invite` | `payment-incident`), `tenantId`, `documentId` — SES events use them to find the document.
+- **Configuration set** `SES_CONFIGURATION_SET` (required for bounce/complaint events). **SES tenants**: `SES_TENANTS_ENABLED=true` passes `TenantName = tenantId` once tenants are provisioned in SES — each TechFlow tenant then gets isolated reputation metrics and automatic pausing.
+- **Idempotency** — an `idempotencyKey` claims `emailSends/{sha256(key)}` in a transaction before sending (`sending` → `sent`, released on failure, stale claims taken over after 10 minutes, 30-day TTL). Automated senders use it: recurring invoices per generated invoice, invitations per invite, incident alerts per incident and owner. Manual "Send" clicks don't — resending an invoice is a legitimate action.
+- Recipient addresses are never logged; category, tenant, document id, and SES message id are.
+- Every function that sends declares `secrets: EMAIL_SECRETS` (`AWS_SES_ACCESS_KEY_ID`, `AWS_SES_SECRET_ACCESS_KEY`).
 
-Every template renders inside this layout. Header includes the tenant logo (max-height 60px, max-width 200px — enforced in CSS so tall logos can't push content off-screen). Footer includes tenant name, address, and `emailFooter` text. Color-scheme meta tags (`color-scheme: light` + `supported-color-schemes: light`) are set in `<Head>` to prevent Apple Mail / Outlook dark-mode auto-inversion, which is the #1 source of unreadable email rendering.
+**Delivery feedback (closes P10):** SES configuration set → SNS topic → `sesEventsWebhook`. The webhook verifies each SNS message signature against the AWS signing certificate (https, `sns.<region>.amazonaws.com`), requires `TopicArn == SES_EVENTS_TOPIC_ARN`, confirms subscriptions only for AWS URLs, and writes `lastEmailStatus` (`delivered` | `bounced` | `complained` | `delayed` | `rejected`), a detail string, the message id, and a timestamp on the tagged invoice or quote. The dashboard can show "bounced" instead of letting the contractor assume "sent" reached the customer.
 
-**Email design principles (enforced by convention + code review, not lint):**
+**Payment incident alerts:** the Stripe Connect webhook writes `paymentIncidents/{kind}_{stripeObjectId}` (`auto-refund-version-mismatch`, `dispute-created`, `dispute-lost`, `tenant-mismatch`). The `onPaymentIncidentCreated` trigger emails every active owner when the document is created; `tenant-mismatch` is logged, not emailed. Deterministic ids mean a webhook redelivery updates the doc rather than re-triggering.
 
-1. **Single-column layout, 600px max width.** Multi-column breaks in half of email clients.
-2. **One primary CTA button.** Never two competing buttons. Secondary actions are small text links.
-3. **Logo max 200×60px.** Constrained in the layout so tenant logos of wild aspect ratios stay in bounds.
-4. **System fonts only** — Arial/Helvetica/sans-serif stack. No web fonts in email (they fail in ~50% of clients). This is independent of the tenant's `fontFamily` for web/PDF.
-5. **Tenant `primaryColor` used on the CTA button only.** Body text stays black on white. Over-coloring is the single biggest "looks cheap" signal.
-6. **Contrast guard applies** — CTA button foreground computed with `computeForeground(tenant.primaryColor)` from Phase 1.5.
-7. **Plain-text fallback** auto-generated by React Email. Required for spam-filter compliance (SpamAssassin penalizes HTML-only email).
-8. **From / Reply-To convention:** `From: "Acme Plumbing" <invoices@techflow.app>`, `Reply-To: tenant's business email from meta`. Sending from the platform domain maintains SPF/DKIM/DMARC alignment; Reply-To sends the customer's response to the tenant.
-9. **No "unsubscribe" link on transactional email.** These are transactional (invoice you owe), not marketing. CAN-SPAM and CASL both exempt transactional. Adding an unsubscribe link incorrectly signals this is marketing and hurts deliverability.
+**`<TenantEmailLayout>` contract:** props `tenant` (name, address, logoUrl, emailFooter, primaryColor), `preview`, `children`. The header shows the logo (max 200×60px) or the tenant name; the footer shows name, address, `emailFooter`, and "Questions? Reply to this email." `color-scheme: light` meta tags prevent Apple Mail and Outlook dark-mode inversion. Logos are currently passed as base64 data URLs, which Gmail and Outlook block (A-06).
 
-**P2 — `previewText` convention (mandatory per template).** Email clients (Gmail, Apple Mail, Outlook mobile) show preview text as a second line under the subject in the inbox list. Default (nothing) pulls from the first rendered text, which reads like garbage ("Hi Jane, Acme..."). Each template MUST define its own preview string tuned for inbox scanning — this is prime-real-estate marketing copy and directly drives open rates.
+**Email design principles (enforced by convention and code review):**
 
-Convention: each template exports a `buildPreviewText(props)` function returning a short (80–110 char) string. Examples:
+1. Single-column layout, 600px max width.
+2. One primary CTA button; secondary actions are small text links.
+3. Logo max 200×60px.
+4. System fonts only (Arial/Helvetica) — independent of the tenant's web/PDF `fontFamily`.
+5. Tenant `primaryColor` on the CTA button only; body text stays dark on white.
+6. Contrast guard — CTA foreground from `computeForeground(primaryColor)`.
+7. HTML and plain-text bodies are always sent (React Email `plainText` render) — spam filters penalise HTML-only mail.
+8. From the platform identity, Reply-To the tenant (above).
+9. No unsubscribe link on transactional email; CAN-SPAM and CASL exempt it, and adding one signals marketing.
 
-- **InvoiceSent** — `\`Invoice #\${invoiceNumber} from \${tenant.name} — $\${total} due \${dueDate}\`` → `"Invoice #INV-0042 from Acme Plumbing — $524.30 due Apr 27"`
-- **PaymentReceipt** — `\`Thanks for your $\${amount} payment to \${tenant.name}\`` → `"Thanks for your $524.30 payment to Acme Plumbing"`
-- **MagicLinkSignIn** — `\`Your sign-in link for the \${tenant.name} portal\`` → `"Your sign-in link for the Acme Plumbing portal"`
-- **StaffInvite** — `\`\${inviter.name} invited you to join \${tenant.name} on TechFlow\``
-- **QuoteSent** — `\`Quote #\${quoteNumber} from \${tenant.name} — $\${total}, valid until \${validUntil}\``
-- **RecurringInvoiceSent** — `\`Your \${frequency} invoice from \${tenant.name} is ready — $\${total}\``
+**`previewText` convention (mandatory per template):** each template exports a `build…PreviewText(props)` returning 80–110 characters, passed as `<TenantEmailLayout preview>`. Examples: InvoiceSent `Invoice #INV-0042 from Acme Plumbing — $524.30 due Apr 27`; StaffInvite `Jane Owner invited you to join Acme Plumbing on TechFlow`.
 
-Pass the result as the `preview` prop to `<TenantEmailLayout>`. Do not leave blank.
+**InvoiceSent content:** tenant logo; "Hi {firstName}"; "{tenant} has sent you an invoice for {total}"; large **Pay Invoice** CTA → `/pay/{payToken}`; small "view in your customer portal" link; collapsed summary (invoice number, due date, total); footer. No line-item table — the PDF and the pay page carry the detail. The email is the envelope, not the document.
 
-**InvoiceSent email content (the most important one):**
-
-- Header: tenant logo
-- Greeting: "Hi {customer.firstName}"
-- One sentence: "{tenant.name} has sent you an invoice for ${total}."
-- Large primary CTA button: **"Pay Invoice"** → `https://{platformDomain}/pay/{payToken}` (or `https://{customDomain}/pay/{payToken}` if tenant has custom domain)
-- Small secondary text link: "Or view in your customer portal" → `/portal/login`
-- Invoice summary (collapsed): invoice number, issue date, due date, total
-- Footer: tenant name, address, `emailFooter` text, "Questions? Reply to this email"
-- **What's NOT in the email:** full line-item breakdown, payment terms essay, promotional footer content, multiple CTAs. Line items go in the PDF attachment and the pay page. The email is the envelope, not the document.
-
-**Email sending convention:** every `sendXxxEmail` function (or inline send call from another function) goes through `emails/send.ts` which enforces the from/replyTo convention and adds idempotency keys to prevent duplicate sends on retry.
-
-**R4 — Tenant input sanitization before template render (mandatory).** Tenant-controlled string fields flow into email templates: `tenantSnapshot.name`, `tenantSnapshot.address`, `tenantSnapshot.emailFooter`, `tenantSnapshot.email` (used as `replyTo`), plus customer-side fields like `customer.name`. React Email escapes content via JSX by default (XSS is handled), BUT two risks remain:
-
-1. **Header smuggling via `replyTo`.** If `tenantSnapshot.email` contains `\r\nBcc: attacker@evil.com`, the Resend SDK may or may not sanitize — we don't rely on that. Sanitize at our layer.
-2. **Plain-text fallback channel.** React Email auto-generates plain-text from the JSX tree. Tenant-controlled newlines in `emailFooter` can inject content that reads like legitimate email body text to a reply-chain or forwarded email.
-
-Implementation — `functions/emails/sanitize.ts`:
-
-```typescript
-export function sanitizeEmailField(input: string | null | undefined, maxLen: number): string {
-  if (!input) return '';
-  // Strip CR/LF (header injection), NUL, and other control chars except tab.
-  const stripped = String(input).replace(/[\r\n\0\x01-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
-  // Collapse runs of whitespace, trim, cap length.
-  return stripped.replace(/\s+/g, ' ').trim().slice(0, maxLen);
-}
-
-// Usage — always sanitize tenant-controlled strings before passing to templates:
-const safeName = sanitizeEmailField(tenantSnapshot.name, 100);
-const safeAddress = sanitizeEmailField(tenantSnapshot.address, 300);
-const safeFooter = sanitizeEmailField(tenantSnapshot.emailFooter, 500);
-const safeReplyTo = sanitizeEmailField(tenantSnapshot.email, 200);
-// (Additionally validate safeReplyTo matches an email regex before using — reject if not.)
-```
-
-Enforcement: `emails/send.ts` accepts only sanitized props. Raw tenant strings never reach Resend's SDK or the template render. PR review rule: **no `dangerouslySetInnerHTML` in any file under `functions/emails/` — full stop.** This is a hard convention enforced at code-review time; if a future template legitimately needs raw HTML (e.g. rich-text customer notes), revisit with a specific sanitization library (`isomorphic-dompurify`).
+**R4 — tenant input sanitization (mandatory).** Tenant-controlled strings reach headers (From display name, Reply-To, Subject) and template text. `sanitizeEmailField(value, maxLen)` drops NUL, C0 controls, and DEL; folds CR/LF/tab runs into single spaces (defusing header smuggling like `\r\nBcc:`); trims; and caps length (name 100, address 300, footer 500, header values 200). `sanitizeHeaderValue` returns `null` when nothing remains, and `pickReplyTo` additionally requires a valid address. `send.ts` sanitizes every header it builds, and `TenantEmailLayout` re-sanitizes defensively. **No `dangerouslySetInnerHTML` anywhere under `functions/src/emails/`** — if a template ever needs rich text, revisit with a dedicated sanitizer.
 
 ### `convertQuoteToInvoice` — detail
 
@@ -1145,7 +1052,7 @@ Reads a quote document, creates a new invoice document in the same tenant with:
 - Same customer
 - Same line items (hourly services + line items)
 - Same totals and tax settings
-- New invoice number from `tenants/{tenantId}/counters/invoiceCounter`
+- New invoice number from `tenants/{tenantId}/counters/invoice`
 - Fresh `tenantSnapshot` (in case branding changed since quote was created)
 - Link back to the source quote: `sourceQuoteId: quoteId`
 - Marks the source quote as `status: 'converted'` and stores `convertedToInvoiceId`
@@ -1184,7 +1091,7 @@ export const getCustomerInvoices = onCall(async (request) => {
 Customer-facing payment creation is NOT a separate callable. The portal's "Pay Now" button resolves the invoice's current `payToken` (via `getCustomerInvoiceDetail`) and redirects the customer to `/pay/{payToken}`, which is the same public pay route reached from the email. The token-authenticated `createPayTokenCheckoutSession` callable handles Stripe session creation from there — one codepath, one set of guards.
 
 ### Invoice numbering
-`consumeNumber()` operates on `tenants/{tenantId}/counters/invoiceCounter` — still race-safe via Firestore transactions, just path-scoped.
+There is no separate `consumeNumber()` helper: `createInvoice`, `convertQuoteToInvoice`, and the recurring processor increment `tenants/{tenantId}/counters/invoice.value` (quotes: `counters/quote`) inside the same transaction that creates the document — race-safe and path-scoped.
 
 ### Stripe webhook
 - Webhook receives events with `account` field (Connect)
@@ -1217,7 +1124,7 @@ https://invoices.smithplumbing.ca/portal/invoices/{id}?tenantId={tenantId}
 6. Customer clicks the magic link in the second email. The return page detects it's a sign-in link via `isSignInWithEmailLink(auth, window.location.href)`, retrieves the email from `localStorage.getItem('emailForSignIn')`, and calls `signInWithEmailLink(auth, email, window.location.href)`. If `localStorage` is empty (different device/browser), prompt the customer to re-enter their email before completing sign-in. On success, clear the stored email from `localStorage`.
 7. Firebase Auth completes sign-in, sets `email_verified: true`. The page redirects to the original `/portal/invoices/[id]?invoiceId=...` URL (carried in the `actionCodeSettings.url`).
 8. The page now has an authenticated user with a verified email. It calls `getCustomerInvoiceDetail` (or reads Firestore directly if rules permit) and renders the invoice with the embedded `tenantSnapshot` branding.
-9. Customer can pay (triggers `payInvoice` → Stripe checkout on tenant's Connect account) or download PDF.
+9. Customer can pay (redirect to `/pay/{payToken}` → `createPayTokenCheckoutSession` → Stripe Checkout on the tenant's account) or download the PDF.
 
 **Key implementation details:**
 - `sendInvoiceEmail` Cloud Function must construct the portal URL with the correct domain (custom if set, generic if not) and include `tenantId` + `invoiceId` as query params.
@@ -1262,7 +1169,8 @@ src/
         page.tsx               ← business info + branding
         team/page.tsx          ← staff invitations (list + invite form + revoke)
       billing/page.tsx         ← Stripe Connect onboarding
-      accept-invite/page.tsx   ← staff invite acceptance landing (verifies token, sets claims)
+      accept-invite/page.tsx   ← staff invite acceptance landing (verifies token, sets claims);
+                                  as built at src/app/accept-invite/, outside the dashboard group
     (portal)/                  ← customer portal, requires email_verified, NO tenantId
       layout.tsx               ← wraps with CustomerPortalProvider + generateMetadata(tenant)
       portal/
@@ -1283,7 +1191,8 @@ src/
         invoice/route.ts       ← Next.js proxy → Cloud Run pdf-service (auth: tenant OR customer)
         quote/route.ts
       webhooks/
-        stripe/route.ts
+        stripe/platform/route.ts  ← platform-scope events (R5)
+        stripe/connect/route.ts   ← connected-account events (D1)
   lib/
     firebase/
       client.ts                ← client SDK init
@@ -1367,28 +1276,32 @@ Mirrors `TenantContext` but scoped to what a customer can see. Loads `getCustome
 
 ### `lib/features.ts` — canonical feature list
 
+Two identical copies must stay in sync: `src/lib/features.ts` (UI gating) and `functions/src/shared/features.ts` (enforcement) — the functions package compiles separately.
+
 ```typescript
-export const DEFAULT_FEATURES = {
-  invoices:          true,   // core
-  customers:         true,   // core
-  quotes:            false,
+export const FEATURE_DEFAULTS = {
+  invoices: true,
   recurringInvoices: false,
-  stripePayments:    false,
-  customDomain:      false,  // gated — only tenants on plans that include custom domains
-  bookingSystem:     false,
-  // add new keys here
+  quotes: true,
+  customDomain: false,
+  stripeConnect: false,
+  stripePayments: false,
+  etransfer: true,
+  multiCurrency: false,
+  cardSurcharge: false,   // D3 — card surcharging ships disabled
 } as const;
 
-export type FeatureKey = keyof typeof DEFAULT_FEATURES;
+export type FeatureKey = keyof typeof FEATURE_DEFAULTS;
 
-export function resolveFeatures(
-  entitlements?: { features?: Partial<typeof DEFAULT_FEATURES> }
-) {
-  return { ...DEFAULT_FEATURES, ...(entitlements?.features ?? {}) };
-}
+// An explicit boolean override in entitlements/current.features wins;
+// otherwise the code default applies.
+export function resolveFeature(
+  key: FeatureKey,
+  tenantOverrides: Partial<Record<FeatureKey, boolean>> | null | undefined,
+): boolean;
 ```
 
-**Critical property:** when a new feature key is added to this constant, every existing tenant immediately gets the default value (usually `false`) at read time. No Firestore backfill ever needed.
+**Critical property:** when a new key is added, every existing tenant gets its default at read time — no Firestore backfill. Server side, `requireFeature(tenantId, key)` throws `permission-denied` and returns the resolved map; `loadFeatures(tenantId)` resolves every key without throwing.
 
 ### `lib/tenant/TenantContext.tsx`
 
@@ -1405,8 +1318,8 @@ export function TenantProvider({ children }) {
   const { user } = useAuth();
   const tenantId = user?.claims.tenantId;
 
-  const meta = useFirestoreDoc(`tenants/${tenantId}/meta`);
-  const entitlements = useFirestoreDoc(`tenants/${tenantId}/entitlements`);
+  const meta = useFirestoreDoc(`tenants/${tenantId}/meta/settings`);
+  const entitlements = useFirestoreDoc(`tenants/${tenantId}/entitlements/current`);
   const features = useMemo(() => resolveFeatures(entitlements), [entitlements]);
 
   return (
@@ -1494,7 +1407,9 @@ When 50 tenants run on the same codebase, "the PDF is broken" from one tenant wi
    Sentry.setTag('tenantId', claims.tenantId ?? 'none');
    ```
 4. For Cloud Functions: `npm install @sentry/node` in `functions/`, init in the function entry point, wrap handlers with `Sentry.withScope` to tag tenantId per request.
-5. Separate Sentry projects per environment (`techflow-dev`, `techflow-staging`, `techflow-prod`) so dev noise doesn't pollute prod alerts.
+5. Separate Sentry projects per environment (`techflow-saas-dev`, `techflow-saas-staging`, `techflow-saas-prod`) so dev noise doesn't pollute prod alerts.
+
+**As built:** the Next.js side uses `instrumentation.ts` / `instrumentation-client.ts` rather than the wizard's `sentry.*.config.ts`, but those files sit at the repo root and are not loaded yet (A-01). Cloud Functions Sentry (step 4) is not wired.
 
 **Cost:** Sentry free tier (5k events/month) is enough for MVP. Paid tier ($26/month) when usage outgrows free.
 
@@ -1520,7 +1435,7 @@ export async function generateMetadata({ params }): Promise<Metadata> {
     return { title: 'TechFlow', icons: { icon: '/favicon.ico' } };
   }
 
-  const meta = (await adminDb.doc(`tenants/${tenantId}/meta`).get()).data();
+  const meta = (await adminDb.doc(`tenants/${tenantId}/meta/settings`).get()).data();
   return {
     title: meta?.name ?? 'Invoice',
     icons: {
@@ -1567,7 +1482,7 @@ Rationale: the pay-token is bearer-auth in the URL path. Standard URLs leak via 
 
 **Render order (top to bottom):**
 
-1. **Branded header** — tenant logo (from `tenantSnapshot.logoUrl`), tenant name. Background uses `tenantSnapshot.primaryColor` with `computeForeground()` for the text. Height ~80px.
+1. **Branded header** — tenant logo (from `tenantSnapshot.logo`), tenant name. Background uses `tenantSnapshot.primaryColor` with `computeForeground()` for the text. Height ~80px.
 
 2. **Invoice summary card** — invoice number, issue date, due date, total in large type. Line items collapsed by default with an "Itemized view" toggle that expands the full table. Customer name shown as "Billed to: {name}".
 
@@ -1609,55 +1524,63 @@ Rationale: the pay-token is bearer-auth in the URL path. Standard URLs leak via 
 
 ---
 
-## Phase 4 — Stripe Connect Express
+## Phase 4 — Stripe Connect (Standard-equivalent accounts, direct charges)
+
+> **D1 (2026-09-13):** connected accounts are created with controller properties equivalent to Standard, not legacy Express, and webhook scopes are corrected to Stripe's actual delivery model.
 
 ### Flow
 
-1. **Tenant signs up** → lands on `/billing`, sees "Connect your Stripe account" CTA.
-2. **Connect onboarding:** `POST /api/stripe/connect/start` creates an `AccountLink` via Stripe API, returns URL. Tenant redirects to Stripe-hosted onboarding.
-3. **Return URL:** `/billing/return` — Cloud Function checks account status via `stripe.accounts.retrieve()`, stores `stripeAccountId` on `tenants/{tenantId}/meta` AND writes the reverse lookup doc `stripeAccounts/{stripeAccountId}` with `{ tenantId }` in the same batched write. The webhook relies on this reverse lookup — if it's missing, the first Connect payment event can't be routed. Both writes must be in a single batch so they can't diverge.
-4. **Checkout session creation:** Uses `stripeAccount` parameter to charge on the connected account:
+1. **Tenant opens `/billing`** — gated by the `stripePayments` entitlement. "Your plan doesn't include card payments" (entitlement) and "your Stripe account isn't ready" (`stripeStatus`) are separate states.
+2. **`startConnectOnboarding`** (callable, owner/admin) creates the account once and reuses it on later attempts; an account deleted in Stripe (`resource_missing`) is recreated:
    ```typescript
-   stripe.checkout.sessions.create({ ... }, { stripeAccount: tenant.stripeAccountId });
+   stripe.accounts.create({
+     country: currency === "USD" ? "US" : "CA",
+     email: ownerEmail,
+     controller: {
+       losses: { payments: "stripe" },     // Stripe carries negative-balance liability
+       fees: { payer: "account" },         // the contractor pays their own Stripe fees
+       requirement_collection: "stripe",   // Stripe collects KYC — no business_type or capabilities up front
+       stripe_dashboard: { type: "full" }, // refunds and disputes handled in the contractor's Stripe Dashboard
+     },
+     metadata: { tenantId },
+   });
    ```
-5. **Webhook routing:** Connect webhooks include `account` field. Use it to look up the tenant. Keep a separate platform-level webhook for account updates.
-6. **Platform fee:** Optional. Not set initially. Easy to add later via `application_fee_amount`.
+   `meta.stripeAccountId` **and** the `stripeAccounts/{accountId} → { tenantId }` reverse lookup are written in one batch at creation, so Connect events route even if the tenant never comes back through the return URL. The callable returns an `account_onboarding` AccountLink (`refresh_url` `/billing?stripe=refresh`, `return_url` `/billing/return`).
+3. **`/billing/return` → `completeConnectOnboarding`** re-fetches the account and writes `meta.stripeStatus` plus the reverse lookup in one batch.
+4. **Checkout** is a direct charge on the tenant's account — `stripe.checkout.sessions.create({...}, { stripeAccount: meta.stripeAccountId })` — see "Token-authenticated checkout" below.
+5. **Platform fee:** none. Can be added later with `application_fee_amount`.
 
-### ⚠️ Two separate webhook types required
+**Why Standard-equivalent:** TechFlow earns no platform fee, so it should carry no payment risk. With legacy Express plus direct charges the platform was liable for any contractor's negative balance (refunds, lost chargebacks) and paid per-account Connect fees. `stripe_dashboard.type` is immutable per account — changing it after onboarding means new Stripe accounts for every tenant.
 
-Stripe Connect requires **two** webhook configurations. Missing either one breaks a critical flow:
+### Two webhook endpoints, two scopes (R5)
 
-**1. Platform webhook** — receives account-level events about your Connect tenants:
-- `account.updated` — fires when a connected account's **capabilities or status change** (e.g. `charges_enabled` flips to true after Stripe completes identity verification, or `details_submitted` becomes true, or a requirement becomes due). This is NOT where you first learn about a new connection — `stripeAccountId` is obtained synchronously at the OAuth return step (Phase 4 step 3) when the tenant returns from Stripe-hosted onboarding. Use `account.updated` to keep the tenant's capability state in sync (e.g. surface "Stripe needs more info from you" in the UI when `requirements.currently_due` is non-empty, or mark the account as ready-to-charge when `charges_enabled === true`).
-- `account.application.deauthorized` — tenant disconnected their Stripe account. Clear `stripeAccountId` from meta.
-- Register this in Stripe Dashboard → Developers → Webhooks → "Add endpoint" at the platform level.
+Stripe delivers events in two scopes. Each endpoint has its own signing secret and rejects misrouted events with 400 so a misconfigured registration surfaces during setup.
 
-**Note on the `stripePayments` entitlement flag:** This feature flag is controlled by the platform admin (Reggie) via the `entitlements` doc, **not auto-flipped by any webhook event**. `account.updated` tells you whether the tenant *can* accept charges from Stripe's perspective; the `stripePayments` entitlement tells you whether the platform has *granted* them the ability to use payment features in this app. Those are separate concerns. The `/billing` page should reflect both: "your plan doesn't include Stripe payments" (entitlement) vs "your Stripe account isn't ready yet" (account.updated state).
+**1. Platform scope — `POST /api/webhooks/stripe/platform`** (`STRIPE_PLATFORM_WEBHOOK_SECRET`). Events about TechFlow's own Stripe account. Nothing needs handling today (no platform billing): the route verifies the signature, rejects events carrying `event.account`, logs, and returns 200.
 
-**2. Connect webhook** — receives payment events from ALL connected accounts:
-- `checkout.session.completed` — customer paid an invoice. Route by `event.account` → tenant lookup → verify `metadata.payTokenVersion` matches invoice (C2 guard — auto-refund + audit if not) → mark invoice `status: 'paid'`, write `paidAmountCents` + `surchargeAmountCents` + `paymentMethod: 'card'` + `stripeChargeId`.
-- `payment_intent.payment_failed` — mark invoice payment as failed; do not change invoice status (customer can retry).
-- `charge.refunded` — **R1 fix.** Fires when tenant issues a refund from Stripe Dashboard OR when the webhook itself auto-refunds (C2 version-mismatch). Handler: read `charge.payment_intent` → look up invoice via `stripeChargeId` reverse lookup (store this field at `checkout.session.completed` time). If `amount_refunded === amount` → set invoice `status: 'refunded'`, write `refundedAt`, `refundedAmountCents`. If partial (`amount_refunded < amount`) → set `status: 'partially-refunded'`, write `refundedAmountCents`. Either way, do NOT clear `paidAmountCents`/`surchargeAmountCents` — those record what was originally charged and are needed for accounting reconciliation.
-- `charge.dispute.created` — **R1 fix.** Customer filed a chargeback. Handler: set invoice `disputed: true`, `disputedAt`, `disputeReason: event.data.object.reason` (e.g. `'fraudulent'`, `'product_not_received'`). Do NOT change `status` — disputes can be won. Send notification email to tenant owner with link to Stripe Dashboard dispute evidence form: "Customer {name} disputed invoice #{X}. You have {N} days to submit evidence." Include the dispute deadline from `event.data.object.evidence_details.due_by`.
-- `charge.dispute.closed` — **R1 fix.** Dispute resolved. Handler: if `status === 'lost'` → set invoice `status: 'refunded'` (chargeback is effectively a forced refund), `disputed: false`, `disputeOutcome: 'lost'`. If `status === 'won'` → set `disputed: false`, `disputeOutcome: 'won'`, invoice stays `paid`. Notify tenant owner of outcome either way.
-- Register this in Stripe Dashboard → Developers → Webhooks → "Add endpoint" → select "Listen to events on Connected accounts."
+**2. Connected-accounts scope — `POST /api/webhooks/stripe/connect`** (`STRIPE_CONNECT_WEBHOOK_SECRET`). Every event carries `event.account` and is routed through `stripeAccounts/{event.account}`; unknown accounts get 200 plus an error log. Idempotency uses `stripeEvents/{event.id}` (A-03 open). Register it with "Listen to events on Connected accounts" and these events:
 
-**Invoice schema additions for R1** (add to the Phase 1 invoice doc spec): `stripeChargeId: string | null`, `refundedAt: Timestamp | null`, `refundedAmountCents: number | null`, `disputed: boolean` (default false), `disputedAt: Timestamp | null`, `disputeReason: string | null`, `disputeOutcome: 'won' | 'lost' | null`. Invoice `status` enum gains `'refunded'` and `'partially-refunded'` values.
+- `checkout.session.completed` — `metadata.tenantId` must match the routed tenant (otherwise a `tenant-mismatch` incident). **C2 guard:** if `metadata.payTokenVersion` differs from the invoice's current version, the tenant regenerated the link mid-checkout — refund on the connected account and write an `auto-refund-version-mismatch` incident instead of marking paid. Otherwise set `status: 'paid'`, `paidAt`, `paymentMethod: 'card'`, `paidAmountCents`, `surchargeAmountCents`, `stripeChargeId` (A-02 open).
+- `payment_intent.payment_failed` — log only; the customer can retry.
+- `charge.refunded` — `refunded` (full) or `partially-refunded`, with `refundedAt` and `refundedAmountCents`; the original paid amounts are kept for accounting.
+- `charge.dispute.created` — `disputed: true`, `disputedAt`, `disputeReason`; status unchanged (disputes can be won); `dispute-created` incident, so owners are emailed the evidence deadline.
+- `charge.dispute.closed` — `won`: clear `disputed`, `disputeOutcome: 'won'`. Otherwise `status: 'refunded'`, `disputeOutcome: 'lost'`, and a `dispute-lost` incident.
+- `account.updated` — mirror capability state into `meta.stripeStatus`, only for the tenant's current `stripeAccountId`.
+- `account.application.deauthorized` — `data.object` is the Application, the account is `event.account`. Clear `stripeAccountId` and `stripeStatus` when it matches and delete the reverse lookup. A real case with full-dashboard accounts: the contractor can disconnect TechFlow from their own Stripe Dashboard.
 
-**Implementation:** Single `/api/webhooks/stripe` route handler that checks `event.account`:
-- If `event.account` is present → it's a Connect event (payment on a connected account). Look up tenant by `stripeAccountId`.
-- If `event.account` is absent → it's a platform event (account lifecycle). Read `event.data.object.id` to get the account ID.
+Incidents are written to `tenants/{t}/invoices/{i}/paymentIncidents/{kind}_{stripeObjectId}`; the `onPaymentIncidentCreated` Cloud Function emails active owners (D5).
 
-Both webhook types can share the same endpoint URL, but the Stripe signature verification uses **different webhook secrets** (platform secret vs Connect secret). The handler must try both secrets or use separate endpoints.
+**The `stripePayments` entitlement** is controlled by the platform admin and never flipped by a webhook: `account.updated` says whether a tenant *can* charge; the entitlement says whether the platform *allows* card payments for them.
 
 ### Development tasks
-- Stripe Connect Express app setup in Stripe dashboard
-- **Two webhook registrations** in Stripe Dashboard: platform-level + Connect-level (can share one endpoint URL but need separate signing secrets)
-- Webhook endpoint: `/api/webhooks/stripe` (single endpoint, routes by event type + account field, verifies with correct signing secret)
-- Onboarding UI component for `/billing`
-- Feature gate: `stripePayments` feature must be enabled to access `/billing`
+
+- Complete the Connect platform profile in the Stripe Dashboard, in both test and live mode.
+- Register both webhook endpoints per environment (Deploy Runbook).
+- `/billing` onboarding UI — built. Public pay page — not built.
 
 ### Credit card surcharge — line-item application
+
+> **D3 (2026-09-13): shipped disabled.** Everything in this section is built but only takes effect for tenants whose entitlements set `features.cardSurcharge: true` (default `false`). `updatePaymentSettings` refuses to switch surcharging on without the flag; `/settings/payments` hides the controls; `buildTenantSnapshot` freezes `chargeCustomerCardFees` as *flag AND tenant setting*; checkout and the pay page read the surcharge from the invoice's frozen snapshot through `effectiveCardSurcharge()` — never from current meta, so the fee charged is the fee disclosed — with the flag as a kill switch. **Do not enable it for any tenant** until credit-only card-funding detection is integrated (Stripe automatic surcharge or a compliance partner): Visa and Mastercard forbid surcharging debit and prepaid cards, and Checkout's `card` type includes them. The code sample below shows the April design; as built, the percent and flag come from the snapshot, not `tenantMeta`.
 
 When a tenant has `chargeCustomerCardFees === true`, the credit card processing fee is added to the Stripe Checkout session as a **separate line item**, not rolled into the invoice total. This preserves the invoice's real amount for accounting and makes the fee visible to the customer (a Visa/Mastercard disclosure requirement).
 
@@ -1768,153 +1691,46 @@ The function is rate-limited (Cloud Functions v2 `maxInstances: 10`, `cpu: 1`) a
 
 ### Signup flow (transactional)
 
-**⚠️ `onSignup` MUST be a callable Cloud Function (`onCall`), NOT an Auth `onCreate` trigger.**
+**⚠️ `onSignup` MUST be a callable Cloud Function (`onCall`), NOT an Auth `onCreate` trigger.** A trigger fires asynchronously, so the client can't know when claims exist; `getIdToken(true)` would race it and signup would fail intermittently and be impossible to debug. With a callable the client awaits completion, then refreshes the token.
 
-Why: If `onSignup` were an `onCreate` trigger, it would fire asynchronously when `createUserWithEmailAndPassword()` completes. The client would have no way to know when the trigger has finished setting custom claims. Calling `getIdToken(true)` immediately after `createUser...` would race against the trigger — sometimes claims are set, sometimes they aren't. The signup flow would fail intermittently and be impossible to debug.
+**Client side** (`src/app/(auth)/signup/page.tsx`):
 
-With a callable function, the client explicitly calls `onSignup({ businessName, ... })` and **awaits the response**. Only after the callable returns does the client call `getIdToken(true)`. No race condition.
-
-**Client-side signup flow:**
 ```typescript
-// 1. Create Firebase Auth user (client SDK)
 const { user } = await createUserWithEmailAndPassword(auth, email, password);
-// 2. Call onSignup callable — AWAIT it
-await httpsCallable(functions, 'onSignup')({ businessName, ... });
-// 3. NOW force token refresh — claims are guaranteed to be set
-await user.getIdToken(true);
-// 4. Safe to redirect
-router.push('/dashboard');
+await httpsCallable(functions, "onSignup")({ businessName });  // AWAIT — claims now set
+sendEmailVerification(user).catch(() => {});                   // fire-and-forget
+await user.getIdToken(true);                                    // pull the new claims
+router.replace("/dashboard");
 ```
 
-**tenantId generation (C4 fix from round 3 audit):**
+**tenantId generation (C4):** slug of the business name (lowercase, non-alphanumeric runs → `-`, trimmed, max 40 characters, fallback `tenant`) with `-1`, `-2`, … on collision, chosen inside a transaction that checks `tenants/{candidate}/meta/settings` (`functions/src/shared/tenantId.ts`). Readable ids show up in Firestore paths, Stripe metadata, Sentry tags, and support conversations.
 
-`tenantId` is a slug derived from the business name with a numeric collision suffix. Generated server-side inside a transaction so two simultaneous signups with the same business name can't both grab the same ID. Done BEFORE the batched write below.
+**Server side** (`functions/src/tenants/onSignup.ts`):
 
-```typescript
-async function generateTenantId(businessName: string): Promise<string> {
-  const base = businessName.toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 40) || 'tenant';
+1. Requires auth with an email; rejects a user who already has a membership (not yet transactional — A-12).
+2. Validates `businessName` (2–100 characters) and generates the tenantId.
+3. One batch writes:
+   - `tenants/{id}/meta/settings` ← `defaultTenantMeta(businessName, ownerEmail)` (`functions/src/shared/meta.ts`)
+   - `tenants/{id}/entitlements/current` ← `{ plan: "starter", maxInvoicesPerMonth: 10, features: {} }`
+   - `tenants/{id}/counters/invoice` and `counters/quote` ← `{ value: 0 }` (C5 — the first numbering transaction never reads a missing doc)
+   - `users/{uid}` ← `{ uid, email, displayName: null, defaultTenantId }`
+   - `userTenantMemberships/{uid}_{id}` ← `{ uid, tenantId, role: "owner", invitedBy: null, deletedAt: null }`
+4. Sets custom claims `{ tenantId, role: "owner" }` **after** the batch commits, so a partial failure never leaves claims pointing at a tenant that doesn't exist.
 
-  return await db.runTransaction(async (tx) => {
-    for (let suffix = 0; suffix < 100; suffix++) {
-      const candidate = suffix === 0 ? base : `${base}-${suffix}`;
-      const ref = db.doc(`tenants/${candidate}/meta`);
-      const snap = await tx.get(ref);
-      if (!snap.exists) return candidate;
-    }
-    throw new HttpsError('resource-exhausted', 'Could not generate tenant ID');
-  });
-}
-
-// In onSignup:
-const newTenantId = await generateTenantId(businessName);
-```
-
-This produces stable, human-readable IDs (`smith-plumbing`, `smith-plumbing-1`, `smith-plumbing-2`) that show up in Firestore paths, Stripe metadata, Sentry tags, and support conversations. Random UUIDs would work too but make debugging painful.
-
-**Server-side `onSignup` callable** then creates the tenant docs in one batched write:
-
-```typescript
-// 1. Firebase Auth user already exists (created by client SDK above)
-// 2. Generate tenantId (above) — wrapped in its own transaction
-// 3. Set custom claims
-await admin.auth().setCustomUserClaims(uid, { tenantId: newTenantId, role: 'owner' });
-// ⚠️ Claims are set server-side but the client's current token is STALE.
-// The client MUST call user.getIdToken(true) after this callable returns.
-// See "Firebase Auth custom claims propagation delay" in Phase 3.
-
-// 3. Firestore docs
-const batch = db.batch();
-batch.set(db.doc(`tenants/${newTenantId}/meta`), {
-  name: businessName,
-  logoUrl: null,
-  address: '',
-  primaryColor: '#667eea',           // sensible default
-  secondaryColor: '#764ba2',         // sensible default
-  fontFamily: 'Inter',               // sensible default
-  faviconUrl: null,
-  customDomain: null,                // configured later in /settings
-  customDomainStatus: null,          // populated by setupCustomDomain when a domain is added
-  // ⚠️ These six fields are also part of the meta schema and MUST be
-  // initialized here. If any are omitted, the FIRST invoice's tenantSnapshot
-  // will embed `undefined` values → PDF renders with missing tax line,
-  // HST math fails, currency formatting crashes. This is the #1 most
-  // expensive-to-debug bug in the whole plan. Do not remove these defaults.
-  taxRate: 0.13,                     // Ontario HST — tenant can change in /settings
-  taxName: 'HST',                    // tenant can change in /settings
-  businessNumber: '',                // empty string, not null — PDF string templates
-  invoicePrefix: 'INV',              // tenant can change in /settings
-  emailFooter: '',                   // empty string, tenant can add in /settings
-  currency: 'CAD',                   // ISO 4217, tenant can change in /settings
-  stripeAccountId: null,
-  stripeStatus: {                    // R1 — preflight + banner source of truth.
-    chargesEnabled: false,           // Flipped true only by `account.updated` webhook
-    payoutsEnabled: false,           // after tenant completes Connect onboarding.
-    detailsSubmitted: false,         // payInvoice reads chargesEnabled; dashboard banner
-    currentlyDue: [],                // reads disabledReason + currentlyDue.
-    disabledReason: null,
-    updatedAt: serverTimestamp(),
-  },
-  etransferEmail: null,              // configured in /settings before first send
-  chargeCustomerCardFees: false,
-  cardFeePercent: 2.4,
-  surchargeAcknowledgedAt: null,
-  deletedAt: null,                   // soft-delete marker
-  createdAt: serverTimestamp(),
-});
-batch.set(db.doc(`tenants/${newTenantId}/entitlements`), {
-  plan: 'free',
-  features: {
-    invoices: true,
-    customers: true,
-    // everything else inherits false from DEFAULT_FEATURES
-  },
-  limits: { maxInvoicesPerMonth: 10 },
-  updatedAt: serverTimestamp(),
-});
-batch.set(db.doc(`users/${uid}`), {
-  primaryTenantId: newTenantId,            // active tenant for the user's current ID token
-  email: String(userEmail).toLowerCase(),  // C2 — lowercase at write boundary
-});
-// Membership record — MVP writes one per user, but the collection exists from
-// day one so post-MVP multi-tenant access (bookkeepers/VAs) is a UI change,
-// not a schema migration. See P7 in DEFERRED and `userTenantMemberships` in
-// the Phase 1 schema block.
-batch.set(db.doc(`userTenantMemberships/${uid}_${newTenantId}`), {
-  uid,
-  tenantId: newTenantId,
-  role: 'owner',
-  invitedBy: null,
-  createdAt: serverTimestamp(),
-  deletedAt: null,
-});
-// C5 fix from round 3 audit — initialize counters in the same batch.
-// Without this, the first consumeInvoiceNumber() / consumeQuoteNumber()
-// transaction reads a non-existent doc and crashes (or has to lazy-init,
-// which is an extra branch nobody remembers to write correctly).
-batch.set(db.doc(`tenants/${newTenantId}/counters/invoiceCounter`), {
-  count: 0,
-  createdAt: serverTimestamp(),
-});
-batch.set(db.doc(`tenants/${newTenantId}/counters/quoteCounter`), {
-  count: 0,
-  createdAt: serverTimestamp(),
-});
-await batch.commit();
-```
+**`defaultTenantMeta` initialises every field.** If any snapshot field were `undefined`, the first invoice would freeze it and PDFs or tax math would break silently — the most expensive-to-debug bug class in the plan. Defaults: `contactEmail` = owner email, `primaryColor #667eea`, `secondaryColor #764ba2`, `fontFamily Inter`, `taxRate 0.13`, `taxName HST`, `invoicePrefix INV`, `currency CAD`, `customDomainStatus.stage unverified`, `stripeStatus` all false, `chargeCustomerCardFees false`, `cardFeePercent 2.4`, every nullable field `null`. Do not remove defaults.
 
 ### Settings page (`/settings`)
-- Edit business name, address, email-from
+- Edit business name, reply-to email (`contactEmail`, D5), address
 - Edit branding: primaryColor, secondaryColor, fontFamily picker, favicon upload
 - **Contrast guard on color pickers** — primaryColor and secondaryColor inputs run `meetsWcagAA(hex, '#FFFFFF')` on change; if the ratio is below 4.5:1, show inline error "This color is too light — button text won't be readable. Try a darker shade." Save button stays disabled until valid. `updateTenantBranding` callable re-validates server-side.
-- Logo upload → Firebase Storage at `tenants/{tenantId}/logo.png` (Storage rules mirror Firestore).
+- Logo upload → Firebase Storage at `tenants/{tenantId}/logo.png` (Storage rules mirror Firestore). As built the path is `tenants/{tenantId}/logo.{ext}`, and the storage rule for it is syntactically invalid today (A-13).
   **⚠️ After upload, call `getDownloadURL(ref)` and store the returned public https URL in `meta.logoUrl` — NOT the Storage path.** The token-bearing download URL is what's publicly fetchable; the raw Storage path (e.g. `tenants/acme/logo.png`) requires authenticated Storage access, which customers and the PDF renderer don't have. Same rule for `favicon.ico` → `meta.faviconUrl`.
 - Favicon upload → Firebase Storage at `tenants/{tenantId}/favicon.ico` (see getDownloadURL note above)
 - Show current plan (read-only), button to contact for upgrade (manual for MVP)
 
 ### Payment settings (`/settings/payments`)
+
+> **D3:** controls 2–4 and the acknowledgment modal render only when the tenant's `cardSurcharge` feature is enabled (default off). The e-Transfer email field is always shown.
 
 Dedicated sub-page for everything payment-related. Separate from the main settings page because it has compliance implications (surcharging) and enough controls to warrant its own surface.
 
@@ -1987,22 +1803,22 @@ The signup flow only creates the *first* user (the owner) for a tenant. Any subs
 **Data model:** `tenants/{tenantId}/invitations/{inviteId}` — schema defined in Phase 1 Firestore structure. Token is hashed (SHA-256) before storage; the raw token is only in the invite email.
 
 **Flow:**
-1. Owner/admin on `/settings/team` enters `email` + `role` (`admin` | `member`), clicks Invite.
+1. Owner/admin on `/settings/team` enters `email` + `role` (`admin` | `staff`), clicks Invite.
 2. Client calls `createInvitation` callable with `{ email, role }`. Function requires caller to have `role in ['owner', 'admin']` on the target tenant.
-3. Function generates a random token (32 bytes, base64url), hashes it, writes `invitations/{inviteId}` with `{ email, role, token: hash, invitedBy: callerUid, createdAt, expiresAt: now + 7 days, acceptedAt: null }`.
-4. Function sends invite email containing `https://<portal-domain>/portal/accept-invite?tenantId={tenantId}&inviteId={inviteId}&token={rawToken}` (via Resend — see email provider decision in Decisions Required section).
+3. Function generates a random token (32 bytes, base64url), hashes it, writes `invitations/{inviteId}` with `{ tenantId, email, role, tokenHash, invitedBy: callerUid, createdAt, expiresAt: now + 7 days, acceptedAt: null, revokedAt: null }`, refusing a duplicate pending invite for the same email.
+4. Function sends the invite email through SES (once per invitation, D5) containing `{APP_URL}/accept-invite?tenantId={tenantId}&invitationId={inviteId}&token={rawToken}`.
 5. Invitee clicks link. If not signed in, they either sign in (existing Firebase account matching the invite email) or sign up with a password. **The email on their Firebase account MUST match the invite's `email` field** — the accept function verifies this to prevent invite theft.
 6. Client calls `onAcceptInvite({ tenantId, inviteId, token })`. Function:
    - Loads the invite doc, checks `acceptedAt == null` and `expiresAt > now`.
    - Hashes the supplied token and compares to stored hash.
    - Verifies `request.auth.token.email == invite.email` and `email_verified == true`.
    - Calls `admin.auth().setCustomUserClaims(uid, { tenantId, role })`.
-   - Creates (or updates) `users/{uid}` with `{ primaryTenantId: tenantId, email }`.
-   - Creates `userTenantMemberships/${uid}_${tenantId}` with `{ uid, tenantId, role, invitedBy: invite.invitedBy, createdAt, deletedAt: null }`. Post-MVP multi-tenant UI will let users switch `primaryTenantId` between memberships.
+   - Creates (or updates) `users/{uid}` with `{ uid, email, displayName: null, defaultTenantId: tenantId }`.
+   - Creates `userTenantMemberships/${uid}_${tenantId}` with `{ uid, tenantId, role, invitedBy: invite.invitedBy, createdAt, deletedAt: null }`. Post-MVP multi-tenant UI will let users switch `defaultTenantId` between memberships.
    - Marks invite `acceptedAt = serverTimestamp()`.
 7. Client calls `user.getIdToken(true)` to refresh claims (same propagation-delay fix as signup), then redirects to `/dashboard`.
 
-**Revocation:** owner/admin can delete the invite doc before it's accepted. After acceptance, they use `setUserRole` or disable the user in Firebase Auth.
+**Revocation:** before acceptance, owner/admin calls `revokeInvitation`, which stamps `revokedAt`/`revokedBy` (the doc is kept for audit). After acceptance, they use `setUserRole` or disable the user in Firebase Auth.
 
 **Edge cases:**
 - Invitee already has a Firebase account belonging to a different tenant → MVP still rejects at `onAcceptInvite` (one *active* tenant per user for MVP; the JWT claim can only point at one). The schema supports multi-tenant memberships from day one, so post-MVP this rejection is lifted and becomes a "switch active tenant" UI — no migration needed.
@@ -2017,9 +1833,9 @@ Two domain tiers per tenant:
 **Implementation:**
 
 - **`customDomain` field in tenant meta.** Set by Reggie (platform admin) during onboarding or by tenant in `/settings` (if on a plan that includes custom domains — feature-gated via `entitlements`).
-- **`customDomains/{domain}` Firestore collection.** Reverse lookup: `domain → tenantId`. Written by a Cloud Function triggered on meta update (when `customDomain` changes). This collection is what the middleware queries.
+- **`customDomains/{domain}` Firestore collection.** Reverse lookup: `domain → tenantId`. Written by the `setupCustomDomain` callable (owner/admin, `customDomain` feature) and removed by `removeCustomDomain`. The middleware reads it only on an Edge Config miss.
 - **Vercel domain provisioning.** Cloud Function calls the [Vercel Domains API](https://vercel.com/docs/rest-api/endpoints/domains) to add/remove the domain from the Vercel project when `customDomain` is set/changed.
-- **Next.js middleware** (`middleware.ts`):
+- **Next.js middleware** (`src/middleware.ts` — currently misplaced at the repo root and not loaded, A-01; becomes `src/proxy.ts` on Next 16):
   1. On every request, read `Host` header.
   2. If host is not `portal.techflowsolutions.ca` (the generic domain), query `customDomains/{host}` to get `tenantId`.
   3. If found, inject `tenantId` into request headers / cookies so the login page and portal can load that tenant's branding.
@@ -2055,7 +1871,7 @@ Two domain tiers per tenant:
   Even with Node.js runtime and the `config.matcher` above, the naive implementation runs one Firestore read per HTML page view per custom domain. Cold-path Firestore reads are 100–300ms — that's latency a user feels before the login page starts rendering. At 50 tenants × 1000 page views/day, it's also ~50k Firestore reads/day purely for domain resolution, when the data changes maybe once a month.
 
   **Required — Vercel Edge Config as the authoritative lookup, Firestore as the write-side source:**
-  1. The `setupCustomDomain` Cloud Function (the same one that manages Vercel Domains API + Firebase authorized domains) also writes `{ [domain]: tenantId }` to Vercel Edge Config via the Edge Config API.
+  1. The `setupCustomDomain` Cloud Function (the same one that manages Vercel Domains API + Firebase authorized domains) also writes `{ [domain]: tenantId }` to Vercel Edge Config via the Edge Config API. Edge Config keys must match `^[\w-]+$`, so the host has to be encoded — the current `domain:{host}` key is invalid (A-07).
   2. Middleware reads from Edge Config (`get(host)` from `@vercel/edge-config`) — sub-50ms globally replicated, no Firestore read on the hot path.
   3. Firestore `customDomains/{domain}` remains the durable source of truth (for audit + recovery if Edge Config is ever inconsistent), and is what the Cloud Function updates first.
   4. Eventual-consistency lag (~seconds) between "tenant saves custom domain" and "domain resolves in middleware" is acceptable — adding a custom domain is already a multi-minute DNS propagation operation; a few seconds of cache lag is invisible.
@@ -2063,7 +1879,7 @@ Two domain tiers per tenant:
 
   This is Phase 5 scope, not a later optimization — building the middleware without it means ripping it out and redoing it under load.
 
-- **Branded login page.** The `/portal/login` route reads the resolved `tenantId` (from middleware), fetches `tenants/{tenantId}/meta` (public-read subset: name, logoUrl, primaryColor, secondaryColor, fontFamily, faviconUrl), and renders the login page with the tenant's branding. The customer sees "Smith Plumbing" on the login screen, not "TechFlow."
+- **Branded login page.** The `/portal/login` route reads the resolved `tenantId` (from middleware), fetches `tenants/{tenantId}/meta/settings` via `getTenantBranding` (subset: name, logoUrl, primaryColor, faviconUrl), and renders the login page with the tenant's branding. The customer sees "Smith Plumbing" on the login screen, not "TechFlow."
 
   **⚠️ This fetch MUST be server-side via Firebase Admin SDK — never client-side.**
   A visitor to the login page is unauthenticated. The Firestore rule `allow read: if request.auth.token.tenantId == tenantId` blocks unauthenticated reads of `meta`. A client-side `getDoc()` call returns permission-denied, the login page renders with no branding (or crashes), and the whole bundled-offering value prop breaks on the first customer load.
@@ -2074,7 +1890,7 @@ Two domain tiers per tenant:
 - **Firebase Auth authorized domains (automated).** Each custom domain must be added to Firebase Auth's authorized domains list for magic-link redirects to work. **This MUST be automated** — at 50 clients, manual addition is not viable. The same Cloud Function that calls the Vercel Domains API must also call the Firebase Auth Admin SDK (`admin.auth().projectConfigManager().updateProjectConfig()` or the Identity Toolkit REST API) to add the domain to the authorized list. When a custom domain is removed, the function must also remove it from the authorized domains list. This is a single Cloud Function that does four things atomically: (1) add/remove Vercel domain, (2) add/remove Firebase Auth authorized domain, (3) write/delete `customDomains/{domain}` doc, (4) write/delete the `{ [domain]: tenantId }` entry in Vercel Edge Config for middleware caching.
 
 - **Domain verification state surfaced in `/settings/domain`.** Adding a custom domain isn't instant — DNS propagation (5 min to 48 hrs) and SSL issuance (Vercel's Let's Encrypt flow, usually <10 min but sometimes longer) each have their own state. If we don't show this, contractors enter a domain, see "saved," and then email support when it doesn't work an hour later.
-  - Store `customDomainStatus` in tenant meta: `{ stage: 'pending-dns' | 'pending-ssl' | 'verified' | 'error', message, checkedAt }`.
+  - Store `customDomainStatus` in tenant meta: `{ stage: 'unverified' | 'dns_pending' | 'ssl_pending' | 'verified' | 'error', message, checkedAt }`.
   - The `setupCustomDomain` Cloud Function polls the Vercel Domains API (`GET /v10/domains/{domain}/config` + `GET /v9/projects/{id}/domains/{domain}`) for `verified` + `verification` records, and updates `customDomainStatus` as the state changes. A scheduled function re-checks every 5 minutes while `stage !== 'verified'`.
   - `/settings/domain` UI shows the current stage with a banner: DNS records the tenant needs to add (pulled from Vercel's `verification` field), current status, last-checked timestamp, and a "re-check now" button.
   - Until `stage === 'verified'`, the portal at the custom domain is not reachable, but the generic `portal.techflowsolutions.ca` still works. Outgoing invoice emails should keep linking to the generic domain until verification completes (don't send customers to a broken URL).
@@ -2129,7 +1945,7 @@ Streamed back through Next.js to the caller
 
 ### Cloud Run `pdf-service` (ported from old repo)
 
-- **Reads branding from the `tenantSnapshot` passed in by the proxy — NOT from Firestore.** This is critical: the Phase 0 decision locks invoices as frozen legal documents. A contractor who rebranded after sending this invoice must not have the PDF retroactively change. The snapshot contains: name, logoUrl, address, primaryColor, secondaryColor, fontFamily, faviconUrl, taxRate, taxName, businessNumber, emailFooter, currency. Cloud Run also never reads Firestore — it's a pure render service.
+- **Reads branding from the `tenantSnapshot` passed in by the proxy — NOT from Firestore.** This is critical: the Phase 0 decision locks invoices as frozen legal documents. A contractor who rebranded after sending this invoice must not have the PDF retroactively change. The snapshot contains: name, logo (base64), address, primaryColor, secondaryColor, fontFamily, faviconUrl, taxRate, taxName, businessNumber, emailFooter, currency. Cloud Run also never reads Firestore — it's a pure render service.
 - Renders an HTML template with Tailwind-compiled CSS inline, using snapshot values
 - Returns PDF bytes
 
@@ -2195,19 +2011,19 @@ Either way, the `tenantSnapshot.logoUrl` stored *must not* be a mutable Firebase
 
 1. Copy the existing `pdf-service/` directory into the new monorepo (or keep it in a separate repo — either works for Cloud Run).
 2. Update the HTML template to read from `tenantSnapshot` fields (new: `primaryColor`, `secondaryColor`, `fontFamily`, `faviconUrl`, `currency`, `emailFooter`). Old template only knew about `name`, `logo`, `address`, `taxRate`.
-3. Rename `logo` → `logoUrl` in the template (matches new meta field).
+3. ~~Rename `logo` → `logoUrl` in the template~~ — superseded by the immutable logo snapshot: templates read the base64 `tenantSnapshot.logo`.
 4. Add `X-Api-Key` header check at the Express middleware level. Reject missing/wrong key with 401.
 5. Remove any Firebase Admin SDK or Firestore code from Cloud Run (it's not needed — proxy sends all data).
 6. Redeploy under three new service names: `pdf-service-dev`, `pdf-service-staging`, `pdf-service-prod`.
 
 ### Per-tenant branding in PDFs
 HTML template reads from the **invoice's `tenantSnapshot`** (frozen at creation time):
-- Logo (from `tenantSnapshot.logoUrl` — the public Firebase Storage download URL, or base64-inlined)
+- Logo (from `tenantSnapshot.logo`, the base64 data URL inlined at creation)
 - Business name in header
 - Address in footer
 - primaryColor, secondaryColor for accent styling (used sparingly — see design rules below)
 - fontFamily for text rendering
-- taxRate, taxName, businessNumber for tax line items
+- `totals.taxes[]` for tax rows (one row per tax, exempt lines marked when an invoice mixes both — D4), plus `businessNumber`
 
 ### PDF design rules (the "polished and professional" target)
 
@@ -2291,7 +2107,7 @@ const qrDataUrl = await QRCode.toDataURL(payUrl, { width: 120, margin: 1 });
 1. **Create 2–3 test tenants end-to-end:**
    - Signup → custom claims set correctly
    - Settings → edit business info, upload logo
-   - Stripe Connect → complete Express onboarding (test mode)
+   - Stripe Connect → complete onboarding (test mode)
    - Create customer
    - Create invoice → number increments per-tenant
    - Send invoice email
@@ -2303,7 +2119,7 @@ const qrDataUrl = await QRCode.toDataURL(payUrl, { width: 120, margin: 1 });
 2. **Firestore rules verification (emulator):**
    - Tenant A cannot read Tenant B's data at any path
    - Tenant A cannot write to their own `entitlements` doc
-   - Platform admin can write any `entitlements` doc
+   - No client (platform admin included) can write `entitlements`; the platform admin edits them in the Firebase Console
    - User without `tenantId` claim cannot read anything
    - Logged-out user cannot read anything
 
@@ -2343,7 +2159,7 @@ const qrDataUrl = await QRCode.toDataURL(payUrl, { width: 120, margin: 1 });
    - Invitee clicks link with DIFFERENT email signed in → rejected with clear error
    - Invite past `expiresAt` → rejected
    - Invite already accepted (re-use of link) → rejected (one-time use)
-   - Owner revokes pending invite → invite doc deleted, link no longer works
+   - Owner revokes pending invite → invite stamped `revokedAt`, link no longer works
    - Invitee already belongs to a different tenant → rejected (one-user-one-tenant MVP constraint)
 
 7. **Observability verification:**
@@ -2360,8 +2176,8 @@ const qrDataUrl = await QRCode.toDataURL(payUrl, { width: 120, margin: 1 });
 - Delete test tenants
 - Remove any `console.log` debug output
 - Verify no stale Puppeteer test route was left on the marketing site (there shouldn't be — Cloud Run is the locked path — but double-check)
-- Document env vars required for production
-- Document the platform admin Firestore console procedure for flipping features
+- Document env vars required for production — done (Environment Strategy & Deploy Runbook)
+- Document the platform admin Firestore console procedure for flipping features — done (Feature Flag System → Platform admin workflow)
 
 ### First real onboarding
 - Reggie walks through the signup flow as if he were a real customer
@@ -2388,13 +2204,13 @@ const qrDataUrl = await QRCode.toDataURL(payUrl, { width: 120, margin: 1 });
 **2. Scheduled managed exports — daily, 30-day retention.**
 - Firestore managed export to a Cloud Storage bucket, triggered by Cloud Scheduler → Cloud Function.
 - Runs daily at 03:00 UTC (low-traffic window).
-- Destination bucket: `gs://techflow-firestore-backups/daily/{YYYY-MM-DD}/`.
+- Destination bucket: `gs://{projectId}-firestore-backups/daily/{YYYY-MM-DD}/`, created in `northamerica-northeast2`.
 - Lifecycle rule on the bucket: delete objects older than 30 days automatically.
 - **Use case:** PITR window missed (>7 days ago), regulatory "we need last month's state," or disaster recovery to a different project.
 
 **3. Manual snapshot before risky deploys — convention, not automation.**
 - Before deploying: rule changes, Cloud Function changes touching multiple collections, or any schema migration.
-- One command: `gcloud firestore export gs://techflow-firestore-backups/manual/$(date +%Y%m%d-%H%M%S)`
+- One command: `gcloud firestore export gs://{projectId}-firestore-backups/manual/$(date +%Y%m%d-%H%M%S)`
 - Kept until the deploy is confirmed stable (usually 48 hours), then deleted manually or left for the 30-day lifecycle.
 - **Use case:** rollback path if the deploy breaks something the tests didn't catch.
 
@@ -2406,7 +2222,7 @@ import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { google } from 'googleapis';
 
 export const scheduledFirestoreExport = onSchedule(
-  { schedule: 'every day 03:00', timeZone: 'UTC', region: 'us-central1' },
+  { schedule: 'every day 03:00', timeZone: 'UTC', region: SCHEDULER_REGION },  // northamerica-northeast1 (D2)
   async () => {
     const firestore = google.firestore('v1');
     const projectId = process.env.GCLOUD_PROJECT!;
@@ -2441,7 +2257,7 @@ Requires:
 
 **Scenario B: "Yesterday's full snapshot."**
 ```
-gcloud firestore import gs://techflow-firestore-backups/daily/2026-04-10
+gcloud firestore import gs://{projectId}-firestore-backups/daily/2026-04-10
 # Restores all collections to the target database
 ```
 
@@ -2496,18 +2312,23 @@ Before launch, run the restore procedure at least once end-to-end:
    - Frontend gating (hooks, `<FeatureGate>`, route guards, nav filtering) = UX
    - Cloud Function `requireFeature()` = security
 4. **Never enforce features in Firestore rules** (too expensive, causes doc-read cost on every write). Enforce at the Cloud Function layer instead.
-5. **Tenants can read their own entitlements but cannot write.** Only `role: platform_admin` can write. Splitting `entitlements` from `meta` is what makes this rule enforceable.
+5. **Tenants can read their own entitlements but cannot write.** No client can write them — the platform admin edits `entitlements/current` in the Firebase Console. Splitting `entitlements` from `meta` is what makes this rule enforceable.
 
-### Canonical feature keys (v1)
-| Key | Default | Notes |
+### Canonical feature keys (as built)
+
+| Key | Default | Gates |
 |---|---|---|
-| `invoices` | true | Core — always on |
-| `customers` | true | Core — always on |
-| `quotes` | false | Starter plan feature |
-| `recurringInvoices` | false | Pro plan feature |
-| `stripePayments` | false | Requires Stripe Connect onboarding |
-| `customDomain` | false | Gated — only plans that include custom domains (e.g. Pro). Enables the `/settings` custom-domain UI and the Vercel/Firebase Auth automation. |
-| `bookingSystem` | false | Future — not yet built |
+| `invoices` | true | Invoice callables, invoice PDF, pay flow |
+| `quotes` | true | Quote callables, quote PDF, `convertQuoteToInvoice` (with `invoices`) |
+| `recurringInvoices` | false | `createRecurringInvoice`; per-tenant check in `processRecurringInvoices` |
+| `stripePayments` | false | Stripe Connect onboarding, `/billing`, billing banner, card checkout |
+| `customDomain` | false | `setupCustomDomain` and `/settings/domain` |
+| `cardSurcharge` | false | Card surcharging (D3) — keep off until credit-only card detection exists |
+| `etransfer` | true | Reserved — not checked; e-Transfer display is driven by `meta.etransferEmail` |
+| `stripeConnect` | false | Reserved — not checked anywhere |
+| `multiCurrency` | false | Reserved — not checked; currency is `CAD` \| `USD` per tenant |
+
+The April list's `customers` (always on, never gated) and `bookingSystem` (future placeholder) are not in code.
 
 ### Plan → feature bundles (sketch, not wired yet)
 ```typescript
@@ -2522,12 +2343,12 @@ This mapping is consumed by the Stripe subscription webhook (future phase), not 
 ### Platform admin workflow (MVP)
 Until an admin UI exists:
 1. Log into Firebase Console
-2. Navigate to `tenants/{tenantId}/entitlements`
+2. Navigate to `tenants/{tenantId}/entitlements/current`
 3. Edit the `features` object directly
 4. Tenant picks up change on next page load (real-time listener)
 
 ### Limits (non-feature entitlements)
-`entitlements.limits` holds numeric caps — enforced inside Cloud Functions alongside feature checks:
+As built, `entitlements/current.maxInvoicesPerMonth` exists (`onSignup` writes 10) but nothing enforces it yet. Planned shape — enforced inside Cloud Functions alongside feature checks:
 ```typescript
 { maxInvoicesPerMonth: 10, maxCustomers: 50 }
 ```
@@ -2535,155 +2356,127 @@ Not MVP-critical. Shape is reserved so it can be added later without schema migr
 
 ---
 
-## Timeline Summary
+## Environment Strategy & Deploy Runbook
 
-| Phase | Work | Estimated |
-|---|---|---|
-| 0 | Decisions & Puppeteer test | Done (except Puppeteer test) |
-| 1 | Data model, rules, auth claims, **backup setup** | 5–7 days |
-| 2 | Cloud Functions (with feature gates, customer-facing, convertQuoteToInvoice) | 4–6 days |
-| 3 | Frontend scaffolding + TenantProvider + gating + customer portal shell + **Sentry** | 5–7 days |
-| 4 | Stripe Connect Express (tenant-initiated + customer-initiated pay) + dual webhooks + **stripeAccounts reverse lookup** | 5–7 days |
-| 5 | Onboarding flow + settings + custom domains + branded login + **staff invitation flow** | 6–8 days |
-| 6 | PDF generation (Cloud Run port + Next.js proxy with dual auth) | 3–4 days |
-| 7 | Testing + backup restore drill + first onboarding + **customer portal e2e** | 4–6 days |
-| **Total** | | **~8–10 weeks** focused solo-dev work, +30–50% buffer for life |
-
-**Increase over prior estimate:** ~1 week added for the customer portal (routes + context + customer-facing functions + portal UI), backup setup, and convertQuoteToInvoice. Additional ~2–3 days for custom domain provisioning + branded login middleware (added 2026-04-12). Magic link flow spec, dual Stripe webhooks, claims propagation handling, customer e2e test matrix, and environment strategy added 2026-04-12 (from Sonnet audit) — no additional time since these are specifications of work already estimated, not new features.
-
-**Revision 2026-04-12 (deep audit round 2, Sonnet 4.5 + Gemini):**
-- +1 day Phase 5 for staff invitation flow (new callable functions, new routes, test coverage)
-- +0.5 day Phase 3 for Sentry setup across Next.js + Cloud Functions
-- No net timeline change from the critical fixes (missing meta defaults, SSR branded login, Edge-runtime middleware decision, stripeAccounts reverse lookup, getDownloadURL logo upload) — they're corrections to existing work, not new scope.
-- Deferred from this revision: optimistic locking (not MVP-critical at 1–3 staff per tenant), GDPR account-deletion function (not blocking launch), platform billing for Reggie (zero clients today, build when needed).
-
----
-
-## Environment Strategy
-
-**Set up from day one.** Mixing dev and production credentials is how you accidentally charge real credit cards in test mode or corrupt live data during development.
+**Set up per environment from day one.** Mixing dev and production credentials is how you charge real cards in test mode or corrupt live data. Nothing is deployed as of 2026-09-13; this section is the checklist to follow, and it replaces the operational notes that previously lived outside the repo.
 
 ### Three environments
 
-| Environment | Purpose | Firebase Project | Stripe Keys | Vercel Env Scope |
-|---|---|---|---|---|
-| **Development** | Local dev + CI | `techflow-dev` (new) | Stripe test mode keys (`sk_test_...`) | `development` |
-| **Staging** | Pre-production testing, client demos | `techflow-staging` (new) | Stripe test mode keys (separate from dev) | `preview` |
-| **Production** | Live client data | `techflow-prod` (new) | Stripe live mode keys (`sk_live_...`) | `production` |
+| Environment | Firebase project | Stripe | Vercel env scope |
+|---|---|---|---|
+| Development | `techflow-saas-dev` (exists; Firestore in `northamerica-northeast2`) | test mode | `development` |
+| Staging | `techflow-saas-staging` — create before Phase 7 testing | test mode, separate webhook endpoints | `preview` |
+| Production | `techflow-saas-prod` — create before the first client | live mode | `production` |
 
-### Required environment variables (all scoped per Vercel environment)
+`.firebaserc` aliases: `dev`, `staging`, `prod`. Local development runs on the emulators (`npm run emulators:functions`, `npm run seed:emulator`, `NEXT_PUBLIC_USE_EMULATORS=1`).
 
-```
-# Firebase
-NEXT_PUBLIC_FIREBASE_API_KEY
-NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN
-NEXT_PUBLIC_FIREBASE_PROJECT_ID
-FIREBASE_ADMIN_CLIENT_EMAIL        # server-only (not NEXT_PUBLIC_)
-FIREBASE_ADMIN_PRIVATE_KEY         # server-only
+### Regions (D2 — permanent, set at creation)
 
-# Stripe
-STRIPE_SECRET_KEY                  # sk_test_ for dev/staging, sk_live_ for prod
-STRIPE_PLATFORM_WEBHOOK_SECRET    # different per environment
-STRIPE_CONNECT_WEBHOOK_SECRET     # different per environment
-NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY
+| Resource | Region |
+|---|---|
+| Firestore `(default)` database | `northamerica-northeast2` (Toronto) — enable PITR and delete protection in prod |
+| Cloud Storage default bucket | `northamerica-northeast2` |
+| Backup bucket `{projectId}-firestore-backups` | `northamerica-northeast2`, lifecycle rule: delete after 30 days |
+| Callables, HTTP functions, Firestore triggers | `northamerica-northeast2` (`functions/src/shared/globalOptions.ts`) |
+| Scheduled functions and Cloud Scheduler jobs | `northamerica-northeast1` (Montréal — Scheduler isn't offered in Toronto) |
+| Cloud Run `pdf-service-{env}` | `northamerica-northeast2` |
+| Vercel functions | `yul1` (Montréal, `vercel.json`) |
+| Amazon SES | `ca-central-1` — must be the region that holds production access |
 
-# Email (transactional — provider decided in "Decisions Required" #3)
-RESEND_API_KEY                     # if Resend is chosen (recommended)
-# or ZOHO_EMAIL_USER / ZOHO_EMAIL_PASSWORD if Zoho is retained
-# Note: server-only. Cloud Functions reads this via defineSecret() too —
-# the Vercel env is only for Next.js API routes that send mail directly.
+### Vercel environment variables (per scope)
 
-# App
-NEXT_PUBLIC_APP_URL                # https://portal.techflowsolutions.ca for prod
+| Variable | Used by |
+|---|---|
+| `NEXT_PUBLIC_FIREBASE_API_KEY`, `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`, `NEXT_PUBLIC_FIREBASE_PROJECT_ID`, `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET`, `NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID`, `NEXT_PUBLIC_FIREBASE_APP_ID` | Firebase client SDK |
+| `NEXT_PUBLIC_FIREBASE_FUNCTIONS_REGION` | optional override; default `northamerica-northeast2` |
+| `NEXT_PUBLIC_APP_URL` | pay links in PDFs (`https://portal.techflowsolutions.ca` in prod) |
+| `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | pay page (when built) |
+| `NEXT_PUBLIC_SENTRY_DSN`, `SENTRY_DSN` | Sentry client and server (only load once A-01 is fixed) |
+| `FIREBASE_ADMIN_CLIENT_EMAIL`, `FIREBASE_ADMIN_PRIVATE_KEY` | Admin SDK in middleware, PDF routes, webhooks, branded pages — store the key with escaped `\n` |
+| `STRIPE_SECRET_KEY` | webhook auto-refunds |
+| `STRIPE_PLATFORM_WEBHOOK_SECRET`, `STRIPE_CONNECT_WEBHOOK_SECRET` | the two webhook routes |
+| `PDF_SERVICE_URL`, `PDF_SERVICE_API_KEY` | `/api/pdf/*` proxy |
+| `EDGE_CONFIG` (read connection string), `EDGE_CONFIG_ID`, `VERCEL_API_TOKEN`, `VERCEL_TEAM_ID` | custom-domain cache |
+| `PORTAL_GENERIC_HOST` | optional; default `portal.techflowsolutions.ca` |
 
-# PDF service (Cloud Run)
-PDF_SERVICE_URL                    # e.g. https://pdf-service-prod-abc123.a.run.app
-PDF_SERVICE_API_KEY                # shared secret, different per environment
-```
+The Next.js app sends no email and needs no AWS credentials (D5).
 
-### Cloud Functions environment configuration (separate from Vercel)
+### Cloud Functions secrets — `firebase functions:secrets:set NAME --project <projectId>`
 
-Cloud Functions do **NOT** read environment variables from Vercel. Firebase Functions v2 has its own configuration system that must be set up per Firebase project.
+| Secret | Used by |
+|---|---|
+| `PAY_TOKEN_SECRET` | pay-token sign/verify. Unique per environment (`openssl rand -base64 48`); rotating it invalidates every outstanding pay link |
+| `STRIPE_SECRET_KEY` | Connect onboarding, checkout |
+| `PDF_SERVICE_API_KEY` | `previewInvoicePDF`, `previewQuotePDF` |
+| `AWS_SES_ACCESS_KEY_ID`, `AWS_SES_SECRET_ACCESS_KEY` | every email sender (D5) |
+| `VERCEL_API_TOKEN`, `VERCEL_PROJECT_ID`, `VERCEL_TEAM_ID`, `EDGE_CONFIG_ID` | custom-domain provisioning and the 5-minute re-check |
 
-**Two kinds of config:**
-1. **Secrets** (sensitive values) — use `defineSecret()` from `firebase-functions/params`:
-   ```typescript
-   import { defineSecret } from 'firebase-functions/params';
-   const stripeSecret = defineSecret('STRIPE_SECRET_KEY');
-   const resendApiKey = defineSecret('RESEND_API_KEY');
+`functions/src/shared/stripe.ts` also declares `STRIPE_PLATFORM_WEBHOOK_SECRET` and `STRIPE_CONNECT_WEBHOOK_SECRET`, but no deployed function binds them — the webhooks run on Vercel.
 
-   export const sendInvoiceEmail = onCall(
-     { secrets: [resendApiKey] },
-     async (request) => {
-       const resend = new Resend(resendApiKey.value());
-       // ...
-     }
-   );
-   ```
-   Set per project: `firebase functions:secrets:set STRIPE_SECRET_KEY --project techflow-prod`
+### Cloud Functions non-secret config — `functions/.env.<projectId>`
 
-2. **Non-secret config** (publishable keys, URLs) — use `defineString()` or `.env.<project>` files in the functions directory:
-   ```
-   functions/.env.techflow-dev
-   functions/.env.techflow-staging
-   functions/.env.techflow-prod
-   ```
-   Firebase automatically loads the file matching the active project.
+| Variable | Default | Notes |
+|---|---|---|
+| `APP_URL` | `https://portal.techflowsolutions.ca` | links in emails, Stripe redirect URLs, invitation accept URL |
+| `PDF_SERVICE_URL` | — | the deterministic Cloud Run URL (below) |
+| `SES_REGION` | `ca-central-1` | |
+| `EMAIL_FROM_ADDRESS` | `notifications@techflowsolutions.ca` | must belong to a verified SES identity |
+| `SES_CONFIGURATION_SET` | — | required for bounce/complaint events |
+| `SES_EVENTS_TOPIC_ARN` | — | the only SNS topic `sesEventsWebhook` accepts |
+| `SES_TENANTS_ENABLED` | `false` | set `true` only after SES tenants are provisioned |
 
-**Required Cloud Functions secrets (set per project via `firebase functions:secrets:set`):**
-- `STRIPE_SECRET_KEY` (test key for dev/staging, live key for prod)
-- `STRIPE_PLATFORM_WEBHOOK_SECRET`
-- `STRIPE_CONNECT_WEBHOOK_SECRET`
-- `RESEND_API_KEY` (if Decision #3 lands on Resend)
-- `VERCEL_API_TOKEN` (for custom domain provisioning Cloud Function)
-- `PAY_TOKEN_SECRET` — HMAC signing key for invoice pay-link JWTs. Used by `createInvoice` (signs), `verifyInvoicePayToken` (verifies), `createPayTokenCheckoutSession` (re-verifies), and `regenerateInvoicePayLink` (re-signs with bumped version). **Must be unique per environment** — leaking the dev secret must not let anyone forge prod pay links. Generate with `openssl rand -base64 48`. Rotation: bumping this secret invalidates all outstanding pay tokens across the environment — tenants will need to resend invoices for any unpaid invoices. Acceptable tradeoff for a security incident; otherwise leave untouched.
+Vercel env vars and Cloud Functions secrets are parallel systems — both must be populated for every environment; a value present in one is `undefined` in the other.
 
-**Non-secret Cloud Functions config (`.env.<project>`):**
-- `APP_URL` (portal URL for email links)
-- `VERCEL_PROJECT_ID`
+### Deploy runbook (per environment, in order)
 
-Vercel env vars and Cloud Functions secrets are **parallel systems**. Both need to be populated for every environment. A value that exists in Vercel but not in Cloud Functions' secret store will be `undefined` at function runtime, and vice versa.
+**1. Google Cloud and Firebase**
+- Create the project; Firestore Native in `northamerica-northeast2`; the default Storage bucket in `northamerica-northeast2`.
+- Enable APIs: Cloud Functions, Cloud Run, Cloud Build, Artifact Registry, Eventarc, Cloud Scheduler, Secret Manager, Identity Toolkit.
+- Prod: enable Firestore PITR and delete protection.
+- Backups: create `{projectId}-firestore-backups` in the same region with a 30-day lifecycle rule; grant the functions service account `datastore.databases.export` and object create on the bucket.
+- Firestore TTL policies: collection group `payAttempts` on `expireAt`; `stripeEvents` on `expireAt`; `emailSends` on `expireAt`.
+- Run the emulator suites, take a manual export, then `firebase deploy --only firestore:rules,firestore:indexes,storage --project <projectId>` (fix A-04 and A-13 first).
+- Set the functions secrets and `functions/.env.<projectId>`, then `firebase deploy --only functions --project <projectId>`.
+- Firebase Auth: authorized domains include the portal domain (custom domains are added by `setupCustomDomain`); password-reset and verification email action URL → `https://<portal-domain>/auth/action`; **SMTP settings → SES SMTP credentials**, so auth emails send from the platform domain instead of `*.firebaseapp.com`.
+- Platform admin: `npx ts-node functions/src/scripts/setPlatformAdmin.ts <uid> <email>` with application default credentials.
 
-### Cloud Functions deployment (three environments, three deploys)
+**2. Cloud Run `pdf-service`**
+- `gcloud run deploy pdf-service-<env> --source ./pdf-service --region northamerica-northeast2 --memory 2Gi --cpu 2 --allow-unauthenticated` with `PDF_SERVICE_API_KEY` from Secret Manager (the API key, not IAM, protects the service); prod adds `--min-instances 1` (P3).
+- **R3, resolved differently:** Cloud Run domain mappings aren't offered in `northamerica-northeast2`. Use the deterministic URL `https://pdf-service-<env>-<PROJECT_NUMBER>.northamerica-northeast2.run.app` — it depends only on service name, project number, and region, so recreating the service keeps it. Set it as `PDF_SERVICE_URL` in both Vercel and functions.
 
-Vercel auto-deploys on git push. Firebase does NOT. Each environment's Cloud Functions must be deployed manually:
+**3. Vercel**
+- One project (marketing site + portal) with `vercel.json` regions `yul1`, the env vars above per scope, and the `portal.techflowsolutions.ca` domain (Cloudflare DNS record set to DNS-only, not proxied).
+- Create and connect an Edge Config store (`EDGE_CONFIG`); create a token with Domains and Edge Config scopes for the functions secrets.
 
-```bash
-firebase deploy --only functions --project techflow-dev
-firebase deploy --only functions --project techflow-staging
-firebase deploy --only functions --project techflow-prod
-```
+**4. Stripe** (test mode for dev and staging, live for prod)
+- Complete the Connect platform profile (D1 accounts: Stripe-liable, full dashboard).
+- Endpoint, scope *Your account*: `https://<portal>/api/webhooks/stripe/platform` → `STRIPE_PLATFORM_WEBHOOK_SECRET`.
+- Endpoint, scope *Connected accounts*: `https://<portal>/api/webhooks/stripe/connect` with `checkout.session.completed`, `payment_intent.payment_failed`, `charge.refunded`, `charge.dispute.created`, `charge.dispute.closed`, `account.updated`, `account.application.deauthorized` → `STRIPE_CONNECT_WEBHOOK_SECRET`.
 
-Same for rules and indexes:
-```bash
-firebase deploy --only firestore:rules,firestore:indexes,storage --project techflow-prod
-```
+**5. Amazon SES** (`ca-central-1`)
+- Domain identity `techflowsolutions.ca` with Easy DKIM: the three CNAMEs go in Cloudflare as DNS-only. The existing DMARC policy (`p=quarantine`) is satisfied by DKIM alignment.
+- Custom MAIL FROM subdomain (e.g. `mail.techflowsolutions.ca`: MX `feedback-smtp.ca-central-1.amazonses.com` and TXT `v=spf1 include:amazonses.com ~all`). This keeps SPF aligned without touching the root SPF record Zoho Mail relies on.
+- IAM user limited to `ses:SendEmail` on the identity (optionally conditioned on `ses:FromAddress`); its access keys become the two AWS secrets.
+- Configuration set (e.g. `techflow-transactional`) with an SNS event destination for Delivery, Bounce, Complaint, DeliveryDelay, and Reject → SNS topic → HTTPS subscription to the `sesEventsWebhook` URL (confirmed automatically). Set `SES_CONFIGURATION_SET` and `SES_EVENTS_TOPIC_ARN`.
+- SES SMTP credentials → Firebase Auth SMTP settings (step 1).
+- Later: one SES tenant per TechFlow tenant (identity and configuration set associated), then `SES_TENANTS_ENABLED=true`.
 
-**Recommendation for MVP:** an `npm run deploy:prod` script in the root `package.json` that runs the three commands for prod (functions, firestore, storage) in the correct order. A full CI/CD pipeline with per-branch deploys is a post-launch improvement; a simple script gets you to launch.
+**6. Before the first onboarding** — run the Phase 7 matrix on staging, perform the backup restore drill, and complete the Old-Repo Shutdown Checklist (delete the old Vite project's Cloud Functions and GitHub Pages site).
+
+### Secret rotation (P4)
+
+- `PDF_SERVICE_API_KEY`: allow old and new keys briefly, update Vercel and the functions secret, redeploy, remove the old key.
+- Stripe webhook secrets: roll in the Stripe Dashboard, update Vercel, redeploy.
+- Firebase Admin private key: create a new key, update Vercel, redeploy, delete the old key.
+- AWS SES access keys: create a second key, update both secrets, redeploy functions, deactivate then delete the old key.
+- `PAY_TOKEN_SECRET`: only on suspected exposure — it invalidates every outstanding pay link.
+- Cadence: shared secrets every 90 days; immediately on suspected exposure.
 
 ### Setup rules
-- **Never commit `.env` files.** Use Vercel's environment variable UI or `vercel env pull` for local dev. Cloud Functions secrets never touch git — `firebase functions:secrets:set` writes them to Google Secret Manager.
-- **Each Firebase project has its own Firestore, Auth, Storage, and Cloud Functions.** Security rules and function deploys target a specific project via `firebase use <alias>`.
-- **Stripe test mode vs live mode:** Stripe provides separate API keys. Test mode keys cannot charge real cards. Dev and staging both use test mode keys (but ideally from separate Stripe accounts or at least separate webhook endpoints so test data doesn't mix).
-- **Firebase Auth authorized domains** differ per project. Dev project authorizes `localhost:3000`. Staging authorizes the Vercel preview URL. Production authorizes `portal.techflowsolutions.ca` + all custom domains.
-- **Local development:** Use `firebase emulators:start` for Firestore + Auth during local dev to avoid polluting the dev Firebase project. Vercel CLI (`vercel dev`) runs the Next.js app locally with the `development` env vars.
 
-### When to create the projects
-- **`techflow-dev`**: Create during Phase 1 setup (this is where initial development happens).
-- **`techflow-staging`**: Create before Phase 7 testing (needed for the end-to-end test matrix).
-- **`techflow-prod`**: Create before first real client onboarding. Keep it empty until launch day.
-
----
-
-## Immediate Next Steps (in order)
-
-1. **Provision new Firebase project** (`techflow-dev`) for the rebuild. Keep the old one running untouched as a reference.
-2. **Create new Next.js repo** — scaffold with App Router, Tailwind, TypeScript, Firebase client + admin SDKs, base folder structure from the Phase 3 tree above.
-3. **Deploy "hello world" to Vercel** on a fresh project to confirm the deploy pipeline before writing real code.
-4. **Port the Cloud Run `pdf-service`** from the old repo to a new Cloud Run service (`pdf-service-dev`). Add API key auth. Verify it renders a test invoice end-to-end. This can run in parallel with Phase 1.
-5. **Start Phase 1** — schema docs, rules, auth claim helpers, platform admin user.
-
-Execution on Phase 1 can start immediately — the Puppeteer/Vercel evaluation has been resolved (Cloud Run is locked).
+- Never commit `.env*` or `.secret.local` (both gitignored). Secrets live only in Vercel env and Google Secret Manager.
+- Before any `firebase deploy`, run the emulator test suites and verify against a fake tenant (CLAUDE.md).
+- Vercel deploys on git push; Firebase does not — deploy functions, rules, and indexes explicitly per project.
 
 ---
 
@@ -2696,61 +2489,3 @@ Execution on Phase 1 can start immediately — the Puppeteer/Vercel evaluation h
 - **Do not ship without the Stripe webhook auth + tenant routing working correctly.** This is the most dangerous code path in the whole app.
 - **Do not add plain CSS files "just for one thing."** Tailwind or nothing.
 - **Do not defer the Cloud Functions auth checks.** Every function has `auth + tenantId + featureGate` from its first commit. No "add security later" pattern.
-
----
-
-## Open Questions (answer before Phase 1)
-
-1. **(RESOLVED — see "Decisions Required Before Phase 1" above)** Domain strategy for generic portal URL.
-2. **(MOVED to "Decisions Required Before Phase 1" — item #3)** Transactional email provider (Zoho vs Resend/Postmark). Blocks Phase 2, not a "later" question.
-3. **Invoice number format.** Currently `TF-2026-0001` branded to TechFlow. Per-tenant, should it default to generic `INV-0001` with a configurable prefix in tenant meta? (Leaning: yes, `meta.invoicePrefix` defaults to first 3 letters of business name.)
-4. **Logo storage.** Firebase Storage or Vercel Blob? Firebase Storage fits the existing stack. Vercel Blob would centralize assets on Vercel. (Leaning: Firebase Storage for now — one less moving part.)
-5. **Font loading for custom fontFamily.** If a tenant sets `fontFamily: "DM Sans"`, need to decide: Google Fonts at runtime (easy, external dependency) vs self-hosted font files in Firebase Storage (slower setup, no external call). Leaning: Google Fonts for MVP.
-
----
-
-## Context — what we built and decided today
-
-### What was completed
-- **Phase 3 Bundle 2 (form spacing + CSS cleanup)** on the current Vite codebase. Commits `e49068a`, `5d3566b`, `8ef2002`. Intended to be the last commits on the old repo — but see "what was NOT completed" below.
-- Root-caused and fixed the `.form-group { margin: 0 }` leak from ServiceCalculator that had been silently breaking CustomerSection spacing across both Invoice and Quote routes.
-- Collapsed triple-duplicated form primitives (`.form-card`, `.card-title`, `.form-label`, `.form-input`, `.form-select`) into a single source of truth in CustomerSection.css. Net −97 lines, −170 bytes shipped CSS.
-- Reviewed the architectural options and decided: rebuild once, into the final stack, multi-tenant from day one. No intermediate Vite multi-tenant step.
-- Locked all Phase 0 decisions (nested schema, implicit routing, Stripe Connect, feature flags).
-- Added feature flags / entitlements to the plan as a Phase 0 decision before starting any code.
-- Produced the Puppeteer + Vercel definitive answer with test harness, ready to run on the existing marketing site.
-- Wrote this document so none of it gets lost when the session compacts.
-
-### What was NOT completed (important)
-- **Bundle 3 Cloud Functions auth-check fixes (issues 5.1–5.6) were NOT done.** They were referenced multiple times as "next up" but the conversation pivoted to the rebuild planning before any Cloud Functions code was touched. See the "Outstanding Security Debt" section near the top of this document for full details and the Path A / Path B decision that needs to be made.
-- **Puppeteer test on Vercel was cancelled** (2026-04-12). Cloud Run is now the locked PDF path. See "PDF Generation Strategy" section for rationale. No longer a blocking item.
-- **No code was written on the rebuild itself.** This session produced decisions and a plan document only. Phase 1 execution has not started.
-
-### Commits produced this session (old Vite repo)
-| SHA | Scope |
-|---|---|
-| `5d3566b` | refactor: scope .form-group margin rule, remove ServiceCalculator leak |
-| `8ef2002` | refactor: collapse duplicated form primitives into CustomerSection.css |
-
-Both commits are CSS-only. No backend, no security, no functional changes.
-
-### Plan revisions after initial draft
-1. **Path A decision locked** — skip security patch on old repo, shut down at rebuild launch.
-2. **Customer portal added as a cross-cutting requirement** — homeowners being invoiced authenticate via magic link, have no `tenantId` claim, read via email-match rule pattern. Denormalized `tenantSnapshot` on each invoice/quote so customers never read `meta`. New `/portal` route group, new `CustomerPortalContext`, new customer-facing Cloud Functions (`getCustomerInvoices`, `getCustomerInvoiceDetail`, `payInvoice`, `downloadInvoicePDF`). Affects Phase 1, 2, 3, 4, and 6.
-3. **Tenant meta schema expanded** — added `primaryColor`, `secondaryColor`, `taxRate`, `taxName`, `businessNumber`, `invoicePrefix`, `emailFooter`, `currency`. These fields are also what gets denormalized into `tenantSnapshot`.
-4. **`convertQuoteToInvoice` added to Phase 2** — transactional quote → invoice conversion, gated on both `quotes` and `invoices` features, carries fresh `tenantSnapshot` and source-quote backreference.
-5. **Firestore backup strategy added as its own section** — PITR + daily managed exports (30-day retention) + manual-snapshot-before-risky-deploy convention. Mandatory restore drill before first client onboarding. Estimated ~$10/month total cost.
-6. **Timeline updated** — ~7–9 weeks (was ~6–8 weeks) to absorb customer portal and backup setup.
-7. **PDF strategy locked to Cloud Run 2026-04-12.** The previously-planned Puppeteer-on-Vercel evaluation is cancelled. Cloud Run is now the canonical PDF path — dedicated microservice, full Chrome in Docker, API key auth, called from thin Next.js proxy routes that do the Firebase dual-auth check. Rationale: the old repo's Cloud Run PDF service already works and can be ported; full Chrome avoids the `@sparticuz/chromium` version-pinning fragility; 2–32 GB RAM headroom vs Vercel's ~3 GB; clean microservice separation keeps Vercel function concurrency available for user-facing routes. The "Puppeteer + Vercel — Definitive Answer" section was removed; replaced with a short "PDF Generation Strategy" section documenting the Cloud Run service shape, Dockerfile, env vars, and proxy auth model. Phase 6 rewritten around the porting checklist. Immediate Next Steps no longer gates Phase 1 on a Puppeteer test.
-8. **Deep audit round 2 applied 2026-04-12** (Sonnet 4.5 + Gemini). Critical fixes: six missing meta defaults (`taxRate`, `taxName`, `currency`, `invoicePrefix`, `businessNumber`, `emailFooter`) added to `onSignup` batch write — prevents first-invoice tenantSnapshot corruption. Branded login page mandated to be server-side via Admin SDK (Firestore rules block unauthenticated reads of `meta`). Edge-runtime vs Node-runtime decision documented for the custom-domain middleware (Firebase Admin SDK requires Node — default recommendation `runtime: 'nodejs'`). `stripeAccounts/{stripeAccountId} → {tenantId}` reverse lookup collection added — replaces fragile `collectionGroup('meta')` query in Stripe webhook. Logo upload MUST use `getDownloadURL()` and store the token-bearing public URL in `meta.logoUrl`, never the Storage path. Medium/minor: `logo` → `logoUrl` standardized throughout, Cloud Functions env var / secrets subsection added (parallel to Vercel env vars, not replaced by them), Cloud Functions per-project deploy process documented, `customDomain` added to canonical feature flag table, customer auth path cases added to PDF test matrix, `/portal/view` shorthand resolved to canonical `/portal/invoices/[id]` route. New scope: staff invitation flow in Phase 5 (`invitations` subcollection, `createInvitation` + `onAcceptInvite` callables, `/settings/team` + `/accept-invite` routes, 7-day token expiry, one-time use, email-match verification). Transactional email provider moved from Open Questions to Decisions Required Before Phase 1 — recommendation Resend over Zoho to avoid multi-tenant reputation risk. Sentry added to Phase 3 with per-environment projects and `tenantId`/`uid` tagging. `deletedAt: null` field added to tenant meta and invoices/quotes/customers schemas so future soft-delete work is non-breaking (UI intentionally deferred). Explicitly deferred: optimistic locking, GDPR deletion function, platform billing for Reggie.
-9. **Deep audit round 3 applied 2026-04-13** (Opus 4.6 zero-mercy pass — see `REBUILD_PLAN_DEFERRED.md` for full findings). Five pre-Phase-1 CRITICAL fixes applied directly to this plan: **C1** — invoice/quote/users writes locked to admin SDK only (`allow write: if false`); all mutations now flow through `createInvoice`/`updateInvoice`/`deleteInvoice`/`markInvoicePaid` callables (and quote equivalents) that snapshot branding server-side and recompute totals, eliminating client-side `tenantSnapshot`/tax/total tampering. **C2** — customer email case-sensitivity bug fixed: emails lowercased at every write boundary in Cloud Functions, security rules call `request.auth.token.email.lower()` before comparing, `getCustomerInvoices` lowercases auth email before query. **C4** — `tenantId` generation strategy specified: slug-with-collision-suffix inside a transaction, produces stable human-readable IDs and prevents simultaneous-signup races. **C5** — counter docs (`invoiceCounter`, `quoteCounter`) initialized in the `onSignup` batch so first-invoice transactions don't crash on a missing doc. **C6** — `users/{uid}` write rule locked to admin SDK only (was `if request.auth.uid == uid`); all profile mutations go through callables to prevent self-spoofing of `tenantId`/`role` fields. Also added: `markInvoicePaid` and `updateUserProfile` callables to Phase 2 inventory; `tenantSnapshot.version: 1` field in invoice creation (P2 polish); concrete invoice CRUD pattern documented in Phase 2. RISK and POLISH items from the audit are tracked in `REBUILD_PLAN_DEFERRED.md` and will be applied during their relevant phases (R1 Stripe restricted-account state in Phase 4; R2 password reset / email verification in Phase 5; R3 Cloud Run custom domain in Phase 6 deploy; R4 App Check + rate limits and R5 split webhook endpoints in Phase 2/4; etc.).
-
-10. **Phase 1.5 — Design System added 2026-04-13** (Opus 4.6 + Sonnet 4.6 + Gemini joint review). New phase inserted between Phase 1 and Phase 2 to lock the visual foundation before any UI work begins. Decisions: shadcn/ui as the platform component library (Radix + Tailwind, copy-paste ownership in `src/components/ui/`); scoped scaffold of 14 components covering Phase 2/3 needs (Button, Input, Label, Textarea, Form, Card, Dialog, AlertDialog, Select, Checkbox, RadioGroup, Badge, Alert, Sonner, Table, DropdownMenu, Tabs, Skeleton, Separator); semantic CSS-variable token system with `--success` and `--warning` added beyond stock shadcn; tenant override scope **locked to `--primary` and `--secondary` only** (every other token platform-controlled to prevent semantic colors getting overridden into wrong meanings); two-layer contrast guard (WCAG AA validation at signup/settings + computed `--primary-foreground` fallback at render); dark/light mode strategy decided as no-toggle (dashboard=dark, portal=light, PDFs=light); Inter as platform font with curated Google-fonts list for tenant `fontFamily` override on customer-facing surfaces only; Sonner as the single platform-wide toast (eliminates current Vite app's dual `cs-toast`/`inv-toast` pattern); canonical status→Badge-variant mapping centralized in `src/lib/invoices/statusBadge.ts`; composition rule that domain components compose ui primitives and never reach for raw HTML form elements or hex color utilities. Why this was missed in rounds 1–3: every prior audit focused on security, architecture, and data integrity — visual design system isn't a "bug" but is critical for the premium bundled-website + portal pitch to contractors. Estimated effort 2 days.
-
-13. **Deep audit round 4 applied 2026-04-13** (Opus 4.6 delta audit + Gemini joint synthesis — scoped to revisions 10, 11, 12 per the "Round 4 Delta" prompt). Three CRITICAL fixes: **C1** — zombie `payInvoice` callable removed from the function inventory and replaced with a note that `createPayTokenCheckoutSession` is the single canonical payment path for email link, portal "Pay Now," and manual-link flows alike; customer-path description updated to reflect the portal discovers the `payToken` via `getCustomerInvoiceDetail` and redirects to `/pay/{token}` rather than creating a parallel Stripe session. **C2** — regenerate-during-checkout race condition closed: `session.metadata.payTokenVersion` now stamped at Checkout creation; webhook handler for `checkout.session.completed` re-verifies version against current invoice and, on mismatch, refuses to mark paid, issues an automatic full refund via `stripe.refunds.create`, writes a `paymentIncidents` audit doc, and notifies the tenant owner. Rationale: `regenerateInvoicePayLink` intent is "kill old link" — silently accepting a payment on a killed link violates that intent. Handling the guard in the webhook (not `regenerate`) correctly covers the customer-mid-checkout case. **C3** — pay-route privacy headers mandated: `Referrer-Policy: no-referrer` (prevents token leak via outbound-link Referer headers), `X-Robots-Tag: noindex, nofollow` (prevents accidental search indexing of shared tokens), `X-Frame-Options: DENY` (prevents iframe-overlay phishing). Five RISK mitigations: **R1** — webhook routing gains `charge.refunded` (sets `status: 'refunded'` or `'partially-refunded'`, records `refundedAmountCents`), `charge.dispute.created` (sets `disputed: true`, `disputeReason`, notifies tenant with evidence deadline), and `charge.dispute.closed` (routes to `refunded` on loss, clears `disputed` flag on win). Invoice schema gains `stripeChargeId`, `refundedAt`, `refundedAmountCents`, `disputed`, `disputedAt`, `disputeReason`, `disputeOutcome` fields; `status` enum gains `'refunded'` and `'partially-refunded'`. **R2** — `payAttempts` subcollection gets an `expireAt` field and a Firestore TTL policy (48h) for auto-cleanup; prevents orphan-doc accumulation at scale. **R3** — `middleware.ts` gains a `config.matcher` that excludes `_next/static`, `_next/image`, `favicon.ico`, `robots.txt`, `sitemap.xml`, `/api/*`, and any path with a file extension; without the matcher, custom-domain requests trigger a Firestore read per static asset (≈20× amplification per page view at 50+ tenants). **R4** — `functions/emails/sanitize.ts` utility strips control characters (CR/LF for header injection, NUL, other non-tab C0 bytes), collapses whitespace, and length-caps tenant-controlled strings (`name` 100, `address` 300, `emailFooter` 500, `replyTo` 200 with separate email-format validation); enforced at `emails/send.ts` boundary; hard convention of no `dangerouslySetInnerHTML` anywhere in `functions/emails/`. **R5** — Payment Settings "live preview" row rewritten to show the honest 3-line breakdown (customer pays / Stripe fee / tenant net) so tenants aren't surprised by the residual 0.5% + 30¢ that surcharging can't recover; e-transfer shown alongside for comparison. Three POLISH refinements: **P1+P4** — `verifyInvoicePayToken` now returns a discriminated-union `VerifyResult` (`ok | paid | refunded | regenerated | not-available`) instead of throwing `HttpsError` on legitimate render states; pay page branches on `outcome`; success-page polling no longer string-matches on error messages; a `PAYABLE_STATUSES` allow-list (`sent | unpaid | overdue | partial`) blocks draft or archived invoices from being payable even if a tenant accidentally shared a pay link for one. **P2** — each email template now exports a `buildPreviewText(props)` function returning 80–110 char inbox-scanning copy (spec'd for InvoiceSent, PaymentReceipt, MagicLinkSignIn, StaffInvite, QuoteSent, RecurringInvoiceSent); passed to `<TenantEmailLayout>` as the `preview` prop. **P3** — formally documented that JWT `exp` claim is the **authoritative** expiry for pay tokens; the Firestore `payTokenExpiresAt` field is display-only (used for dashboard "expires in N days" copy and `regenerateInvoicePayLink` CTAs). **Total impact:** ~340 lines added across Phase 1 (schema), Phase 2 (callables + webhook), Phase 3 (pay-route layout), Phase 4 (Stripe webhook + surcharge metadata), Phase 5 (payment settings preview + middleware config). No existing decisions reversed. Round 4 findings treated as one comprehensive pass rather than split across phases because the items are tightly interlocking (C2 stamps metadata that the webhook R1 extension reads; P1 return shape is consumed by C3-protected pay route). **Audit cycle now closed** — future audits should wait for actual Phase 1 code, not more plan revisions.
-
-12. **Pre-Phase-1 decisions locked 2026-04-13** (Opus 4.6 + Gemini joint). **Decision #1 — Vercel project layout:** Option A, single project for marketing + portal + pay pages with middleware-based host routing. Rejected the plan's original Option B recommendation (separate projects) — middleware cost is small, single project keeps CI/CD and shared utilities (brand contrast, tenant resolver) in one place, early-return in middleware for known marketing hostnames mitigates per-request overhead. **Decision #2 — Transactional email provider:** Resend. Chosen over Zoho to avoid multi-tenant reputation risk, and chosen over Postmark for the native React Email pairing — templates become JSX components sharing the Phase 1.5 design tokens, so visual parity between emails and the portal is enforced at the component level. Free tier (3k/month) covers MVP. Phase 1 execution is now unblocked.
-
-11. **Payment flow, email system, and portal metadata added 2026-04-13** (Opus 4.6 + Sonnet 4.6 + Gemini joint review — batch edit after Phase 1.5 landed). Five cross-phase additions touching Phase 1, 2, 3, 4, 5, and 6: **(a) Invoice pay-link flow** — signed JWT `payToken` + `payTokenExpiresAt` + `payTokenVersion` fields added to invoice docs (Phase 1); `verifyInvoicePayToken` and `createPayTokenCheckoutSession` callables added to function inventory (Phase 2); public `(pay)/pay/[token]/page.tsx` route added with success/cancelled redirect targets (Phase 3); token-authenticated Checkout with rate limit (10 sessions/invoice/24h) and `PAY_TOKEN_SECRET` via `defineSecret()` (Phase 4); `regenerateInvoicePayLink` callable for owner/admin invalidation. Kills the 4-click magic-link-to-pay friction — customers now go email → pay page → done. **(b) React Email + Resend transactional email system** — `functions/emails/` package with `<TenantEmailLayout>` shared shell (max-logo 200×60px, color-scheme meta tags for dark-mode inversion prevention), 6 templates (InvoiceSent, PaymentReceipt, MagicLinkSignIn, StaffInvite, QuoteSent, RecurringInvoiceSent), 9 design principles enforced (single-column 600px, one CTA, system fonts only, tenant primaryColor on CTA button only with `computeForeground()` contrast guard from Phase 1.5, platform-domain From + tenant-email Reply-To, plain-text fallback, no unsubscribe on transactional, no multi-column, no web fonts). Eliminates the email-side equivalent of the old Vite app's dual `cs-toast`/`inv-toast` pattern. **(c) Portal + pay-page metadata injection** — `generateMetadata()` in `(portal)/layout.tsx` and `(pay)/pay/[token]/layout.tsx` reads `meta.faviconUrl` and `meta.name` via Admin SDK (Firestore rules block unauthenticated meta reads, same pattern as branded login page) so browser tab shows tenant favicon + name on custom domains; Open Graph images for social-share rendering of pay links; explicit `runtime: 'nodejs'` to prevent Vercel Edge auto-optimization breaking Admin SDK. **(d) E-Transfer as primary payment method** — `meta.etransferEmail` field added (Phase 1); pay page lists e-transfer first with copy-details button and $3k bank-limit tooltip, credit card second with surcharge disclosure; PDF includes both methods with QR code for credit card (self-contained via `qrcode` npm package — no external image fetch at render); dashboard warns tenant if sending without e-transfer configured; `createInvoice` blocks send if BOTH e-transfer AND Stripe Connect are unconfigured. **(e) Credit card surcharge toggle with Canadian compliance** — `chargeCustomerCardFees` boolean + `cardFeePercent` (default 2.4, HARD-CAPPED server-side at 2.4 — the Visa/Mastercard Canadian ceiling) + `surchargeAcknowledgedAt` timestamp added to meta (Phase 1); `updatePaymentSettings` callable refuses to enable surcharging without acknowledgment (defensive — can't bypass UI by calling API directly); `/settings/payments` sub-page with toggle + percentage input + live preview + one-time acknowledgment modal covering 30-day Visa/Mastercard notification requirement, Quebec exclusion (Consumer Protection Act), debit-card exclusion, 2.4% cap, and automatic disclosure; Checkout line-item pattern that adds the surcharge as a separate item (not rolled into invoice total — preserves accounting clarity); webhook reconciliation stores `paidAmountCents` + `surchargeAmountCents` split on the invoice doc; PDF receipt shows surcharge as separate line when paid by card. MVP limitations documented: Quebec geo-exclusion is contractual (tenant acknowledgment) not auto-enforced; debit-vs-credit distinction limited by Stripe Checkout — acceptable MVP risk. **Total added:** ~520 lines across 6 phases, one shared secret (`PAY_TOKEN_SECRET`), 5 new callables, 1 new route group, 6 new email templates, 1 new settings sub-page. No existing content modified except field additions to tenant meta and invoice doc schemas. Estimated incremental effort 2–2.5 days across the phases.
-
-14. **Deep audit round 5 applied 2026-04-14** (Gemini + Opus 4.6 joint synthesis — final logical-gap pass before Phase 1 code begins, plus doc-boundary cleanup between `REBUILD_PLAN.md` and `REBUILD_PLAN_DEFERRED.md`). Seven fixes applied directly to the main plan, all landing in the phases they affect rather than being parked in the deferred audit trail: **(1) Stripe account state schema** — `meta.stripeStatus` object added to Phase 1 (`chargesEnabled`, `payoutsEnabled`, `detailsSubmitted`, `currentlyDue[]`, `disabledReason`, `updatedAt`); `onSignup` batch seeds all-`false` defaults; Phase 4 `account.updated` webhook is the sole writer; `createInvoice` refuses to send if `stripeStatus.chargesEnabled === false` AND no `etransferEmail` configured. Closes the "Stripe Express restricted-account silent failure" risk — tenants can no longer send pay-enabled invoices that Stripe will reject at checkout. Replaces R1 breadcrumb in DEFERRED. **(2) `userTenantMemberships/{uid}_{tenantId}` collection promoted from deferred P7 to Phase 1 schema** — `users/{uid}` narrowed to `{primaryTenantId, email}`; new membership docs (`{uid, tenantId, role, invitedBy, createdAt, deletedAt}`) written in both `onSignup` batch and `onAcceptInvite` callable so multi-tenant membership is a UI problem post-MVP, not a migration. MVP still rejects second-tenant joins at the rule layer; schema just stops fighting the inevitable. **(3) Auth recovery flow** — `/forgot-password/page.tsx` and `/auth/action/page.tsx` added to the Phase 3 route tree under `(auth)/`; dedicated "Auth recovery flow" subsection covers `sendPasswordResetEmail`, Firebase action-code dispatch by `mode` (`resetPassword` → `confirmPasswordReset`, `verifyEmail` → `applyActionCode`, `recoverEmail` → `checkActionCode`+`applyActionCode`), email-verification gate on dashboard layout, Firebase console email-template configuration (branded sender name, custom action URL pointing at `/auth/action`), authorized-domains list including every custom domain, and explicit MVP deferral of 2FA. Replaces R2 breadcrumb in DEFERRED. **(4) Vercel Edge Config caching for custom-domain lookups** — Phase 5 middleware gains a "Cache the domain lookup" subsection: the domain-verification Cloud Function writes `{[domain]: tenantId}` to Edge Config as the 4th atomic step (alongside `meta.customDomain`, `customDomains/{domain}`, and DNS verification marker); middleware reads via `@vercel/edge-config` for sub-50ms edge lookups; miss path falls back to Firestore and repopulates the cache. Promoted from the deferred R6 "middleware init pattern" fix because Edge Config solves both the cold-start cost AND the cross-request caching problem in one mechanism. **(5) Custom-domain verification state surfaced in `/settings/domain`** — `meta.customDomainStatus` object (`stage: 'pending-dns' | 'pending-ssl' | 'verified' | 'error'`, `message`, `checkedAt`) added to Phase 1; Phase 5 gains a state-machine walkthrough, scheduled re-check Cloud Function, and UI banner showing the current stage so tenants aren't staring at a silent failure for hours. **(6) XSS-to-PDF escape rules in Phase 6** — highest-severity finding of the round. New "⚠️ XSS-to-PDF" subsection mandates: auto-escaping template engine (Handlebars `{{}}` not `{{{}}}`, or React Email–style JSX); every user-controlled string (invoice line items, customer name/address, tenant name/address/emailFooter, notes) escaped at render; `logoUrl` validated as `https://` before template interpolation; CSP header `default-src 'none'; img-src data: https:;` on the render HTML; Phase 7 fuzz test feeding `<script>`, `javascript:`, `<img onerror>`, and `"><svg>` payloads into every field and asserting the rendered PDF contains no executed script and no broken layout. Puppeteer is a full Chromium — an unescaped `</style><script>` in a customer name means arbitrary JS runs in the render context. Not theoretical. **(7) Immutable logo snapshot via base64 data URL** — Phase 6 gains "Immutable logo snapshot" subsection with Option A (recommended: base64-encode `meta.logoUrl` at invoice creation, store on the invoice doc as `logo` data URL, 500KB cap, frozen legal document semantics) vs Option B (immutable Storage path, e.g. `tenants/{id}/logos/{invoiceId}.png` copied at create time). `createInvoice` helper `inlineLogoOrThrow(meta.logoUrl)` enforces the cap and throws a user-visible error if exceeded. Fixes the "tenant changes logo → old PDFs now show new logo" timeline-mutation bug. Replaces P1 breadcrumb in DEFERRED. **(8) Doc-boundary cleanup** — `REBUILD_PLAN_DEFERRED.md` was drifting toward re-documenting schemas and routes (duplication = drift). R1, R2, and P7 narratives replaced with ~3-line breadcrumbs pointing to the phases where they now live; "Recommended action order" updated to reflect R1/R2 folded, R6 "largely obsolete" (Edge Config subsumed the concern), P1 "partially obsolete" (base64 logo inlining subsumed the render-time null check); "Audit confidence summary" remaining totals recounted to 6 RISK (R3–R8) + 13 POLISH (P1–P6, P8–P14). DEFERRED is now strictly rationale/audit-trail; implementation details live in `REBUILD_PLAN.md` alone. **Total impact:** ~200 lines added to the main plan; ~180 lines trimmed from DEFERRED. No existing decisions reversed. Highest-severity single finding was #6 (XSS-to-PDF); highest structural finding was #8 (doc boundary). **Audit cycle is now definitively closed — next stop is Phase 1 code, no more plan revisions.**

@@ -1,36 +1,45 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# TechFlow SaaS — InvoicePro
 
-## Getting Started
+Multi-tenant, white-label invoicing and customer portal for TechFlow Solutions clients: branded invoices, quotes, and recurring billing; Interac e-Transfer and Stripe card payments; per-tenant custom domains.
 
-First, run the development server:
+**Start with [`Docs/REBUILD_PLAN.md`](Docs/REBUILD_PLAN.md) → "Build Status, Decisions & Conventions"** for what's built, open bugs, and the path to launch. Working rules for anyone changing this repo are in [`CLAUDE.md`](CLAUDE.md).
+
+## Repository layout
+
+| Path | What |
+|---|---|
+| `src/` | Next.js App Router app — tenant dashboard, customer portal, public pay page, PDF proxy and Stripe webhook API routes |
+| `functions/` | Cloud Functions v2 — callables, scheduled jobs, Firestore trigger, SES events webhook — and React Email templates |
+| `pdf-service/` | Cloud Run PDF renderer (Express + Puppeteer + Handlebars) |
+| `firestore.rules`, `storage.rules`, `firestore.indexes.json` | Firebase security rules and indexes |
+| `scripts/seed-emulator.mjs` | Seeds a fake tenant and owner into the local emulators |
+| `Docs/` | Blueprint and the deferred-work / audit log |
+
+## Local development
+
+Requires Node 20+ (Node 22 is the target) and Java 11+ for the Firestore emulator.
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+npm run functions:install
+npm --prefix pdf-service install
+
+npm run emulators:functions   # build functions, start emulators (UI on http://localhost:4000)
+npm run seed:emulator         # owner@bobs-plumbing.test / techflow-dev-12345
+npm run dev                   # http://localhost:3000 — set NEXT_PUBLIC_USE_EMULATORS=1 in .env.local
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Tests
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npm test                          # Next.js unit tests
+npm --prefix pdf-service test     # PDF renderer, validation, XSS fuzz
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+# Functions suites run against the emulators
+npx firebase emulators:exec --only auth,firestore,storage --project techflow-saas-dev \
+  "npm --prefix functions run test:rules && npm --prefix functions run test:callables && npm --prefix functions run test:emails && npm --prefix functions run test:shared"
+```
 
-## Learn More
+## Deployment
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Manual and per environment — follow "Environment Strategy & Deploy Runbook" in the blueprint. Never deploy rules or functions without running the emulator suites first.

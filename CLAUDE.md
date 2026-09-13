@@ -1,34 +1,35 @@
 # TechFlow SaaS
 
-## Blueprint (source of truth)
-- `Docs/REBUILD_PLAN.md` is authoritative. If code diverges from it, the code is wrong.
-- `Docs/REBUILD_PLAN_DEFERRED.md` is a rationale/audit log only — do not add new features there.
-- Do NOT modify REBUILD_PLAN.md without the user explicitly asking. The audit cycle is closed.
+## Docs map (source of truth — keep in sync)
+- `Docs/REBUILD_PLAN.md` is authoritative. Its "Build Status, Decisions & Conventions" section records what is built, open bugs, post-build decisions (D1–D5), and the path to launch; it overrides older text in the plan. If code diverges from the blueprint, the code is wrong — unless the user approves a new decision, which is then recorded in that section in the same change.
+- `Docs/REBUILD_PLAN_DEFERRED.md` is a rationale/audit log (R/P items with status, planning history) — do not add new features there.
+- Do NOT modify REBUILD_PLAN.md without the user explicitly asking or approving a decision.
+- Environment variables, secrets, regions, and deploy steps live only in REBUILD_PLAN.md → "Environment Strategy & Deploy Runbook". Don't restate them here or in new docs.
 
 ## Stack
-- Next.js 15 App Router on Vercel (single project, middleware host routing)
-- Firebase: Firestore + Auth + Storage + Cloud Functions v2 + Emulators
-- Cloud Run for Puppeteer PDF service (Google-signed ID token auth)
-- Stripe Connect Express
-- Resend + React Email for transactional mail
+- Next.js 15 App Router on Vercel (single project, middleware host routing, functions in `yul1`) — upgrade to ≥15.5.25, then 16, is pending
+- Firebase: Firestore + Auth + Storage + Cloud Functions v2 + Emulators — Firestore and functions in `northamerica-northeast2`, scheduled functions in `northamerica-northeast1`
+- Cloud Run `pdf-service` (Puppeteer + Handlebars), protected by `X-Api-Key` from the Next.js proxy and callables
+- Stripe Connect with Standard-equivalent controller properties (full Stripe Dashboard, Stripe-liable), direct charges
+- Amazon SES + React Email for transactional mail, sent only from Cloud Functions via `functions/src/emails/send.ts`
 - Tailwind + shadcn/ui + Radix, semantic CSS-variable tokens (Phase 1.5)
 - Vercel Edge Config for domain→tenantId cache
 
 ## Core principle
-Zero-trust multi-tenancy. `tenantId` in Firebase Auth custom claims is the authoritative boundary. All mutations flow through Cloud Function callables. Firestore rules use `allow write: if false` on invoices/quotes/users — clients cannot write directly.
+Zero-trust multi-tenancy. `tenantId` in Firebase Auth custom claims is the authoritative boundary. All mutations flow through Cloud Function callables. Firestore rules use `allow write: if false` on every tenant collection — clients cannot write directly.
 
 ## Deployment safety
-- Before any `firebase deploy`, run `firebase emulators:start` locally and verify against a fake tenant.
+- Before any `firebase deploy`, run the emulator test suites (`firebase emulators:start` / `emulators:exec`) and verify against a fake tenant.
 - Never deploy unverified rules to a live Firebase project.
 - Never commit secrets. Use `defineSecret()` for Cloud Functions and Vercel env vars for the Next.js app.
 
 ## Workflow
-- Phase-by-phase per the blueprint. No skipping ahead.
-- Phase 1 (schema + security rules + emulator verification) ships before any UI work.
+- Work in the order of the blueprint's "Path to launch". No skipping ahead.
 - User ("Solo Orchestrator") reviews every diff — keep explanations concise, show the change, not a lecture.
 - User prefers full-context sessions: read ALL of `Docs/REBUILD_PLAN.md` AND `Docs/REBUILD_PLAN_DEFERRED.md` at the start of each phase before writing code. Do not skim.
-- Commit per bundle exactly as listed in the blueprint. No combining bundles.
+- Commit per bundle or decision. No combining bundles.
+- When a change alters behaviour the blueprint describes (or fixes a listed bug), update that part of the blueprint in the same change so docs never drift.
 
 ## Git
 - Never force-push, reset --hard, or skip hooks without explicit approval.
-- Commit messages: short, imperative, reference the phase (e.g. "phase 1: add stripeStatus meta schema").
+- Commit messages: short, imperative, reference the phase or decision (e.g. "phase 1: add stripeStatus meta schema", "decision D3: gate card surcharging").
