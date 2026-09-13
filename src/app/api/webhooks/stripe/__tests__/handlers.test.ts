@@ -136,6 +136,22 @@ function collectionRef(path: string): FakeCollRef {
 const fakeDb = {
   doc: (path: string) => docRef(path),
   collection: (path: string) => collectionRef(path),
+  // Sequential stand-in: unit tests have no contention, so reads and writes
+  // apply immediately.
+  runTransaction: async <T,>(
+    fn: (tx: {
+      get: (ref: FakeDocRef) => ReturnType<FakeDocRef["get"]>;
+      set: (
+        ref: { path: string },
+        value: Record<string, unknown>,
+        opts?: { merge?: boolean },
+      ) => void;
+    }) => Promise<T>,
+  ): Promise<T> =>
+    fn({
+      get: (ref) => ref.get(),
+      set: (ref, value, opts) => applySet(ref.path, value, opts),
+    }),
   batch: () => {
     const ops: Array<() => void> = [];
     return {
@@ -233,13 +249,40 @@ describe("handleCheckoutCompleted", () => {
     });
   }
 
-  function session(metadata: Record<string, string>, paymentIntent = "pi_123") {
+  // A completed card Checkout Session: paid, charging base + surcharge in CAD.
+  function session(
+    metadata: Record<string, string>,
+    paymentIntent = "pi_123",
+    overrides: Record<string, unknown> = {},
+  ) {
     return {
       id: "cs_test_abc",
       payment_intent: paymentIntent,
+      payment_status: "paid",
+      amount_total:
+        Number(metadata.basePaidCents ?? 0) + Number(metadata.surchargeCents ?? 0),
+      currency: "cad",
       metadata,
       livemode: false,
+      ...overrides,
     } as unknown as Stripe.Checkout.Session;
+  }
+
+  function paidMeta(overrides: Record<string, string> = {}) {
+    return {
+      invoiceId: INVOICE,
+      tenantId: TENANT,
+      payTokenVersion: "3",
+      basePaidCents: "11300",
+      surchargeCents: "0",
+      ...overrides,
+    };
+  }
+
+  function refundIncident(sessionId = "cs_test_abc") {
+    return docs.get(
+      `tenants/${TENANT}/invoices/${INVOICE}/paymentIncidents/auto-refund_${sessionId}`,
+    );
   }
 
   function event(
@@ -312,7 +355,16 @@ describe("handleCheckoutCompleted", () => {
 
     expect(refundsCreate).toHaveBeenCalledTimes(1);
     expect(refundsCreate).toHaveBeenCalledWith(
-      { payment_intent: "pi_123", reason: "requested_by_customer" },
+      {
+        payment_intent: "pi_123",
+        reason: "requested_by_customer",
+        metadata: {
+          invoiceId: INVOICE,
+          tenantId: TENANT,
+          checkoutSessionId: "cs_test_abc",
+          autoRefund: "auto-refund-version-mismatch",
+        },
+      },
       // A-03: a re-run gets Stripe's saved refund back instead of a second refund.
       { stripeAccount: ACCT, idempotencyKey: "auto-refund:cs_test_abc" },
     );
@@ -406,25 +458,28 @@ describe("handleCheckoutCompleted", () => {
     expect(incidentDocs(TENANT, INVOICE)).toHaveLength(0);
   });
 
-  it("is a no-op when the invoice is already paid (duplicate-safety net)", async () => {
-    seedInvoice({ status: "paid", payTokenVersion: 3 });
+  it("a redelivered payment that is already recorded is a no-op", async () => {
+    seedInvoice({ status: "paid", stripePaymentIntentId: "pi_123" });
     const info = vi.spyOn(console, "info").mockImplementation(() => {});
 
-    await handleCheckoutCompleted(
-      TENANT,
-      event(
-        session({
-          invoiceId: INVOICE,
-          tenantId: TENANT,
-          payTokenVersion: "3",
-          basePaidCents: "11300",
-          surchargeCents: "0",
-        }),
-      ),
-    );
+    await handleCheckoutCompleted(TENANT, event(session(paidMeta())));
 
     expect(refundsCreate).not.toHaveBeenCalled();
+    expect(incidentDocs(TENANT, INVOICE)).toHaveLength(0);
     expect(info).toHaveBeenCalled();
+    info.mockRestore();
+  });
+
+  it("a redelivery after the payment was refunded does not mark the invoice paid again", async () => {
+    seedInvoice({ status: "refunded", stripePaymentIntentId: "pi_123" });
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+
+    await handleCheckoutCompleted(TENANT, event(session(paidMeta())));
+
+    expect(docs.get(`tenants/${TENANT}/invoices/${INVOICE}`)?.status).toBe(
+      "refunded",
+    );
+    expect(refundsCreate).not.toHaveBeenCalled();
     info.mockRestore();
   });
 
@@ -467,6 +522,177 @@ describe("handleCheckoutCompleted", () => {
     expect(refundsCreate).not.toHaveBeenCalled();
     err.mockRestore();
   });
+
+  // -------------------------------------------------------------------------
+  // A-08 and payment guards — refund anything that doesn't match the invoice
+  // -------------------------------------------------------------------------
+
+  it("A-08: refunds a payment whose charged amount doesn't match the invoice", async () => {
+    seedInvoice();
+    refundsCreate.mockResolvedValue({ id: "re_amount" });
+
+    await handleCheckoutCompleted(
+      TENANT,
+      event(session(paidMeta(), "pi_123", { amount_total: 5000 })),
+    );
+
+    expect(docs.get(`tenants/${TENANT}/invoices/${INVOICE}`)?.status).toBe("sent");
+    expect(refundsCreate).toHaveBeenCalledWith(
+      {
+        payment_intent: "pi_123",
+        reason: "requested_by_customer",
+        metadata: {
+          invoiceId: INVOICE,
+          tenantId: TENANT,
+          checkoutSessionId: "cs_test_abc",
+          autoRefund: "auto-refund-amount-mismatch",
+        },
+      },
+      { stripeAccount: ACCT, idempotencyKey: "auto-refund:cs_test_abc" },
+    );
+    expect(refundIncident()).toMatchObject({
+      kind: "auto-refund-amount-mismatch",
+      reason: "amount-mismatch",
+      expectedCents: 11300,
+      chargedCents: 5000,
+      refundId: "re_amount",
+    });
+  });
+
+  it("A-08: refunds when the invoice total changed after checkout started", async () => {
+    // Same link version, but the invoice now totals $200 while the session was
+    // created for $113 — the stale amount must not settle the new invoice.
+    seedInvoice({ totals: { total: 200 } });
+    refundsCreate.mockResolvedValue({ id: "re_total" });
+
+    await handleCheckoutCompleted(TENANT, event(session(paidMeta())));
+
+    expect(docs.get(`tenants/${TENANT}/invoices/${INVOICE}`)?.status).toBe("sent");
+    expect(refundIncident()).toMatchObject({
+      kind: "auto-refund-amount-mismatch",
+      expectedCents: 20000,
+      chargedCents: 11300,
+    });
+  });
+
+  it("A-08: refunds a payment in a different currency than the invoice", async () => {
+    seedInvoice({ tenantSnapshot: { currency: "CAD" } });
+    refundsCreate.mockResolvedValue({ id: "re_ccy" });
+
+    await handleCheckoutCompleted(
+      TENANT,
+      event(session(paidMeta(), "pi_123", { currency: "usd" })),
+    );
+
+    expect(docs.get(`tenants/${TENANT}/invoices/${INVOICE}`)?.status).toBe("sent");
+    expect(refundIncident()).toMatchObject({
+      kind: "auto-refund-amount-mismatch",
+      currency: "usd",
+      invoiceCurrency: "cad",
+    });
+  });
+
+  it("refunds a second payment on an invoice that is already paid", async () => {
+    seedInvoice({ status: "paid", paymentMethod: "etransfer" });
+    refundsCreate.mockResolvedValue({ id: "re_dup" });
+
+    await handleCheckoutCompleted(TENANT, event(session(paidMeta())));
+
+    const inv = docs.get(`tenants/${TENANT}/invoices/${INVOICE}`);
+    expect(inv?.paymentMethod).toBe("etransfer"); // original payment untouched
+    expect(refundsCreate.mock.calls[0][0]).toMatchObject({
+      payment_intent: "pi_123",
+      reason: "duplicate",
+    });
+    expect(refundIncident()).toMatchObject({
+      kind: "auto-refund-duplicate-payment",
+      invoiceStatus: "paid",
+      existingPaymentMethod: "etransfer",
+      refundId: "re_dup",
+    });
+  });
+
+  it("two checkouts completing for one invoice: the first is recorded, the second refunded", async () => {
+    seedInvoice();
+    refundsCreate.mockResolvedValue({ id: "re_second" });
+
+    await handleCheckoutCompleted(
+      TENANT,
+      event(session(paidMeta(), "pi_first", { id: "cs_first" })),
+    );
+    await handleCheckoutCompleted(
+      TENANT,
+      event(session(paidMeta(), "pi_second", { id: "cs_second" })),
+    );
+
+    const inv = docs.get(`tenants/${TENANT}/invoices/${INVOICE}`);
+    expect(inv?.status).toBe("paid");
+    expect(inv?.stripePaymentIntentId).toBe("pi_first");
+    expect(refundsCreate).toHaveBeenCalledTimes(1);
+    expect(refundsCreate.mock.calls[0][0]).toMatchObject({
+      payment_intent: "pi_second",
+      reason: "duplicate",
+    });
+    expect(refundIncident("cs_second")).toMatchObject({
+      kind: "auto-refund-duplicate-payment",
+    });
+  });
+
+  it("refunds a payment for an invoice that no longer exists", async () => {
+    refundsCreate.mockResolvedValue({ id: "re_gone" });
+
+    await handleCheckoutCompleted(TENANT, event(session(paidMeta())));
+
+    expect(refundIncident()).toMatchObject({
+      kind: "auto-refund-not-payable",
+      invoiceStatus: null,
+      refundId: "re_gone",
+    });
+  });
+
+  it("refunds a payment for an invoice that isn't open for payment", async () => {
+    seedInvoice({ status: "draft" });
+    refundsCreate.mockResolvedValue({ id: "re_draft" });
+
+    await handleCheckoutCompleted(TENANT, event(session(paidMeta())));
+
+    expect(docs.get(`tenants/${TENANT}/invoices/${INVOICE}`)?.status).toBe("draft");
+    expect(refundIncident()).toMatchObject({
+      kind: "auto-refund-not-payable",
+      invoiceStatus: "draft",
+    });
+  });
+
+  it("records and refunds nothing when the session has no captured payment", async () => {
+    seedInvoice();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await handleCheckoutCompleted(
+      TENANT,
+      event(session(paidMeta(), "pi_123", { payment_status: "unpaid" })),
+    );
+
+    expect(docs.get(`tenants/${TENANT}/invoices/${INVOICE}`)?.status).toBe("sent");
+    expect(refundsCreate).not.toHaveBeenCalled();
+    expect(incidentDocs(TENANT, INVOICE)).toHaveLength(0);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("a transient Stripe error fails the event without an incident, so Stripe retries it", async () => {
+    seedInvoice({ payTokenVersion: 5 });
+    refundsCreate.mockRejectedValue(
+      Object.assign(new Error("Stripe API unavailable"), {
+        type: "StripeAPIError",
+      }),
+    );
+
+    await expect(
+      handleCheckoutCompleted(TENANT, event(session(paidMeta()))),
+    ).rejects.toThrow("Stripe API unavailable");
+    // No owner email claiming the refund failed — the retry issues it.
+    expect(incidentDocs(TENANT, INVOICE)).toHaveLength(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -502,6 +728,9 @@ describe("handleChargeRefunded", () => {
         object: {
           id: "cs_e2e",
           payment_intent: "pi_e2e",
+          payment_status: "paid",
+          amount_total: 11300,
+          currency: "cad",
           metadata: {
             invoiceId: "INV-E2E",
             tenantId: TENANT,

@@ -148,4 +148,73 @@ describe("handlePaymentIncidentCreated", () => {
     expect(result).toEqual({ sent: 1 });
     expect(mockSesSend).toHaveBeenCalledTimes(2);
   });
+
+  // A-08 and payment guards — auto-refund kinds
+
+  function firstEmail() {
+    const req = mockSesSend.mock.calls[0][0].input;
+    return {
+      subject: req.Content.Simple.Subject.Data as string,
+      text: req.Content.Simple.Body.Text.Data as string,
+    };
+  }
+
+  it("explains an amount-mismatch auto-refund with both amounts", async () => {
+    await handlePaymentIncidentCreated({
+      tenantId: TENANT,
+      invoiceId: "INV-0042",
+      incidentId: "auto-refund_cs_amount",
+      incident: {
+        kind: "auto-refund-amount-mismatch",
+        refundId: "re_amount",
+        expectedCents: 11300,
+        chargedCents: 5000,
+        currency: "cad",
+      },
+    });
+    const { subject, text } = firstEmail();
+    expect(subject).toBe(
+      "Payment auto-refunded on INV-0042 (amount didn't match)",
+    );
+    expect(text).toContain("charged $50.00, invoice total $113.00");
+    expect(text).toContain("re_amount");
+  });
+
+  it("explains a duplicate-payment auto-refund with the original payment method", async () => {
+    await handlePaymentIncidentCreated({
+      tenantId: TENANT,
+      invoiceId: "INV-0042",
+      incidentId: "auto-refund_cs_dup",
+      incident: {
+        kind: "auto-refund-duplicate-payment",
+        refundId: "re_dup",
+        existingPaymentMethod: "etransfer",
+      },
+    });
+    const { subject, text } = firstEmail();
+    expect(subject).toBe(
+      "Payment auto-refunded on INV-0042 (invoice was already paid)",
+    );
+    expect(text).toContain("already paid (by e-Transfer)");
+  });
+
+  it("says 'Refund needed' and asks for a manual refund when the auto-refund failed", async () => {
+    await handlePaymentIncidentCreated({
+      tenantId: TENANT,
+      invoiceId: "INV-0042",
+      incidentId: "auto-refund_cs_gone",
+      incident: {
+        kind: "auto-refund-not-payable",
+        invoiceStatus: null,
+        refundId: null,
+        refundError: "charge_already_refunded",
+      },
+    });
+    const { subject, text } = firstEmail();
+    expect(subject).toBe(
+      "Refund needed on INV-0042 (invoice not open for payment)",
+    );
+    expect(text).toContain("no longer exists");
+    expect(text).toContain("refund this payment manually");
+  });
 });

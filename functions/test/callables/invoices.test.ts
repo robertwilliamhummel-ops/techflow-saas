@@ -428,6 +428,115 @@ describe("updateInvoice", () => {
     expect(inv.tenantSnapshot.name).toBe("Acme Plumbing");
   });
 
+  // A-08 — the emailed pay link must stop working when what it charges changes.
+
+  async function sentInvoice(): Promise<{
+    invoiceId: string;
+    ref: FirebaseFirestore.DocumentReference;
+    before: FirebaseFirestore.DocumentData;
+  }> {
+    const { invoiceId } = await createInvoiceHandler(
+      fakeRequest(validInvoiceData(), ownerAuth),
+    );
+    const ref = testDb.doc(`tenants/${TENANT}/invoices/${invoiceId}`);
+    await ref.update({ status: "sent" });
+    return { invoiceId, ref, before: (await ref.get()).data()! };
+  }
+
+  it("A-08: changing a sent invoice's total re-issues its pay link", async () => {
+    const { invoiceId, ref, before } = await sentInvoice();
+
+    const result = await updateInvoiceHandler(
+      fakeRequest(
+        {
+          ...validInvoiceData({
+            lineItems: [{ description: "Bigger job", quantity: 1, rate: 999 }],
+          }),
+          invoiceId,
+        },
+        ownerAuth,
+      ),
+    );
+
+    expect(result.payLinkRegenerated).toBe(true);
+    const after = (await ref.get()).data()!;
+    expect(after.payTokenVersion).toBe(before.payTokenVersion + 1);
+    expect(after.payToken).not.toBe(before.payToken);
+    expect(verify(after.payToken, TEST_SECRET)).toMatchObject({
+      invoiceId,
+      tenantId: TENANT,
+      v: before.payTokenVersion + 1,
+    });
+  });
+
+  it("A-08: changing a sent invoice's customer email re-issues its pay link", async () => {
+    const { invoiceId, ref, before } = await sentInvoice();
+
+    const result = await updateInvoiceHandler(
+      fakeRequest(
+        {
+          ...validInvoiceData({
+            customer: { name: "Jane Doe", email: "someone.else@example.com" },
+          }),
+          invoiceId,
+        },
+        ownerAuth,
+      ),
+    );
+
+    expect(result.payLinkRegenerated).toBe(true);
+    expect((await ref.get()).data()!.payTokenVersion).toBe(
+      before.payTokenVersion + 1,
+    );
+  });
+
+  it("keeps the pay link when a sent invoice's edit changes neither amount nor recipient", async () => {
+    const { invoiceId, ref, before } = await sentInvoice();
+
+    const result = await updateInvoiceHandler(
+      fakeRequest(
+        {
+          // Same line items and email (different letter case) — new notes and date.
+          ...validInvoiceData({ notes: "Thanks!", dueDate: "2026-06-30" }),
+          invoiceId,
+        },
+        ownerAuth,
+      ),
+    );
+
+    expect(result.payLinkRegenerated).toBe(false);
+    const after = (await ref.get()).data()!;
+    expect(after.notes).toBe("Thanks!");
+    expect(after.payTokenVersion).toBe(before.payTokenVersion);
+    expect(after.payToken).toBe(before.payToken);
+  });
+
+  it("never re-issues the pay link while the invoice is a draft", async () => {
+    const { invoiceId } = await createInvoiceHandler(
+      fakeRequest(validInvoiceData(), ownerAuth),
+    );
+    const ref = testDb.doc(`tenants/${TENANT}/invoices/${invoiceId}`);
+    await ref.update({ status: "draft" });
+    const before = (await ref.get()).data()!;
+
+    const result = await updateInvoiceHandler(
+      fakeRequest(
+        {
+          ...validInvoiceData({
+            lineItems: [{ description: "Changed", quantity: 3, rate: 10 }],
+          }),
+          invoiceId,
+        },
+        ownerAuth,
+      ),
+    );
+
+    expect(result.payLinkRegenerated).toBe(false);
+    expect((await ref.get()).data()!.payTokenVersion).toBe(
+      before.payTokenVersion,
+    );
+  });
+
   it("rejects update on a paid invoice", async () => {
     const { invoiceId } = await createInvoiceHandler(
       fakeRequest(validInvoiceData(), ownerAuth),
