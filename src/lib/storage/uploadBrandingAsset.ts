@@ -4,9 +4,10 @@ import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { getClientStorage } from "@/lib/firebase/client";
 
 // Owner/admin uploads a logo or favicon directly to Storage. Storage rules
-// (`tenants/{id}/logo.{ext}`, `favicon.{ext}`) gate by tenantId+role+size+
-// contentType. Caller is responsible for then writing the returned URL to
-// `meta.logoUrl` / `meta.faviconUrl` via the updateTenantBranding callable.
+// (`tenants/{id}/{fileName}` limited to `logo|favicon` + an image extension)
+// gate by tenantId+role+size+contentType. Caller is responsible for then
+// writing the returned URL to `meta.logoUrl` / `meta.faviconUrl` via the
+// updateTenantBranding callable.
 export async function uploadBrandingAsset(
   tenantId: string,
   kind: "logo" | "favicon",
@@ -19,15 +20,18 @@ export async function uploadBrandingAsset(
   return await getDownloadURL(storageRef);
 }
 
+// Must stay in sync with isBrandingFileName / isBrandingImage in storage.rules.
+const EXTENSION_BY_TYPE: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/webp": "webp",
+  "image/svg+xml": "svg",
+  "image/x-icon": "ico",
+  "image/vnd.microsoft.icon": "ico",
+};
+
 function extensionFor(file: File): string {
-  if (file.type === "image/png") return "png";
-  if (file.type === "image/jpeg") return "jpg";
-  if (file.type === "image/webp") return "webp";
-  if (file.type === "image/svg+xml") return "svg";
-  if (file.type === "image/x-icon" || file.type === "image/vnd.microsoft.icon")
-    return "ico";
-  // Fall back to whatever the file name says — Storage rule still
-  // gates contentType separately.
-  const nameExt = file.name.split(".").pop()?.toLowerCase();
-  return nameExt && /^[a-z0-9]{2,5}$/.test(nameExt) ? nameExt : "png";
+  const ext = EXTENSION_BY_TYPE[file.type];
+  if (!ext) throw new Error("Use a PNG, JPG, WebP, SVG, or ICO image.");
+  return ext;
 }

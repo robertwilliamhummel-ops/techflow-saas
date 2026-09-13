@@ -17,26 +17,33 @@ service firebase.storage {
             || request.auth.token.role == 'admin');
     }
 
-    function isSmallImage() {
-      return request.resource.contentType.matches('image/.*')
-        && request.resource.size < 2 * 1024 * 1024;
+    // Path segments can't mix a wildcard with literal text (`logo.{ext}` is
+    // invalid), so the file name is captured whole and checked here.
+    function isBrandingFileName(fileName) {
+      return fileName.matches('^(logo|favicon)[.](png|jpg|jpeg|webp|svg|ico)$');
     }
 
-    // Branding assets — owners/admins of the tenant can upload directly so the
+    function isBrandingImage() {
+      return request.resource.size < 2 * 1024 * 1024
+        && request.resource.contentType.matches(
+             '^image/(png|jpeg|webp|svg[+]xml|x-icon|vnd[.]microsoft[.]icon)$');
+    }
+
+    // Branding assets — owners/admins of the tenant upload directly so the
     // client can `getDownloadURL` and pass the public URL to updateTenantBranding.
     // Read access mirrors Firestore (tenant-scoped); the public download URL
     // returned by getDownloadURL is what's exposed to customers + PDF service.
-    match /tenants/{tenantId}/logo.{ext} {
+    // Deletes are not allowed (request.resource is null on delete).
+    match /tenants/{tenantId}/{fileName} {
       allow read: if belongsToTenant(tenantId);
-      allow write: if belongsToTenant(tenantId) && isOwnerOrAdmin() && isSmallImage();
-    }
-    match /tenants/{tenantId}/favicon.{ext} {
-      allow read: if belongsToTenant(tenantId);
-      allow write: if belongsToTenant(tenantId) && isOwnerOrAdmin() && isSmallImage();
+      allow create, update: if belongsToTenant(tenantId)
+        && isOwnerOrAdmin()
+        && isBrandingFileName(fileName)
+        && isBrandingImage();
     }
 
-    // All other tenant-scoped assets (attachments etc.) flow through Cloud
-    // Functions — clients cannot write directly.
+    // All other tenant-scoped assets (snapshots, attachments) flow through
+    // Cloud Functions — clients cannot write directly.
     match /tenants/{tenantId}/{allPaths=**} {
       allow read: if belongsToTenant(tenantId);
       allow write: if false;

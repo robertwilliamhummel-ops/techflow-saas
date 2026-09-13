@@ -62,7 +62,7 @@
 
 | Phase | Status | Remaining |
 |---|---|---|
-| 1 Schema, rules, claims | Mostly done — 42 rules tests | Recurring collection-group index (A-04); storage rules path bug (A-13); customer + recurring-management callables (A-10) |
+| 1 Schema, rules, claims | Mostly done — 42 Firestore + 18 Storage rules tests | Recurring collection-group index (A-04); customer + recurring-management callables (A-10) |
 | 1.5 Design system | Done | — |
 | 2 Cloud Functions | Mostly done — 246 callable, 55 email, 54 shared tests | `getCustomerQuotes` (P6), MagicLinkSignIn + PaymentReceipt templates, App Check + send rate limits (R4), Sentry in functions |
 | 3 Frontend architecture | Contexts, guards, auth recovery done | 12 placeholder pages: `/dashboard`, `/invoices`, `/invoices/new`, `/invoices/[id]`, `/customers`, `/quotes/[id]`, `/portal`, `/portal/invoices/[id]`, `/portal/quotes/[id]`, `/pay/[token]`, `/pay/[token]/success`, `/pay/[token]/cancelled`; dashboard navigation |
@@ -86,9 +86,10 @@
 | A-08 | Sent invoices can be edited (amount, customer email) without bumping `payTokenVersion`; the webhook marks paid without comparing `amount_total` | `updateInvoice.ts`, `handlers.ts` | Bump the version on edits of a sent invoice; verify the amount before marking paid |
 | A-10 | No callables to create/update/delete customers or pause/resume/cancel recurring templates, while rules block client writes | `functions/src/index.ts`, `firestore.rules` | `upsertCustomer`, `deleteCustomer`, `updateRecurringInvoice` |
 | A-12 | Smaller: `useAuth.ts` types roles as `member`/`platform_admin`; `deleteInvoice` hard-deletes sent invoices (should become `void`); `createQuote` prefix only maps `INV→QT`; the `onSignup` membership check isn't transactional | various | — |
-| A-13 | `storage.rules` uses `match /tenants/{tenantId}/logo.{ext}` — invalid path syntax (the emulator rejects the ruleset), so logo/favicon upload rules don't load | `storage.rules` | Match `/{fileName}` and validate `fileName.matches('^(logo\|favicon)\\.(png\|jpe?g\|webp\|svg\|ico)$')`; add storage rules tests |
 
 Closed by the D-decisions: A-09 (surcharge shown vs charged — D3), A-11 (email sending duplicated in five places — D5), forced `business_type: "company"` on Stripe accounts (D1), P10 (email delivery feedback — D5).
+
+Fixed: A-13 (2026-09-13) — `storage.rules` used `logo.{ext}`, invalid path syntax, so the ruleset never loaded. It now matches `/tenants/{tenantId}/{fileName}` and validates the file name, content type, and size; covered by `functions/test/rules/storage.test.ts`.
 
 ### Platform deadlines
 
@@ -99,7 +100,7 @@ Closed by the D-decisions: A-09 (surcharge shown vs charged — D3), A-11 (email
 
 1. Next 15.5.25 and move the A-01 files into `src/`.
 2. Platform upgrade: Node 22, firebase-functions 7, firebase-admin 14, firebase-tools 15, Next 16.
-3. Backend fixes A-02 → A-13, each with a test that would have caught it.
+3. Backend fixes A-02 → A-12, each with a test that would have caught it.
 4. Product screens: Phase 3 placeholders, public pay page, portal magic-link sign-in.
 5. Stand up staging, then prod, per the Deploy Runbook.
 6. Phase 7 test matrix, backup restore drill, first onboarding.
@@ -498,7 +499,17 @@ Two identity patterns are enforced:
 | `platformAdmins/*` | `platformAdmin` claim | none |
 | anything else | none | none |
 
-Open issues: the customer branch still matches drafts (A-05). `storage.rules` intends owner/admin uploads of `logo.*`/`favicon.*` images under 2 MB, readable by tenant members, but its path syntax is invalid (A-13). Customers and the PDF service never read Storage directly — they use the public download URLs stored in meta or the base64 logo in the snapshot.
+Open issues: the customer branch still matches drafts (A-05).
+
+**Storage (`storage.rules`, 18 emulator tests in `functions/test/rules/storage.test.ts`):**
+
+| Path | Read | Write |
+|---|---|---|
+| `tenants/{t}/{logo\|favicon}.{png\|jpg\|jpeg\|webp\|svg\|ico}` | members of `t` | create/update by `owner`/`admin` of `t`; content type `image/png\|jpeg\|webp\|svg+xml\|x-icon\|vnd.microsoft.icon`; under 2 MB; no deletes |
+| `tenants/{t}/**` (snapshots, anything nested) | members of `t` | none (Admin SDK only) |
+| anything else | none | none |
+
+Customers and the PDF service never read Storage directly — they use the public download URLs stored in meta or the base64 logo in the snapshot. `src/lib/storage/uploadBrandingAsset.ts` maps content type to extension with the same allowlist and refuses anything else before uploading.
 
 ### Critical rule properties
 1. **Customer access is read-only.** The `|| email_verified` branch only appears in `allow read`, never in `allow write`.
@@ -550,7 +561,7 @@ No migration needed. Existing Firestore data is 73 test invoices — discarded. 
   - Add additional indexes as queries are finalized in Phase 2. The `firestore.indexes.json` file lives in the repo and is deployed alongside rules via `firebase deploy --only firestore`.
   - **Note:** the Stripe webhook does NOT require a `collectionGroup('meta')` index because we use the `stripeAccounts/{stripeAccountId}` reverse lookup collection instead. Direct doc read, no composite index needed.
 - **Firebase Storage rules deployed (`storage.rules`)** — separate from Firestore rules. Firebase Storage has its own rules file. Required rules:
-  - Tenant users can read/write files under `tenants/{tenantId}/` where their token's `tenantId` matches
+  - Tenant users can read files under `tenants/{tenantId}/` where their token's `tenantId` matches. As built, client writes are limited to owner/admin logo and favicon uploads; everything else is Admin SDK only (see "Security Rules (as built)" → Storage)
   - Customers cannot access Storage directly. Logos and favicons are served via **Firebase Storage public download URLs** (generated by `getDownloadURL()` at upload time). The download URL includes an access token in the query string and is publicly fetchable without Storage rules, which is why the URL itself (not the Storage path) must be what's stored in `meta.logoUrl` / `meta.faviconUrl` and fetched when `createInvoice` inlines it into `tenantSnapshot.logo`. If the Storage path is stored instead, customers' PDFs and portal pages will silently 403 on the logo.
   - No unauthenticated access to the Storage bucket itself
 - Custom-claim helpers in Cloud Functions for signup + role changes
@@ -1723,9 +1734,9 @@ router.replace("/dashboard");
 - Edit business name, reply-to email (`contactEmail`, D5), address
 - Edit branding: primaryColor, secondaryColor, fontFamily picker, favicon upload
 - **Contrast guard on color pickers** — primaryColor and secondaryColor inputs run `meetsWcagAA(hex, '#FFFFFF')` on change; if the ratio is below 4.5:1, show inline error "This color is too light — button text won't be readable. Try a darker shade." Save button stays disabled until valid. `updateTenantBranding` callable re-validates server-side.
-- Logo upload → Firebase Storage at `tenants/{tenantId}/logo.png` (Storage rules mirror Firestore). As built the path is `tenants/{tenantId}/logo.{ext}`, and the storage rule for it is syntactically invalid today (A-13).
+- Logo upload → Firebase Storage at `tenants/{tenantId}/logo.{ext}` (png, jpg, webp, svg; Storage rules mirror Firestore tenant scoping).
   **⚠️ After upload, call `getDownloadURL(ref)` and store the returned public https URL in `meta.logoUrl` — NOT the Storage path.** The token-bearing download URL is what's publicly fetchable; the raw Storage path (e.g. `tenants/acme/logo.png`) requires authenticated Storage access, which customers and the PDF renderer don't have. Same rule for `favicon.ico` → `meta.faviconUrl`.
-- Favicon upload → Firebase Storage at `tenants/{tenantId}/favicon.ico` (see getDownloadURL note above)
+- Favicon upload → Firebase Storage at `tenants/{tenantId}/favicon.{ext}` (ico, png, svg; see getDownloadURL note above)
 - Show current plan (read-only), button to contact for upgrade (manual for MVP)
 
 ### Payment settings (`/settings/payments`)
@@ -2435,7 +2446,7 @@ Vercel env vars and Cloud Functions secrets are parallel systems — both must b
 - Prod: enable Firestore PITR and delete protection.
 - Backups: create `{projectId}-firestore-backups` in the same region with a 30-day lifecycle rule; grant the functions service account `datastore.databases.export` and object create on the bucket.
 - Firestore TTL policies: collection group `payAttempts` on `expireAt`; `stripeEvents` on `expireAt`; `emailSends` on `expireAt`.
-- Run the emulator suites, take a manual export, then `firebase deploy --only firestore:rules,firestore:indexes,storage --project <projectId>` (fix A-04 and A-13 first).
+- Run the emulator suites, take a manual export, then `firebase deploy --only firestore:rules,firestore:indexes,storage --project <projectId>` (fix A-04 first).
 - Set the functions secrets and `functions/.env.<projectId>`, then `firebase deploy --only functions --project <projectId>`.
 - Firebase Auth: authorized domains include the portal domain (custom domains are added by `setupCustomDomain`); password-reset and verification email action URL → `https://<portal-domain>/auth/action`; **SMTP settings → SES SMTP credentials**, so auth emails send from the platform domain instead of `*.firebaseapp.com`.
 - Platform admin: `npx ts-node functions/src/scripts/setPlatformAdmin.ts <uid> <email>` with application default credentials.
