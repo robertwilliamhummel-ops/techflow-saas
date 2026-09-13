@@ -114,7 +114,9 @@ export interface InvoiceDoc {
   // can reconcile "invoice was $500, surcharge was $12, tenant received $512".
   paidAmountCents?: number | null;
   surchargeAmountCents?: number | null;
-  stripeChargeId?: string | null;
+  // A-02: refund and dispute events find the invoice by PaymentIntent id.
+  stripePaymentIntentId?: string | null;
+  stripeCheckoutSessionId?: string | null;
 
   // Refund fields — set by charge.refunded. Partial vs full distinguished via
   // status ('refunded' vs 'partially-refunded'). paidAmountCents is NOT cleared

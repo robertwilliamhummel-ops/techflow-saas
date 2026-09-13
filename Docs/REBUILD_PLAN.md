@@ -67,7 +67,7 @@
 | 1.5 Design system | Done | — |
 | 2 Cloud Functions | Mostly done — 246 callable, 55 email, 54 shared tests | `getCustomerQuotes` (P6), MagicLinkSignIn + PaymentReceipt templates, App Check + send rate limits (R4), Sentry in functions |
 | 3 Frontend architecture | Contexts, guards, auth recovery done | 12 placeholder pages: `/dashboard`, `/invoices`, `/invoices/new`, `/invoices/[id]`, `/customers`, `/quotes/[id]`, `/portal`, `/portal/invoices/[id]`, `/portal/quotes/[id]`, `/pay/[token]`, `/pay/[token]/success`, `/pay/[token]/cancelled`; dashboard navigation |
-| 4 Stripe Connect | Backend done (D1 applied) | Public pay page UI; A-02, A-08 |
+| 4 Stripe Connect | Backend done (D1 applied) | Public pay page UI; A-08 |
 | 5 Onboarding & domains | Signup, login, settings, team, domain, billing UI done; host-routing proxy loads | Customer magic-link sign-in (portal login is password-only today); A-07 |
 | 6 PDF | Code done — 222 tests; Node 24 image (D6) | Deploy (the Docker image has not been built yet) |
 | 7 Testing & first onboarding | Bundles A–E done | Test matrix, staging project, backup restore drill, first onboarding |
@@ -77,7 +77,6 @@
 
 | Ref | Bug | Where | Fix |
 |---|---|---|---|
-| A-02 | Payment saves `session.payment_intent` (`pi_…`) as `stripeChargeId`; refund and dispute handlers look up `charge.id` (`ch_…`), so they never match | `src/app/api/webhooks/stripe/handlers.ts` | Store `stripePaymentIntentId`; look up by `charge.payment_intent` |
 | A-04 | `processRecurringInvoices` collection-group query (`status ==` + `nextRunAt <=`) has no composite index — fails in production (the emulator doesn't enforce indexes) | `firestore.indexes.json` | Add the `recurringInvoices` COLLECTION_GROUP index |
 | A-05 | `getCustomerInvoices` (and the customer rule branch) include drafts; list rows carry full base64 logos (callable 10 MB limit at ~20 rows) | `functions/src/portal/getCustomerInvoices.ts`, `firestore.rules` | Exclude `draft`; project a small logo URL |
 | A-06 | Emails embed the snapshot's base64 `data:` logo, which Gmail web and Outlook block | `sendInvoiceEmail.ts`, `sendQuoteEmail.ts`, `processRecurringInvoices.ts` | Copy the logo to an immutable public Storage path at snapshot time; use that https URL in email |
@@ -93,6 +92,8 @@ Fixed: A-13 (2026-09-13) — `storage.rules` used `logo.{ext}`, invalid path syn
 Fixed: A-01 (2026-09-13) — `middleware.ts`, `instrumentation.ts`, and `instrumentation-client.ts` moved into `src/`, so Next.js loads them (the build's functions-config manifest lists `/_middleware` on the Node.js runtime). The middleware now also strips any client-supplied `x-tenant-id` before routing. Covered by `src/__tests__/proxy.test.ts` (Next 16 renamed the file to `src/proxy.ts`).
 
 Fixed: A-03 (2026-09-13) — the event marker was written before the handler ran, so a failed handler was never retried. `stripeEvents/{eventId}` now moves `processing` → `done` (or `failed`, which Stripe's retry re-runs); a copy arriving mid-run gets 409; a 5-minute lease covers crashed runs; auto-refunds carry Stripe idempotency keys. Covered by `src/app/api/webhooks/stripe/__tests__/webhooks.test.ts`. The unused Cloud Functions copy of `claimStripeEvent` was deleted.
+
+Fixed: A-02 (2026-09-13) — checkout saved the PaymentIntent id (`pi_…`) as `stripeChargeId` while refunds and disputes looked up the charge id (`ch_…`), so no refund or dispute ever reached an invoice. Payments now record `stripePaymentIntentId` (plus `stripeCheckoutSessionId`); refunds match `charge.payment_intent`, disputes `dispute.payment_intent` with a charge lookup fallback. Checkout also labels the PaymentIntent with the invoice for the contractor's Stripe Dashboard. Covered by `src/app/api/webhooks/stripe/__tests__/handlers.test.ts` (checkout then refund end-to-end).
 
 ### Platform deadlines
 
@@ -393,7 +394,7 @@ platformAdmins/{uid}          { uid, email, grantedAt, grantedBy }
   createdAt, createdBy, updatedAt, sentAt,
   sourceQuoteId, sourceRecurringInvoiceId,
   paidAt, paymentMethod ('manual' | 'etransfer' | 'cash' | 'card'),
-  paidAmountCents, surchargeAmountCents, stripeChargeId,
+  paidAmountCents, surchargeAmountCents, stripePaymentIntentId, stripeCheckoutSessionId,
   refundedAt, refundedAmountCents,
   disputed, disputedAt, disputeReason, disputeOutcome ('won' | 'lost'),
   lastEmailStatus ('delivered' | 'bounced' | 'complained' | 'delayed' | 'rejected'),
@@ -1574,10 +1575,10 @@ Stripe delivers events in two scopes. Each endpoint has its own signing secret a
 
 **2. Connected-accounts scope — `POST /api/webhooks/stripe/connect`** (`STRIPE_CONNECT_WEBHOOK_SECRET`). Every event carries `event.account` and is routed through `stripeAccounts/{event.account}`; unknown accounts get 200 plus an error log. **Idempotency (A-03):** `stripeEvents/{event.id}` moves `processing` → `done` only after the handler succeeds. A handler that throws marks it `failed` and returns 500, so Stripe's retry (up to 3 days in live mode) runs it again; a copy arriving while a run holds its 5-minute lease gets 409 so Stripe retries later; a lapsed lease is reclaimed. Handlers are therefore written to run more than once — merge writes, deterministic incident ids, and Stripe idempotency keys on refunds. Register it with "Listen to events on Connected accounts" and these events:
 
-- `checkout.session.completed` — `metadata.tenantId` must match the routed tenant (otherwise a `tenant-mismatch` incident). **C2 guard:** if `metadata.payTokenVersion` differs from the invoice's current version, the tenant regenerated the link mid-checkout — refund on the connected account and write an `auto-refund-version-mismatch` incident instead of marking paid. Otherwise set `status: 'paid'`, `paidAt`, `paymentMethod: 'card'`, `paidAmountCents`, `surchargeAmountCents`, `stripeChargeId` (A-02 open).
+- `checkout.session.completed` — `metadata.tenantId` must match the routed tenant (otherwise a `tenant-mismatch` incident). **C2 guard:** if `metadata.payTokenVersion` differs from the invoice's current version, the tenant regenerated the link mid-checkout — refund on the connected account and write an `auto-refund-version-mismatch` incident instead of marking paid. Otherwise set `status: 'paid'`, `paidAt`, `paymentMethod: 'card'`, `paidAmountCents`, `surchargeAmountCents`, `stripePaymentIntentId`, `stripeCheckoutSessionId`.
 - `payment_intent.payment_failed` — log only; the customer can retry.
-- `charge.refunded` — `refunded` (full) or `partially-refunded`, with `refundedAt` and `refundedAmountCents`; the original paid amounts are kept for accounting.
-- `charge.dispute.created` — `disputed: true`, `disputedAt`, `disputeReason`; status unchanged (disputes can be won); `dispute-created` incident, so owners are emailed the evidence deadline.
+- `charge.refunded` — matched to the invoice by `charge.payment_intent` = `stripePaymentIntentId` (A-02; a refund of a payment never recorded on an invoice, such as a C2 auto-refund, matches nothing). `refunded` (full) or `partially-refunded`, with `refundedAt` and `refundedAmountCents`; the original paid amounts are kept for accounting.
+- `charge.dispute.created` — matched by `dispute.payment_intent`, falling back to reading the disputed charge on the connected account when that field is null. `disputed: true`, `disputedAt`, `disputeReason`; status unchanged (disputes can be won); `dispute-created` incident, so owners are emailed the evidence deadline.
 - `charge.dispute.closed` — `won`: clear `disputed`, `disputeOutcome: 'won'`. Otherwise `status: 'refunded'`, `disputeOutcome: 'lost'`, and a `dispute-lost` incident.
 - `account.updated` — mirror capability state into `meta.stripeStatus`, only for the tenant's current `stripeAccountId`.
 - `account.application.deauthorized` — `data.object` is the Application, the account is `event.account`. Clear `stripeAccountId` and `stripeStatus` when it matches and delete the reverse lookup. A real case with full-dashboard accounts: the contractor can disconnect TechFlow from their own Stripe Dashboard.
@@ -1692,7 +1693,7 @@ const session = await stripe.checkout.sessions.create({
 2. Read the invoice doc; verify `payTokenVersion` matches and `status !== 'paid'`.
 3. Check a rate-limit counter at `tenants/{tenantId}/invoices/{invoiceId}/payAttempts` — if more than 10 checkout sessions have been created in the last 24h, reject with `resource-exhausted`. Prevents abuse of the public endpoint. **R2 — auto-cleanup:** each `payAttempts` doc carries an `expireAt: Timestamp` field set to `createdAt + 48h`. A Firestore TTL policy on the `payAttempts` subcollection with `expireAt` as the TTL field deletes expired attempts automatically (configured once per project in Firebase Console → Firestore → TTL policies). No scheduled cleanup function needed. Prevents storage bloat at scale (without this, every invoice accumulates 10 attempt docs forever).
 4. Read tenant meta for `stripeAccountId`, `chargeCustomerCardFees`, `cardFeePercent`, `currency`.
-5. Build the Checkout session with the surcharge logic above.
+5. Build the Checkout session with the surcharge logic above. `payment_intent_data` sets the description `Invoice {invoiceId}` and `invoiceId`/`tenantId` metadata on the PaymentIntent, so contractors can tell which invoice a payment belongs to in their own Stripe Dashboard, where they handle refunds and disputes.
 6. Return `{ url: session.url }` — client redirects.
 
 The function is rate-limited (Cloud Functions v2 `maxInstances: 10`, `cpu: 1`) and uses `PAY_TOKEN_SECRET` from `defineSecret()` — never an env var. Logged attempts include token hash (not the token itself), invoice ID, and outcome. Sentry tags the invoice's `tenantId`.

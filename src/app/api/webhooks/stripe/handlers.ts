@@ -23,14 +23,13 @@ import { buildStripeStatusFromAccount } from "@/lib/stripe/status";
 // Shared lookup helpers
 // ---------------------------------------------------------------------------
 
-// Find an invoice by its stripeChargeId across all tenants is expensive —
-// instead the Connect webhook already knows the tenant from event.account, so
-// we scope the collectionGroup query to that tenant's invoices subcollection.
-// Collection group 'invoices' returns all tenants' invoices, so we filter by
-// stripeChargeId AND assert the parent tenantId matches.
-async function findInvoiceByChargeId(
+// Card payments are recorded on the invoice by PaymentIntent id (A-02). Refund
+// and dispute events carry the Charge / Dispute, whose `payment_intent` links
+// back to it. The Connect route already resolved the tenant from event.account,
+// so the query stays inside that tenant's invoices.
+async function findInvoiceByPaymentIntent(
   tenantId: string,
-  stripeChargeId: string,
+  paymentIntentId: string,
 ): Promise<{
   ref: FirebaseFirestore.DocumentReference;
   data: Record<string, unknown>;
@@ -38,7 +37,7 @@ async function findInvoiceByChargeId(
   const db = getAdminDb();
   const query = await db
     .collection(`tenants/${tenantId}/invoices`)
-    .where("stripeChargeId", "==", stripeChargeId)
+    .where("stripePaymentIntentId", "==", paymentIntentId)
     .limit(1)
     .get();
   if (query.empty) return null;
@@ -46,10 +45,30 @@ async function findInvoiceByChargeId(
   return { ref: doc.ref, data: doc.data() };
 }
 
-function asChargeId(pi: Stripe.Charge["payment_intent"] | string | null): string | null {
-  if (!pi) return null;
-  if (typeof pi === "string") return pi;
-  return pi.id ?? null;
+// Stripe references that can arrive as an id or as an expanded object.
+function asId(value: string | { id: string } | null | undefined): string | null {
+  if (!value) return null;
+  if (typeof value === "string") return value;
+  return value.id ?? null;
+}
+
+// Dispute.payment_intent is nullable. The disputed charge always links back to
+// its PaymentIntent for Checkout payments, so fall back to reading the charge on
+// the connected account (a throw here fails the event and Stripe retries it).
+async function disputePaymentIntentId(
+  dispute: Stripe.Dispute,
+  stripeAccount: string | null | undefined,
+): Promise<string | null> {
+  const direct = asId(dispute.payment_intent);
+  if (direct) return direct;
+  const chargeId = asId(dispute.charge);
+  if (!chargeId || !stripeAccount) return null;
+  const charge = await getStripeClient().charges.retrieve(
+    chargeId,
+    {},
+    { stripeAccount },
+  );
+  return asId(charge.payment_intent);
 }
 
 // ---------------------------------------------------------------------------
@@ -137,7 +156,7 @@ export async function handleCheckoutCompleted(
     return;
   }
 
-  const chargeId = asChargeId(session.payment_intent);
+  const paymentIntentId = asId(session.payment_intent);
   const paidAmountCents = basePaid != null ? Number(basePaid) : null;
   const surchargeAmountCents = surcharge != null ? Number(surcharge) : 0;
 
@@ -148,7 +167,9 @@ export async function handleCheckoutCompleted(
       paymentMethod: "card",
       paidAmountCents,
       surchargeAmountCents,
-      stripeChargeId: chargeId,
+      // A-02: refunds and disputes find the invoice through this id.
+      stripePaymentIntentId: paymentIntentId,
+      stripeCheckoutSessionId: session.id,
     },
     { merge: true },
   );
@@ -171,7 +192,7 @@ async function autoRefundVersionMismatch(args: {
     stripeAccount,
   } = args;
 
-  const paymentIntent = asChargeId(session.payment_intent);
+  const paymentIntent = asId(session.payment_intent);
   let refundId: string | null = null;
   let refundError: string | null = null;
 
@@ -218,11 +239,16 @@ export async function handleChargeRefunded(
   event: Stripe.Event,
 ): Promise<void> {
   const charge = event.data.object as Stripe.Charge;
-  const match = await findInvoiceByChargeId(tenantId, charge.id);
+  const paymentIntentId = asId(charge.payment_intent);
+  const match = paymentIntentId
+    ? await findInvoiceByPaymentIntent(tenantId, paymentIntentId)
+    : null;
   if (!match) {
+    // Includes our own auto-refunds of payments that were never recorded on an
+    // invoice (e.g. the C2 version-mismatch path) — nothing to update.
     console.warn(
-      `[stripe connect] charge.refunded for unknown chargeId`,
-      { tenantId, chargeId: charge.id },
+      `[stripe connect] charge.refunded matches no recorded invoice payment`,
+      { tenantId, chargeId: charge.id, paymentIntentId },
     );
     return;
   }
@@ -250,22 +276,15 @@ export async function handleDisputeCreated(
   event: Stripe.Event,
 ): Promise<void> {
   const dispute = event.data.object as Stripe.Dispute;
-  const chargeId =
-    typeof dispute.charge === "string" ? dispute.charge : dispute.charge?.id;
-  if (!chargeId) {
-    console.error(`[stripe connect] dispute.created without charge`, {
-      tenantId,
-      disputeId: dispute.id,
-    });
-    return;
-  }
-  const match = await findInvoiceByChargeId(tenantId, chargeId);
+  const paymentIntentId = await disputePaymentIntentId(dispute, event.account);
+  const match = paymentIntentId
+    ? await findInvoiceByPaymentIntent(tenantId, paymentIntentId)
+    : null;
   if (!match) {
-    console.warn(`[stripe connect] dispute.created for unknown chargeId`, {
-      tenantId,
-      chargeId,
-      disputeId: dispute.id,
-    });
+    console.warn(
+      `[stripe connect] dispute.created matches no recorded invoice payment`,
+      { tenantId, disputeId: dispute.id, paymentIntentId },
+    );
     return;
   }
 
@@ -304,11 +323,17 @@ export async function handleDisputeClosed(
   event: Stripe.Event,
 ): Promise<void> {
   const dispute = event.data.object as Stripe.Dispute;
-  const chargeId =
-    typeof dispute.charge === "string" ? dispute.charge : dispute.charge?.id;
-  if (!chargeId) return;
-  const match = await findInvoiceByChargeId(tenantId, chargeId);
-  if (!match) return;
+  const paymentIntentId = await disputePaymentIntentId(dispute, event.account);
+  const match = paymentIntentId
+    ? await findInvoiceByPaymentIntent(tenantId, paymentIntentId)
+    : null;
+  if (!match) {
+    console.warn(
+      `[stripe connect] dispute.closed matches no recorded invoice payment`,
+      { tenantId, disputeId: dispute.id, paymentIntentId },
+    );
+    return;
+  }
 
   // charge.dispute.closed only fires for terminal states. 'won' means the
   // tenant kept the money; anything else (lost, charge_refunded) means the

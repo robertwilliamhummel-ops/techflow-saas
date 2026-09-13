@@ -471,6 +471,12 @@ describe("createPayTokenCheckoutSession", () => {
     const createArgs = mockStripeCreate.mock.calls[0][0];
     expect(createArgs.metadata.payTokenVersion).toBe("1");
     expect(createArgs.metadata.tenantId).toBe(TENANT);
+
+    // The payment itself names the invoice in the contractor's Stripe Dashboard.
+    expect(createArgs.payment_intent_data).toEqual({
+      description: "Invoice INV-0001",
+      metadata: { invoiceId: "INV-0001", tenantId: TENANT },
+    });
   });
 
   it("rejects already-paid invoices", async () => {

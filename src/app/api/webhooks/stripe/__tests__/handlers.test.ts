@@ -171,11 +171,14 @@ vi.mock("firebase-admin/firestore", () => ({
   },
 }));
 
-// Stripe client — the only method handlers invoke is refunds.create.
+// Stripe client — handlers call refunds.create (auto-refunds) and
+// charges.retrieve (dispute fallback when dispute.payment_intent is null).
 const refundsCreate = vi.fn();
+const chargesRetrieve = vi.fn();
 vi.mock("@/lib/stripe/admin", () => ({
   getStripeClient: () => ({
     refunds: { create: (...args: unknown[]) => refundsCreate(...args) },
+    charges: { retrieve: (...args: unknown[]) => chargesRetrieve(...args) },
   }),
 }));
 
@@ -201,6 +204,7 @@ function resetState(): void {
   docs.clear();
   collections.clear();
   refundsCreate.mockReset();
+  chargesRetrieve.mockReset();
 }
 
 beforeEach(() => {
@@ -271,7 +275,10 @@ describe("handleCheckoutCompleted", () => {
     expect(inv?.paymentMethod).toBe("card");
     expect(inv?.paidAmountCents).toBe(11300);
     expect(inv?.surchargeAmountCents).toBe(271);
-    expect(inv?.stripeChargeId).toBe("pi_123");
+    // A-02: recorded by PaymentIntent id, which refund/dispute events link to.
+    expect(inv?.stripePaymentIntentId).toBe("pi_123");
+    expect(inv?.stripeCheckoutSessionId).toBe("cs_test_abc");
+    expect(inv).not.toHaveProperty("stripeChargeId");
     expect(inv?.paidAt).toBeDefined();
 
     expect(refundsCreate).not.toHaveBeenCalled();
@@ -478,10 +485,53 @@ describe("handleChargeRefunded", () => {
     } as unknown as Stripe.Event;
   }
 
+  it("A-02: a refund on a Checkout payment finds the invoice (charge id ≠ payment intent id)", async () => {
+    // Pay through the real checkout handler, then refund the resulting charge.
+    // Stripe's charge id (ch_…) never equals the PaymentIntent id (pi_…) the
+    // checkout event reports — matching on the charge id missed every refund.
+    docs.set(`tenants/${TENANT}/invoices/INV-E2E`, {
+      status: "sent",
+      payTokenVersion: 1,
+      totals: { total: 113 },
+    });
+    await handleCheckoutCompleted(TENANT, {
+      id: "evt_paid",
+      type: "checkout.session.completed",
+      account: "acct_x",
+      data: {
+        object: {
+          id: "cs_e2e",
+          payment_intent: "pi_e2e",
+          metadata: {
+            invoiceId: "INV-E2E",
+            tenantId: TENANT,
+            payTokenVersion: "1",
+            basePaidCents: "11300",
+            surchargeCents: "0",
+          },
+        },
+      },
+    } as unknown as Stripe.Event);
+
+    await handleChargeRefunded(
+      TENANT,
+      chargeEvent({
+        id: "ch_e2e",
+        payment_intent: "pi_e2e",
+        amount: 11300,
+        amount_refunded: 11300,
+      }),
+    );
+
+    const inv = docs.get(`tenants/${TENANT}/invoices/INV-E2E`);
+    expect(inv?.status).toBe("refunded");
+    expect(inv?.refundedAmountCents).toBe(11300);
+  });
+
   it("full refund → status 'refunded' + refund fields", async () => {
     docs.set(`tenants/${TENANT}/invoices/INV-1`, {
       status: "paid",
-      stripeChargeId: "ch_abc",
+      stripePaymentIntentId: "pi_abc",
       paidAmountCents: 11300,
     });
 
@@ -489,6 +539,7 @@ describe("handleChargeRefunded", () => {
       TENANT,
       chargeEvent({
         id: "ch_abc",
+        payment_intent: "pi_abc",
         amount: 11300,
         amount_refunded: 11300,
       }),
@@ -505,7 +556,7 @@ describe("handleChargeRefunded", () => {
   it("partial refund → status 'partially-refunded'", async () => {
     docs.set(`tenants/${TENANT}/invoices/INV-2`, {
       status: "paid",
-      stripeChargeId: "ch_def",
+      stripePaymentIntentId: "pi_def",
       paidAmountCents: 11300,
     });
 
@@ -513,6 +564,7 @@ describe("handleChargeRefunded", () => {
       TENANT,
       chargeEvent({
         id: "ch_def",
+        payment_intent: "pi_def",
         amount: 11300,
         amount_refunded: 5000,
       }),
@@ -523,11 +575,31 @@ describe("handleChargeRefunded", () => {
     expect(inv?.refundedAmountCents).toBe(5000);
   });
 
-  it("is a no-op when no invoice has this stripeChargeId", async () => {
+  it("is a no-op when no invoice recorded this payment intent", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    docs.set(`tenants/${TENANT}/invoices/INV-OTHER`, {
+      status: "paid",
+      stripePaymentIntentId: "pi_other",
+    });
+    await handleChargeRefunded(
+      TENANT,
+      chargeEvent({
+        id: "ch_orphan",
+        payment_intent: "pi_orphan",
+        amount: 100,
+        amount_refunded: 100,
+      }),
+    );
+    expect(warn).toHaveBeenCalled();
+    expect(docs.get(`tenants/${TENANT}/invoices/INV-OTHER`)?.status).toBe("paid");
+    warn.mockRestore();
+  });
+
+  it("ignores a charge without a payment intent", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     await handleChargeRefunded(
       TENANT,
-      chargeEvent({ id: "ch_orphan", amount: 100, amount_refunded: 100 }),
+      chargeEvent({ id: "ch_legacy", payment_intent: null, amount: 100, amount_refunded: 100 }),
     );
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
@@ -544,7 +616,7 @@ describe("handleDisputeCreated", () => {
   it("sets disputed=true + reason + disputedAt", async () => {
     docs.set(`tenants/${TENANT}/invoices/INV-3`, {
       status: "paid",
-      stripeChargeId: "ch_disputed",
+      stripePaymentIntentId: "pi_disputed",
     });
 
     // due_by epoch seconds → 2026-05-15
@@ -558,6 +630,7 @@ describe("handleDisputeCreated", () => {
         object: {
           id: "dp_1",
           charge: "ch_disputed",
+          payment_intent: "pi_disputed",
           reason: "fraudulent",
           amount: 11300,
           evidence_details: { due_by: dueBySec },
@@ -590,7 +663,7 @@ describe("handleDisputeCreated", () => {
   it("records an incident even when reason is missing (defaults to 'unspecified')", async () => {
     docs.set(`tenants/${TENANT}/invoices/INV-3b`, {
       status: "paid",
-      stripeChargeId: "ch_disputed_b",
+      stripePaymentIntentId: "pi_disputed_b",
     });
 
     await handleDisputeCreated(TENANT, {
@@ -598,7 +671,12 @@ describe("handleDisputeCreated", () => {
       type: "charge.dispute.created",
       account: "acct_x",
       data: {
-        object: { id: "dp_2", charge: "ch_disputed_b", amount: 5000 },
+        object: {
+          id: "dp_2",
+          charge: "ch_disputed_b",
+          payment_intent: "pi_disputed_b",
+          amount: 5000,
+        },
       },
     } as unknown as Stripe.Event);
 
@@ -607,6 +685,26 @@ describe("handleDisputeCreated", () => {
         `tenants/${TENANT}/invoices/INV-3b/paymentIncidents/dispute-created_dp_2`,
       ),
     ).toMatchObject({ kind: "dispute-created", disputeReason: "unspecified" });
+  });
+
+  it("falls back to the disputed charge on the connected account when dispute.payment_intent is null", async () => {
+    docs.set(`tenants/${TENANT}/invoices/INV-3c`, {
+      status: "paid",
+      stripePaymentIntentId: "pi_from_charge",
+    });
+    chargesRetrieve.mockResolvedValue({ id: "ch_c", payment_intent: "pi_from_charge" });
+
+    await handleDisputeCreated(TENANT, {
+      id: "evt_dc",
+      type: "charge.dispute.created",
+      account: "acct_x",
+      data: {
+        object: { id: "dp_3", charge: "ch_c", payment_intent: null, amount: 5000 },
+      },
+    } as unknown as Stripe.Event);
+
+    expect(chargesRetrieve).toHaveBeenCalledWith("ch_c", {}, { stripeAccount: "acct_x" });
+    expect(docs.get(`tenants/${TENANT}/invoices/INV-3c`)?.disputed).toBe(true);
   });
 });
 
@@ -622,6 +720,7 @@ describe("handleDisputeClosed", () => {
         object: {
           id: "dp_1",
           charge: "ch_disputed",
+          payment_intent: "pi_disputed",
           status,
           reason: "fraudulent",
           amount,
@@ -633,7 +732,7 @@ describe("handleDisputeClosed", () => {
   it("status='won' → clears disputed, sets outcome=won, invoice stays paid", async () => {
     docs.set(`tenants/${TENANT}/invoices/INV-4`, {
       status: "paid",
-      stripeChargeId: "ch_disputed",
+      stripePaymentIntentId: "pi_disputed",
       disputed: true,
     });
 
@@ -649,7 +748,7 @@ describe("handleDisputeClosed", () => {
   it("status='lost' → clears disputed, sets outcome=lost, flips status to refunded", async () => {
     docs.set(`tenants/${TENANT}/invoices/INV-5`, {
       status: "paid",
-      stripeChargeId: "ch_disputed",
+      stripePaymentIntentId: "pi_disputed",
       disputed: true,
     });
 
@@ -676,7 +775,7 @@ describe("handleDisputeClosed", () => {
   it("status='charge_refunded' is also treated as lost (chargeback went through)", async () => {
     docs.set(`tenants/${TENANT}/invoices/INV-6`, {
       status: "paid",
-      stripeChargeId: "ch_disputed",
+      stripePaymentIntentId: "pi_disputed",
       disputed: true,
     });
 

@@ -183,6 +183,16 @@ export async function createPayTokenCheckoutSessionHandler(
             surchargeCents > 0 ? "any" : "automatic",
         },
       },
+      // Shown on the payment in the contractor's own Stripe Dashboard, where
+      // refunds and disputes are handled (D1), so they can tell which invoice
+      // a payment belongs to.
+      payment_intent_data: {
+        description: `Invoice ${invoiceSnap.id}`,
+        metadata: {
+          invoiceId: payload.invoiceId,
+          tenantId: payload.tenantId,
+        },
+      },
       metadata: {
         invoiceId: payload.invoiceId,
         tenantId: payload.tenantId,
