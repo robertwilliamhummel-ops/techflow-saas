@@ -118,12 +118,17 @@ const handlePaymentFailed = vi.fn();
 const handleChargeRefunded = vi.fn();
 const handleDisputeCreated = vi.fn();
 const handleDisputeClosed = vi.fn();
+const handleAccountUpdated = vi.fn();
+const handleAccountDeauthorized = vi.fn();
 vi.mock("../handlers", () => ({
   handleCheckoutCompleted: (...args: unknown[]) => handleCheckoutCompleted(...args),
   handlePaymentFailed: (...args: unknown[]) => handlePaymentFailed(...args),
   handleChargeRefunded: (...args: unknown[]) => handleChargeRefunded(...args),
   handleDisputeCreated: (...args: unknown[]) => handleDisputeCreated(...args),
   handleDisputeClosed: (...args: unknown[]) => handleDisputeClosed(...args),
+  handleAccountUpdated: (...args: unknown[]) => handleAccountUpdated(...args),
+  handleAccountDeauthorized: (...args: unknown[]) =>
+    handleAccountDeauthorized(...args),
 }));
 
 // ---------------------------------------------------------------------------
@@ -145,6 +150,8 @@ function resetStore(): void {
   handleChargeRefunded.mockReset();
   handleDisputeCreated.mockReset();
   handleDisputeClosed.mockReset();
+  handleAccountUpdated.mockReset();
+  handleAccountDeauthorized.mockReset();
 }
 
 function makeRequest(body: string, sig: string | null = "t=1,v1=fake"): Request {
@@ -201,129 +208,23 @@ describe("platform webhook — POST /api/webhooks/stripe/platform", () => {
     });
   });
 
-  it("account.updated mirrors capability state into tenant meta", async () => {
-    store.set("stripeAccounts/acct_abc", { tenantId: "tnt_acme" });
+  it("acknowledges platform-scope events without touching tenant state", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
     constructEvent.mockReturnValue({
-      id: "evt_a",
-      type: "account.updated",
+      id: "evt_platform",
+      type: "balance.available",
       account: null,
       livemode: false,
-      data: {
-        object: {
-          id: "acct_abc",
-          charges_enabled: true,
-          payouts_enabled: true,
-          details_submitted: true,
-          requirements: { currently_due: [], disabled_reason: null },
-        },
-      },
+      data: { object: {} },
     } as unknown as Stripe.Event);
 
     const res = await platformPOST(makeRequest("{}"));
     expect(res.status).toBe(200);
-
-    const meta = store.get("tenants/tnt_acme/meta/settings") as
-      | { stripeStatus?: Record<string, unknown> }
-      | undefined;
-    expect(meta?.stripeStatus).toMatchObject({
-      chargesEnabled: true,
-      payoutsEnabled: true,
-      detailsSubmitted: true,
-      currentlyDue: [],
-      disabledReason: null,
-    });
-
-    // Idempotency sentinel written
-    expect(store.get("stripeEvents/evt_a")).toMatchObject({
-      type: "account.updated",
-    });
-  });
-
-  it("account.updated is idempotent — a redelivered event is a no-op", async () => {
-    store.set("stripeAccounts/acct_abc", { tenantId: "tnt_acme" });
-    const primeEvent = () => {
-      constructEvent.mockReturnValue({
-        id: "evt_dup",
-        type: "account.updated",
-        account: null,
-        livemode: false,
-        data: {
-          object: {
-            id: "acct_abc",
-            charges_enabled: true,
-            payouts_enabled: true,
-            details_submitted: true,
-            requirements: { currently_due: [], disabled_reason: null },
-          },
-        },
-      } as unknown as Stripe.Event);
-    };
-
-    primeEvent();
-    await platformPOST(makeRequest("{}"));
-
-    // Corrupt the meta doc so we can prove the second delivery did NOT re-run
-    // the handler (if it did, stripeStatus would be rewritten).
-    store.set("tenants/tnt_acme/meta/settings", { stripeStatus: { poisoned: true } });
-
-    primeEvent();
-    const res = await platformPOST(makeRequest("{}"));
-    const body = await res.json();
-    expect(body).toEqual({ received: true, duplicate: true });
-
-    const meta = store.get("tenants/tnt_acme/meta/settings") as
-      | { stripeStatus?: { poisoned?: boolean } }
-      | undefined;
-    expect(meta?.stripeStatus?.poisoned).toBe(true);
-  });
-
-  it("account.updated for unknown account logs and returns 200 without writing meta", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    constructEvent.mockReturnValue({
-      id: "evt_b",
-      type: "account.updated",
-      account: null,
-      livemode: false,
-      data: {
-        object: {
-          id: "acct_ghost",
-          charges_enabled: true,
-          payouts_enabled: false,
-          details_submitted: true,
-          requirements: { currently_due: [], disabled_reason: null },
-        },
-      },
-    } as unknown as Stripe.Event);
-    const res = await platformPOST(makeRequest("{}"));
-    expect(res.status).toBe(200);
-    expect(warn).toHaveBeenCalled();
-    warn.mockRestore();
-  });
-
-  it("account.application.deauthorized clears tenant linkage and drops reverse lookup", async () => {
-    store.set("stripeAccounts/acct_xyz", { tenantId: "tnt_bye" });
-    store.set("tenants/tnt_bye/meta/settings", {
-      stripeAccountId: "acct_xyz",
-      stripeStatus: { chargesEnabled: true },
-    });
-
-    constructEvent.mockReturnValue({
-      id: "evt_c",
-      type: "account.application.deauthorized",
-      account: null,
-      livemode: false,
-      data: { object: { id: "acct_xyz" } },
-    } as unknown as Stripe.Event);
-
-    const res = await platformPOST(makeRequest("{}"));
-    expect(res.status).toBe(200);
-
-    expect(store.has("stripeAccounts/acct_xyz")).toBe(false);
-    const meta = store.get("tenants/tnt_bye/meta/settings") as
-      | { stripeAccountId?: string | null; stripeStatus?: { chargesEnabled?: boolean } }
-      | undefined;
-    expect(meta?.stripeAccountId).toBeNull();
-    expect(meta?.stripeStatus?.chargesEnabled).toBe(false);
+    expect(await res.json()).toEqual({ received: true });
+    // No sentinel, no meta writes — connected-account lifecycle lives on the
+    // Connect endpoint (D1).
+    expect(store.size).toBe(0);
+    info.mockRestore();
   });
 
   it("unknown event type is acknowledged (Stripe stops retrying)", async () => {
@@ -426,6 +327,9 @@ describe("connect webhook — POST /api/webhooks/stripe/connect", () => {
       ["charge.refunded", handleChargeRefunded],
       ["charge.dispute.created", handleDisputeCreated],
       ["charge.dispute.closed", handleDisputeClosed],
+      // D1 — connected-account lifecycle events are Connect-scope.
+      ["account.updated", handleAccountUpdated],
+      ["account.application.deauthorized", handleAccountDeauthorized],
     ];
 
     let i = 0;

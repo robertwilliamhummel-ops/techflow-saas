@@ -1,11 +1,24 @@
-// Phase 4 Bundle B — Stripe Connect Express onboarding entry point.
+// Stripe Connect onboarding entry point (decision D1, 2026-09-13).
 //
-// Owner/admin only, gated on `stripePayments`. Creates an Express account on
-// the platform if the tenant doesn't have one yet (persisting the new id to
-// meta.stripeAccountId so re-attempts reuse the same account), then issues a
-// fresh AccountLink and returns its URL. The reverse-lookup doc and the
-// stripeStatus mirror are written by completeConnectOnboarding once the
-// tenant lands on /billing/return.
+// Owner/admin only, gated on `stripePayments`. Creates a connected account on
+// the platform if the tenant doesn't have one yet, then issues a fresh
+// AccountLink and returns its URL.
+//
+// Account configuration uses controller properties equivalent to a Standard
+// account (the legacy `type` parameter is deprecated by Stripe):
+//   - losses.payments = stripe        → Stripe, not TechFlow, carries negative-
+//                                        balance liability on direct charges
+//   - fees.payer = account             → the contractor pays their own Stripe fees
+//   - requirement_collection = stripe  → Stripe collects KYC; no business_type
+//                                        or capabilities needed up front
+//   - stripe_dashboard.type = full     → contractor handles refunds/disputes in
+//                                        the full Stripe Dashboard
+// Dashboard type is immutable per account — never change these without
+// planning a re-onboarding of every tenant.
+//
+// The stripeAccounts/{accountId} reverse lookup is written in the same batch
+// as meta.stripeAccountId, so Connect webhooks (account.updated) route even if
+// the tenant never returns through /billing/return.
 
 import {
   HttpsError,
@@ -68,24 +81,32 @@ export async function startConnectOnboardingHandler(
 
   if (!accountId) {
     const account = await stripe.accounts.create({
-      type: "express",
       country: countryForCurrency(meta.currency),
       email: claims.email ?? undefined,
-      capabilities: {
-        card_payments: { requested: true },
-        transfers: { requested: true },
+      controller: {
+        losses: { payments: "stripe" },
+        fees: { payer: "account" },
+        requirement_collection: "stripe",
+        stripe_dashboard: { type: "full" },
       },
-      business_type: "company",
       metadata: { tenantId },
     });
     accountId = account.id;
-    await metaRef.set(
+
+    const batch = db.batch();
+    batch.set(
+      metaRef,
       {
         stripeAccountId: accountId,
         updatedAt: FieldValue.serverTimestamp(),
       },
       { merge: true },
     );
+    batch.set(db.doc(`stripeAccounts/${accountId}`), {
+      tenantId,
+      linkedAt: FieldValue.serverTimestamp(),
+    });
+    await batch.commit();
   }
 
   const appUrl = defaultAppUrl();

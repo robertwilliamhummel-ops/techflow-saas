@@ -21,6 +21,19 @@ interface FakeDocRef {
     value: Record<string, unknown>,
     opts?: { merge?: boolean },
   ) => Promise<void>;
+  delete: () => Promise<void>;
+}
+
+function applySet(
+  path: string,
+  value: Record<string, unknown>,
+  opts?: { merge?: boolean },
+): void {
+  if (opts?.merge) {
+    docs.set(path, { ...(docs.get(path) ?? {}), ...value });
+  } else {
+    docs.set(path, { ...value });
+  }
 }
 
 function docRef(path: string): FakeDocRef {
@@ -36,11 +49,10 @@ function docRef(path: string): FakeDocRef {
       value: Record<string, unknown>,
       opts?: { merge?: boolean },
     ) => {
-      if (opts?.merge) {
-        docs.set(path, { ...(docs.get(path) ?? {}), ...value });
-      } else {
-        docs.set(path, { ...value });
-      }
+      applySet(path, value, opts);
+    },
+    delete: async () => {
+      docs.delete(path);
     },
   };
 }
@@ -124,6 +136,26 @@ function collectionRef(path: string): FakeCollRef {
 const fakeDb = {
   doc: (path: string) => docRef(path),
   collection: (path: string) => collectionRef(path),
+  batch: () => {
+    const ops: Array<() => void> = [];
+    return {
+      set: (
+        ref: { path: string },
+        value: Record<string, unknown>,
+        opts?: { merge?: boolean },
+      ) => {
+        ops.push(() => applySet(ref.path, value, opts));
+      },
+      delete: (ref: { path: string }) => {
+        ops.push(() => {
+          docs.delete(ref.path);
+        });
+      },
+      commit: async () => {
+        for (const op of ops) op();
+      },
+    };
+  },
 };
 
 vi.mock("@/lib/firebase/admin", () => ({
@@ -156,6 +188,8 @@ vi.mock("@/lib/emails/paymentIncidentNotify", () => ({
 }));
 
 import {
+  handleAccountDeauthorized,
+  handleAccountUpdated,
   handleChargeRefunded,
   handleCheckoutCompleted,
   handleDisputeClosed,
@@ -648,6 +682,118 @@ describe("handleDisputeClosed", () => {
         }),
       }),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// handleAccountUpdated / handleAccountDeauthorized (D1 — Connect scope)
+// ---------------------------------------------------------------------------
+
+describe("handleAccountUpdated", () => {
+  const TENANT = "tnt_acme";
+
+  function accountEvent(accountId: string): Stripe.Event {
+    return {
+      id: "evt_acct",
+      type: "account.updated",
+      account: accountId,
+      data: {
+        object: {
+          id: accountId,
+          charges_enabled: true,
+          payouts_enabled: true,
+          details_submitted: true,
+          requirements: { currently_due: [], disabled_reason: null },
+        },
+      },
+    } as unknown as Stripe.Event;
+  }
+
+  it("mirrors capability state into meta.stripeStatus for the tenant's current account", async () => {
+    docs.set(`tenants/${TENANT}/meta/settings`, {
+      stripeAccountId: "acct_live",
+      stripeStatus: { chargesEnabled: false },
+    });
+
+    await handleAccountUpdated(TENANT, accountEvent("acct_live"));
+
+    const meta = docs.get(`tenants/${TENANT}/meta/settings`) as {
+      stripeStatus: Record<string, unknown>;
+    };
+    expect(meta.stripeStatus).toMatchObject({
+      chargesEnabled: true,
+      payoutsEnabled: true,
+      detailsSubmitted: true,
+      currentlyDue: [],
+      disabledReason: null,
+    });
+  });
+
+  it("ignores events for a non-current (recreated) account", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    docs.set(`tenants/${TENANT}/meta/settings`, {
+      stripeAccountId: "acct_new",
+      stripeStatus: { chargesEnabled: false },
+    });
+
+    await handleAccountUpdated(TENANT, accountEvent("acct_old"));
+
+    const meta = docs.get(`tenants/${TENANT}/meta/settings`) as {
+      stripeStatus: { chargesEnabled: boolean };
+    };
+    expect(meta.stripeStatus.chargesEnabled).toBe(false);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+});
+
+describe("handleAccountDeauthorized", () => {
+  const TENANT = "tnt_bye";
+
+  function deauthEvent(accountId: string): Stripe.Event {
+    return {
+      id: "evt_deauth",
+      type: "account.application.deauthorized",
+      account: accountId,
+      // data.object is the Application, not the Account.
+      data: { object: { id: "ca_platform", object: "application" } },
+    } as unknown as Stripe.Event;
+  }
+
+  it("clears tenant linkage and drops the reverse lookup", async () => {
+    docs.set(`stripeAccounts/acct_xyz`, { tenantId: TENANT });
+    docs.set(`tenants/${TENANT}/meta/settings`, {
+      stripeAccountId: "acct_xyz",
+      stripeStatus: { chargesEnabled: true },
+    });
+
+    await handleAccountDeauthorized(TENANT, deauthEvent("acct_xyz"));
+
+    expect(docs.has(`stripeAccounts/acct_xyz`)).toBe(false);
+    const meta = docs.get(`tenants/${TENANT}/meta/settings`) as {
+      stripeAccountId: string | null;
+      stripeStatus: { chargesEnabled: boolean };
+    };
+    expect(meta.stripeAccountId).toBeNull();
+    expect(meta.stripeStatus.chargesEnabled).toBe(false);
+  });
+
+  it("only drops the stale lookup when the tenant already moved to another account", async () => {
+    docs.set(`stripeAccounts/acct_old`, { tenantId: TENANT });
+    docs.set(`tenants/${TENANT}/meta/settings`, {
+      stripeAccountId: "acct_new",
+      stripeStatus: { chargesEnabled: true },
+    });
+
+    await handleAccountDeauthorized(TENANT, deauthEvent("acct_old"));
+
+    expect(docs.has(`stripeAccounts/acct_old`)).toBe(false);
+    const meta = docs.get(`tenants/${TENANT}/meta/settings`) as {
+      stripeAccountId: string;
+      stripeStatus: { chargesEnabled: boolean };
+    };
+    expect(meta.stripeAccountId).toBe("acct_new");
+    expect(meta.stripeStatus.chargesEnabled).toBe(true);
   });
 });
 

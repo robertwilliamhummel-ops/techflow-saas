@@ -1,6 +1,6 @@
 // Next-side mirror of buildStripeStatusFromAccount from functions/src/shared/stripe.ts.
-// Used by the platform webhook to update meta.stripeStatus when an
-// account.updated event fires. Kept in a separate file so it can be imported
+// Used by the Connect webhook to update meta.stripeStatus when an
+// account.updated event fires (Connected-accounts scope). Kept in a separate file so it can be imported
 // without pulling in the Stripe client module.
 
 import { FieldValue } from "firebase-admin/firestore";

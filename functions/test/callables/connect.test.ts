@@ -77,7 +77,7 @@ describe("startConnectOnboarding", () => {
     __setStripeClientForTest(null);
   });
 
-  it("creates a new Express account when tenant has no stripeAccountId", async () => {
+  it("creates a Standard-equivalent account (Stripe-liable, full dashboard) when tenant has no stripeAccountId", async () => {
     const tenantId = await seedOwner();
 
     const create = vi.fn().mockResolvedValue({ id: "acct_new_123" });
@@ -111,13 +111,30 @@ describe("startConnectOnboarding", () => {
     expect(res.url).toBe("https://connect.stripe.com/setup/abc");
     expect(create).toHaveBeenCalledTimes(1);
     const createArg = create.mock.calls[0][0];
-    expect(createArg.type).toBe("express");
+    // D1 — controller properties, never the deprecated legacy `type`.
+    expect(createArg.type).toBeUndefined();
+    expect(createArg.controller).toEqual({
+      losses: { payments: "stripe" },
+      fees: { payer: "account" },
+      requirement_collection: "stripe",
+      stripe_dashboard: { type: "full" },
+    });
+    // Stripe collects KYC for full-dashboard accounts — no business_type or
+    // capabilities forced up front (sole proprietors must not be pushed into
+    // the company flow).
+    expect(createArg.business_type).toBeUndefined();
+    expect(createArg.capabilities).toBeUndefined();
     expect(createArg.country).toBe("CA"); // CAD default
     expect(createArg.metadata).toEqual({ tenantId });
     expect(retrieve).not.toHaveBeenCalled();
 
     const meta = await testDb.doc(`tenants/${tenantId}/meta/settings`).get();
     expect(meta.data()?.stripeAccountId).toBe("acct_new_123");
+
+    // Reverse lookup written at creation so Connect webhooks route even if the
+    // tenant never returns through /billing/return.
+    const lookup = await testDb.doc(`stripeAccounts/acct_new_123`).get();
+    expect(lookup.data()?.tenantId).toBe(tenantId);
 
     const linksArg = linksCreate.mock.calls[0][0];
     expect(linksArg.account).toBe("acct_new_123");

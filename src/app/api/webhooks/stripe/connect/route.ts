@@ -1,10 +1,8 @@
-// Connect-level Stripe webhook. Receives payment events from every connected
-// tenant account. Event.account routes the event to a tenantId via the
-// stripeAccounts/{accountId} reverse-lookup written at /billing/return time.
-//
-// Bundle C scope: signature verification + idempotency + tenant routing +
-// dispatcher skeleton. The actual payment/refund/dispute handlers — including
-// the C2 pay-token version guard and automatic refund — land in Bundle D.
+// Connect-scope Stripe webhook. Receives every "Connected accounts" event:
+// payments/refunds/disputes on direct charges AND connected-account lifecycle
+// (account.updated, account.application.deauthorized). Event.account routes the
+// event to a tenantId via the stripeAccounts/{accountId} reverse lookup, which
+// startConnectOnboarding writes when the account is created.
 
 import { NextResponse } from "next/server";
 import type Stripe from "stripe";
@@ -12,6 +10,8 @@ import { getAdminDb } from "@/lib/firebase/admin";
 import { getStripeClient } from "@/lib/stripe/admin";
 import { claimStripeEvent } from "@/lib/stripe/idempotency";
 import {
+  handleAccountDeauthorized,
+  handleAccountUpdated,
   handleChargeRefunded,
   handleCheckoutCompleted,
   handleDisputeClosed,
@@ -68,9 +68,9 @@ export async function POST(req: Request): Promise<Response> {
 
   const tenantId = await resolveTenantId(event.account);
   if (!tenantId) {
-    // Unknown account — likely a tenant who abandoned onboarding mid-flow or
-    // whose reverse-lookup was never written. 200 so Stripe stops retrying; we
-    // log it because a payment on an unlinkable account is a platform bug.
+    // Unknown account — no reverse lookup exists (account created outside
+    // startConnectOnboarding, or already deauthorized). 200 so Stripe stops
+    // retrying; logged because a payment on an unlinkable account is a bug.
     console.error(
       `[stripe connect] event ${event.type} for unlinkable account ${event.account}`,
     );
@@ -102,6 +102,12 @@ export async function POST(req: Request): Promise<Response> {
         break;
       case "charge.dispute.closed":
         await handleDisputeClosed(tenantId, event);
+        break;
+      case "account.updated":
+        await handleAccountUpdated(tenantId, event);
+        break;
+      case "account.application.deauthorized":
+        await handleAccountDeauthorized(tenantId, event);
         break;
       default:
         console.info(

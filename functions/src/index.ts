@@ -46,7 +46,7 @@ export { previewQuotePDF } from "./quotes/previewQuotePDF";
 // Bundle H — Infrastructure (Phase 2).
 export { scheduledFirestoreExport } from "./scheduled/firestoreExport";
 
-// Phase 4 Bundle B — Stripe Connect Express onboarding.
+// Phase 4 Bundle B — Stripe Connect onboarding (Standard-equivalent controller, D1).
 export { startConnectOnboarding } from "./stripe/startConnectOnboarding";
 export { completeConnectOnboarding } from "./stripe/completeConnectOnboarding";
 

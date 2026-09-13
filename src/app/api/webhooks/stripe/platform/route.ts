@@ -1,20 +1,18 @@
-// Platform-level Stripe webhook. Receives account lifecycle events for every
-// tenant connected via Express onboarding:
+// Platform-scope ("Your account") Stripe webhook.
 //
-//   - account.updated              → mirror capability state into meta.stripeStatus
-//   - account.application.deauthorized → tenant disconnected; clear linkage
+// Connected-account lifecycle events — account.updated and
+// account.application.deauthorized — are "Connected accounts" scope in Stripe
+// and arrive on /api/webhooks/stripe/connect with event.account set (decision
+// D1, 2026-09-13). Nothing on the platform account itself needs handling today
+// (TechFlow takes no platform fee and has no platform billing yet).
 //
-// Signature verification uses STRIPE_PLATFORM_WEBHOOK_SECRET (separate from
-// the Connect webhook secret — R5 decision). Idempotency via stripeEvents/{id}
-// so a Stripe retry can't double-apply a state change.
+// The endpoint stays registered with its own secret (STRIPE_PLATFORM_WEBHOOK_SECRET,
+// R5 split) so signature verification and misrouting detection already exist
+// when platform billing is added.
 
 import { NextResponse } from "next/server";
 import type Stripe from "stripe";
-import { FieldValue } from "firebase-admin/firestore";
-import { getAdminDb } from "@/lib/firebase/admin";
 import { getStripeClient } from "@/lib/stripe/admin";
-import { claimStripeEvent } from "@/lib/stripe/idempotency";
-import { buildStripeStatusFromAccount } from "@/lib/stripe/status";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,68 +23,6 @@ function secretOrThrow(): string {
     throw new Error("STRIPE_PLATFORM_WEBHOOK_SECRET is not configured.");
   }
   return secret;
-}
-
-async function resolveTenantId(accountId: string): Promise<string | null> {
-  const snap = await getAdminDb().doc(`stripeAccounts/${accountId}`).get();
-  if (!snap.exists) return null;
-  return (snap.data() as { tenantId?: string }).tenantId ?? null;
-}
-
-async function handleAccountUpdated(event: Stripe.Event): Promise<void> {
-  const account = event.data.object as Stripe.Account;
-  const tenantId = await resolveTenantId(account.id);
-  if (!tenantId) {
-    // Reverse-lookup is written at /billing/return time; if it's missing, the
-    // tenant abandoned onboarding before the return URL completed. Nothing to
-    // mirror — the next completeConnectOnboarding call will catch them up.
-    console.warn(
-      `[stripe platform] account.updated for unknown account ${account.id}`,
-    );
-    return;
-  }
-
-  const status = buildStripeStatusFromAccount(account);
-  await getAdminDb()
-    .doc(`tenants/${tenantId}/meta/settings`)
-    .set(
-      { stripeStatus: status, updatedAt: FieldValue.serverTimestamp() },
-      { merge: true },
-    );
-}
-
-async function handleDeauthorized(event: Stripe.Event): Promise<void> {
-  // `account.application.deauthorized` delivers the account object (not an
-  // application object) because we registered this at the platform level.
-  const account = event.data.object as Stripe.Account;
-  const tenantId = await resolveTenantId(account.id);
-  if (!tenantId) {
-    console.warn(
-      `[stripe platform] deauthorized for unknown account ${account.id}`,
-    );
-    return;
-  }
-
-  const db = getAdminDb();
-  const batch = db.batch();
-  batch.set(
-    db.doc(`tenants/${tenantId}/meta/settings`),
-    {
-      stripeAccountId: null,
-      stripeStatus: {
-        chargesEnabled: false,
-        payoutsEnabled: false,
-        detailsSubmitted: false,
-        currentlyDue: [],
-        disabledReason: null,
-        updatedAt: FieldValue.serverTimestamp(),
-      },
-      updatedAt: FieldValue.serverTimestamp(),
-    },
-    { merge: true },
-  );
-  batch.delete(db.doc(`stripeAccounts/${account.id}`));
-  await batch.commit();
 }
 
 export async function POST(req: Request): Promise<Response> {
@@ -102,16 +38,15 @@ export async function POST(req: Request): Promise<Response> {
   try {
     event = stripe.webhooks.constructEvent(raw, sig, secretOrThrow());
   } catch (err) {
-    const message = err instanceof Error ? err.message : "bad signature";
+    const message = err instanceof Error ? err.message : "bad sig";
     return NextResponse.json(
       { error: `Signature verification failed: ${message}` },
       { status: 400 },
     );
   }
 
-  // Platform-level events MUST NOT carry event.account. If they do, Stripe
-  // delivered a Connect event to the wrong endpoint — drop it with 400 so the
-  // mismatched registration surfaces during setup, not silently.
+  // Platform-scope events MUST NOT carry event.account. If they do, the
+  // endpoint was registered with the wrong scope — surface it during setup.
   if (event.account) {
     return NextResponse.json(
       { error: "Connect event delivered to platform endpoint." },
@@ -119,41 +54,6 @@ export async function POST(req: Request): Promise<Response> {
     );
   }
 
-  const claimed = await claimStripeEvent(event.id, {
-    type: event.type,
-    account: null,
-    livemode: event.livemode,
-  });
-  if (!claimed) {
-    // Redelivery of an already-processed event — Stripe treats 2xx as success.
-    return NextResponse.json({ received: true, duplicate: true });
-  }
-
-  try {
-    switch (event.type) {
-      case "account.updated":
-        await handleAccountUpdated(event);
-        break;
-      case "account.application.deauthorized":
-        await handleDeauthorized(event);
-        break;
-      default:
-        // Unknown platform event — acknowledge so Stripe stops retrying, but
-        // log so we can add a handler if it turns out to matter.
-        console.info(
-          `[stripe platform] ignoring event type ${event.type}`,
-        );
-    }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error(
-      `[stripe platform] handler failed for ${event.type}: ${message}`,
-    );
-    return NextResponse.json(
-      { error: "Handler failed." },
-      { status: 500 },
-    );
-  }
-
+  console.info(`[stripe platform] acknowledged event type ${event.type}`);
   return NextResponse.json({ received: true });
 }

@@ -16,6 +16,7 @@ import type Stripe from "stripe";
 import { FieldValue } from "firebase-admin/firestore";
 import { getAdminDb } from "@/lib/firebase/admin";
 import { getStripeClient } from "@/lib/stripe/admin";
+import { buildStripeStatusFromAccount } from "@/lib/stripe/status";
 import { notifyTenantOfIncident } from "@/lib/emails/paymentIncidentNotify";
 
 // ---------------------------------------------------------------------------
@@ -364,6 +365,87 @@ export async function handlePaymentFailed(
     failureMessage: pi.last_payment_error?.message,
   });
   // No state mutation by design — customer may retry with a different card.
+}
+
+// ---------------------------------------------------------------------------
+// account.updated — mirror connected-account capability state (D1)
+// ---------------------------------------------------------------------------
+
+// Connected-accounts scope: delivered to the Connect endpoint with
+// event.account set. Sole webhook writer of meta.stripeStatus.
+export async function handleAccountUpdated(
+  tenantId: string,
+  event: Stripe.Event,
+): Promise<void> {
+  const account = event.data.object as Stripe.Account;
+  const db = getAdminDb();
+  const metaRef = db.doc(`tenants/${tenantId}/meta/settings`);
+  const metaSnap = await metaRef.get();
+  const currentAccountId =
+    (metaSnap.data() as { stripeAccountId?: string | null } | undefined)
+      ?.stripeAccountId ?? null;
+
+  // A tenant whose Stripe account was recreated still has a reverse lookup for
+  // the old account. Its events must not overwrite the live account's status.
+  if (currentAccountId !== account.id) {
+    console.warn(
+      `[stripe connect] account.updated for non-current account ${account.id}`,
+      { tenantId, currentAccountId },
+    );
+    return;
+  }
+
+  await metaRef.set(
+    {
+      stripeStatus: buildStripeStatusFromAccount(account),
+      updatedAt: FieldValue.serverTimestamp(),
+    },
+    { merge: true },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// account.application.deauthorized — contractor disconnected TechFlow (D1)
+// ---------------------------------------------------------------------------
+
+// With full-dashboard (Standard-equivalent) accounts the contractor can revoke
+// the platform from their own Stripe Dashboard. data.object is the Application;
+// the disconnected account id is event.account.
+export async function handleAccountDeauthorized(
+  tenantId: string,
+  event: Stripe.Event,
+): Promise<void> {
+  const accountId = event.account;
+  if (!accountId) return;
+
+  const db = getAdminDb();
+  const metaRef = db.doc(`tenants/${tenantId}/meta/settings`);
+  const metaSnap = await metaRef.get();
+  const currentAccountId =
+    (metaSnap.data() as { stripeAccountId?: string | null } | undefined)
+      ?.stripeAccountId ?? null;
+
+  const batch = db.batch();
+  if (currentAccountId === accountId) {
+    batch.set(
+      metaRef,
+      {
+        stripeAccountId: null,
+        stripeStatus: {
+          chargesEnabled: false,
+          payoutsEnabled: false,
+          detailsSubmitted: false,
+          currentlyDue: [],
+          disabledReason: null,
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+  }
+  batch.delete(db.doc(`stripeAccounts/${accountId}`));
+  await batch.commit();
 }
 
 // ---------------------------------------------------------------------------
