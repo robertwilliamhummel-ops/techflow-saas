@@ -464,6 +464,41 @@ describe("convertQuoteToInvoice", () => {
     expect(inv.totals.total).toBe(6267.5);
   });
 
+  it("carries per-line taxable flags from quote to invoice (D4)", async () => {
+    const { quoteId } = await createQuoteHandler(
+      fakeRequest(
+        validQuoteData({
+          lineItems: [
+            { description: "Bathroom reno estimate", quantity: 1, rate: 5000 },
+            { description: "Permit fee", quantity: 1, rate: 450, taxable: false },
+          ],
+        }),
+        ownerAuth,
+      ),
+    );
+
+    const qt = (
+      await testDb.doc(`tenants/${TENANT}/quotes/${quoteId}`).get()
+    ).data()!;
+    expect(qt.lineItems[0].taxable).toBe(true); // inherits applyTax
+    expect(qt.lineItems[1].taxable).toBe(false);
+    expect(qt.totals.subtotal).toBe(5450);
+    expect(qt.totals.taxableSubtotal).toBe(5000);
+    expect(qt.totals.taxAmount).toBe(650);
+
+    await convertQuoteToInvoiceHandler(fakeRequest({ quoteId }, ownerAuth));
+
+    const inv = (
+      await testDb.doc(`tenants/${TENANT}/invoices/INV-0001`).get()
+    ).data()!;
+    expect(inv.lineItems[1].taxable).toBe(false);
+    expect(inv.totals.taxAmount).toBe(650);
+    expect(inv.totals.total).toBe(6100);
+    expect(inv.totals.taxes).toEqual([
+      { name: "HST", rate: 0.13, taxableAmount: 5000, amount: 650 },
+    ]);
+  });
+
   it("rejects double-conversion", async () => {
     const { quoteId } = await createQuoteHandler(
       fakeRequest(validQuoteData(), ownerAuth),

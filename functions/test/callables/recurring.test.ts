@@ -479,6 +479,29 @@ describe("processRecurringInvoices", () => {
     expect(nextRun.toISOString()).toBe("2026-05-01T00:00:00.000Z");
   });
 
+  it("honours per-line taxable flags from the template (D4)", async () => {
+    await seedTenant();
+    await seedRecurringTemplate({
+      lineItems: [
+        { description: "Monthly cleaning", quantity: 1, rate: 200, taxable: true, amount: 200 },
+        { description: "Exempt service", quantity: 1, rate: 100, taxable: false, amount: 100 },
+      ],
+    });
+    await processRecurringInvoicesHandler();
+
+    const invoice = (
+      await testDb.collection(`tenants/${TENANT}/invoices`).get()
+    ).docs[0].data();
+    expect(invoice.lineItems[1].taxable).toBe(false);
+    expect(invoice.totals.subtotal).toBe(300);
+    expect(invoice.totals.taxableSubtotal).toBe(200);
+    expect(invoice.totals.taxAmount).toBe(26);
+    expect(invoice.totals.total).toBe(326);
+    expect(invoice.totals.taxes).toEqual([
+      { name: "HST", rate: 0.13, taxableAmount: 200, amount: 26 },
+    ]);
+  });
+
   it("increments invoice counter correctly", async () => {
     await seedTenant();
     // Set counter to 5

@@ -24,7 +24,7 @@ import {
   computeLineItems,
   buildTenantSnapshot,
   inlineLogoOrThrow,
-  type LineItemInput,
+  resolveLineItems,
 } from "../shared/invoice";
 
 const PAY_TOKEN_SECRET = defineSecret("PAY_TOKEN_SECRET");
@@ -70,14 +70,14 @@ export async function convertQuoteToInvoiceHandler(
   const logoUrl = (meta.logoUrl as string | null) ?? null;
   snapshot.logo = logoUrl ? await inlineLogoOrThrow(logoUrl) : null;
 
-  // Recompute totals from quote line items + current meta taxRate.
-  const rawLineItems = (quote.lineItems as LineItemInput[]) ?? [];
+  // Recompute totals from quote line items (per-line taxable carried over, D4)
+  // + current meta tax.
+  const rawLineItems = resolveLineItems(quote.lineItems, quote.applyTax === true);
   const lineItems = computeLineItems(rawLineItems);
-  const totals = computeInvoiceTotals(
-    rawLineItems,
-    Number(meta.taxRate ?? 0),
-    quote.applyTax === true,
-  );
+  const totals = computeInvoiceTotals(rawLineItems, {
+    rate: Number(meta.taxRate ?? 0),
+    name: String(meta.taxName ?? ""),
+  });
 
   const prefix = String(meta.invoicePrefix ?? "INV");
   const issueDate = new Date().toISOString().slice(0, 10);

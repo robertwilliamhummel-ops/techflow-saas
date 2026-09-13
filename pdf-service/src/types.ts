@@ -27,6 +27,14 @@ export interface LineItem {
   quantity: number;
   rate: number;
   amount: number;
+  taxable?: boolean; // D4 — absent on legacy payloads (treated as taxable)
+}
+
+export interface TaxLine {
+  name: string;
+  rate: number;
+  taxableAmount: number;
+  amount: number;
 }
 
 export interface InvoiceTotals {
@@ -34,6 +42,8 @@ export interface InvoiceTotals {
   taxRate: number;
   taxAmount: number;
   total: number;
+  taxableSubtotal?: number; // D4
+  taxes?: TaxLine[]; // D4 — one row per tax when present
 }
 
 export interface Customer {

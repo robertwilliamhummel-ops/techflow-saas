@@ -25,7 +25,7 @@ import {
   computeLineItems,
   buildTenantSnapshot,
   inlineLogoOrThrow,
-  type LineItemInput,
+  resolveLineItems,
 } from "../shared/invoice";
 import { computeNextRunAt, addDaysToISODate } from "../shared/recurring";
 import { SCHEDULER_REGION } from "../shared/globalOptions";
@@ -180,14 +180,14 @@ async function processOneTemplate(
     return;
   }
 
-  // Recompute totals from template line items + current meta taxRate.
-  const rawLineItems = (data.lineItems as LineItemInput[]) ?? [];
+  // Recompute totals from template line items (per-line taxable, D4) + current
+  // meta tax.
+  const rawLineItems = resolveLineItems(data.lineItems, data.applyTax === true);
   const lineItems = computeLineItems(rawLineItems);
-  const totals = computeInvoiceTotals(
-    rawLineItems,
-    Number(meta.taxRate ?? 0),
-    data.applyTax === true,
-  );
+  const totals = computeInvoiceTotals(rawLineItems, {
+    rate: Number(meta.taxRate ?? 0),
+    name: String(meta.taxName ?? ""),
+  });
 
   const prefix = String(meta.invoicePrefix ?? "INV");
   const issueDate = new Date().toISOString().slice(0, 10);

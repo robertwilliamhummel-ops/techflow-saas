@@ -56,17 +56,14 @@ export async function updateInvoiceHandler(
     );
   }
 
-  // Recompute totals using the FROZEN snapshot's taxRate — not current meta.
-  // The snapshot is the tax rate that was in effect when the invoice was created.
-  const snapshotTaxRate = Number(
-    (doc.tenantSnapshot as Record<string, unknown>)?.taxRate ?? 0,
-  );
+  // Recompute totals using the FROZEN snapshot's tax — not current meta.
+  // The snapshot is the tax that was in effect when the invoice was created.
+  const snapshot = (doc.tenantSnapshot as Record<string, unknown>) ?? {};
   const lineItems = computeLineItems(input.lineItems);
-  const totals = computeInvoiceTotals(
-    input.lineItems,
-    snapshotTaxRate,
-    input.applyTax,
-  );
+  const totals = computeInvoiceTotals(input.lineItems, {
+    rate: Number(snapshot.taxRate ?? 0),
+    name: String(snapshot.taxName ?? ""),
+  });
 
   await invoiceRef.update({
     customer: {

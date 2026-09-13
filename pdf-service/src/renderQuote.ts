@@ -1,6 +1,6 @@
 import { getBrowser } from "./browser";
 import { loadTemplate } from "./templateLoader";
-import { CSP, cssVarsFor } from "./renderInvoice";
+import { CSP, cssVarsFor, hasMixedTaxability } from "./renderInvoice";
 import type { RenderQuoteRequest } from "./types";
 
 export async function renderQuotePDF(
@@ -19,6 +19,7 @@ export async function buildQuoteHtml(
     snapshot,
     data,
     cssVars: cssVarsFor(snapshot),
+    sections: { taxMarkers: hasMixedTaxability(data.lineItems) },
     csp: CSP,
   });
 }

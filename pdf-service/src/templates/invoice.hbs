@@ -140,7 +140,7 @@
       <tbody>
         {{#each data.lineItems}}
           <tr>
-            <td>{{this.description}}</td>
+            <td>{{this.description}}{{#if ../sections.taxMarkers}}{{#if (eq this.taxable false)}} <span style="color:#555;font-size:9pt;">(tax-exempt)</span>{{/if}}{{/if}}</td>
             <td class="qty">{{this.quantity}}</td>
             <td class="rate">{{money this.rate ../snapshot.currency}}</td>
             <td class="amt">{{money this.amount ../snapshot.currency}}</td>
@@ -155,7 +155,14 @@
           <td class="label">Subtotal</td>
           <td class="value">{{money data.totals.subtotal snapshot.currency}}</td>
         </tr>
-        {{#if data.totals.taxAmount}}
+        {{#if data.totals.taxes}}
+          {{#each data.totals.taxes}}
+            <tr>
+              <td class="label">{{this.name}} ({{percent this.rate}}){{#if ../sections.taxMarkers}} on {{money this.taxableAmount ../snapshot.currency}}{{/if}}</td>
+              <td class="value">{{money this.amount ../snapshot.currency}}</td>
+            </tr>
+          {{/each}}
+        {{else if data.totals.taxAmount}}
           <tr>
             <td class="label">{{snapshot.taxName}} ({{percent data.totals.taxRate}})</td>
             <td class="value">{{money data.totals.taxAmount snapshot.currency}}</td>

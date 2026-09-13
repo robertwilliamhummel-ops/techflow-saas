@@ -47,16 +47,13 @@ export async function updateQuoteHandler(
     );
   }
 
-  // Recompute totals using the FROZEN snapshot's taxRate.
-  const snapshotTaxRate = Number(
-    (doc.tenantSnapshot as Record<string, unknown>)?.taxRate ?? 0,
-  );
+  // Recompute totals using the FROZEN snapshot's tax.
+  const snapshot = (doc.tenantSnapshot as Record<string, unknown>) ?? {};
   const lineItems = computeLineItems(input.lineItems);
-  const totals = computeInvoiceTotals(
-    input.lineItems,
-    snapshotTaxRate,
-    input.applyTax,
-  );
+  const totals = computeInvoiceTotals(input.lineItems, {
+    rate: Number(snapshot.taxRate ?? 0),
+    name: String(snapshot.taxName ?? ""),
+  });
 
   await quoteRef.update({
     customer: {

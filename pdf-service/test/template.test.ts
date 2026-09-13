@@ -200,6 +200,59 @@ describe("invoice template", () => {
     expect(html).toContain(`src="${dataUrl}"`);
   });
 
+  it("renders one row per totals.taxes entry and marks exempt lines when taxability is mixed (D4)", async () => {
+    const html = await buildInvoiceHtml({
+      ...baseInvoice,
+      data: {
+        ...baseInvoice.data,
+        lineItems: [
+          { description: "Cleaning", quantity: 1, rate: 100, amount: 100, taxable: true },
+          { description: "Exam", quantity: 1, rate: 50, amount: 50, taxable: false },
+        ],
+        totals: {
+          subtotal: 150,
+          taxableSubtotal: 100,
+          taxRate: 0.13,
+          taxAmount: 13,
+          total: 163,
+          taxes: [{ name: "HST", rate: 0.13, taxableAmount: 100, amount: 13 }],
+        },
+      },
+    });
+    expect(html.match(/\(tax-exempt\)/g)).toHaveLength(1);
+    expect(html).toContain("HST (13%) on $100.00");
+    expect(html).toContain("$13.00");
+  });
+
+  it("does not mark lines when every line is taxable", async () => {
+    const html = await buildInvoiceHtml(baseInvoice);
+    expect(html).not.toContain("(tax-exempt)");
+  });
+
+  it("escapes a hostile tax name from totals.taxes", async () => {
+    const html = await buildInvoiceHtml({
+      ...baseInvoice,
+      data: {
+        ...baseInvoice.data,
+        totals: {
+          ...baseInvoice.data.totals,
+          taxes: [
+            { name: "<img src=x onerror=alert(1)>", rate: 0.13, taxableAmount: 385, amount: 50.05 },
+          ],
+        },
+      },
+    });
+    expect(html).not.toContain("<img src=x onerror");
+    // Handlebars also escapes `=` (&#x3D;), so only assert the tag opener.
+    expect(html).toContain("&lt;img src&#x3D;x");
+  });
+
+  it("falls back to the aggregate tax row for totals without taxes[]", async () => {
+    const html = await buildInvoiceHtml(baseInvoice);
+    expect(html).toContain("HST (13%)");
+    expect(html).toContain("$50.05");
+  });
+
   it("includes CSP meta tag", async () => {
     const html = await buildInvoiceHtml(baseInvoice);
     expect(html).toContain('http-equiv="Content-Security-Policy"');

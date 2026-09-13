@@ -4,8 +4,10 @@
 // Chrome with a 50MB notes string).
 
 import type {
+  InvoiceTotals,
   RenderInvoiceRequest,
   RenderQuoteRequest,
+  TaxLine,
   TenantSnapshot,
   LineItem,
 } from "./types";
@@ -21,6 +23,7 @@ const MAX_NOTES = 4_000;
 const MAX_DESCRIPTION = 1_000;
 const MAX_LINE_ITEMS = 200;
 const MAX_LOGO_DATA_URL = 800_000; // base64 inflates ~33% — 500KB raw → ~670KB encoded.
+const MAX_TAX_LINES = 5;
 
 export function validateInvoiceBody(input: unknown): RenderInvoiceRequest {
   const body = requireObject(input, "body");
@@ -143,7 +146,7 @@ function validateLineItems(input: unknown): LineItem[] {
   }
   return input.map((raw, i) => {
     const li = requireObject(raw, `data.lineItems[${i}]`);
-    return {
+    const item: LineItem = {
       description: requireString(
         li.description,
         `data.lineItems[${i}].description`,
@@ -153,22 +156,56 @@ function validateLineItems(input: unknown): LineItem[] {
       rate: requireFiniteNumber(li.rate, `data.lineItems[${i}].rate`),
       amount: requireFiniteNumber(li.amount, `data.lineItems[${i}].amount`),
     };
+    if (li.taxable != null) {
+      if (typeof li.taxable !== "boolean") {
+        throw new ValidationError(
+          `data.lineItems[${i}].taxable must be a boolean.`,
+        );
+      }
+      item.taxable = li.taxable;
+    }
+    return item;
   });
 }
 
-function validateTotals(input: unknown): {
-  subtotal: number;
-  taxRate: number;
-  taxAmount: number;
-  total: number;
-} {
+function validateTotals(input: unknown): InvoiceTotals {
   const t = requireObject(input, "data.totals");
-  return {
+  const totals: InvoiceTotals = {
     subtotal: requireFiniteNumber(t.subtotal, "data.totals.subtotal"),
     taxRate: requireFiniteNumber(t.taxRate, "data.totals.taxRate"),
     taxAmount: requireFiniteNumber(t.taxAmount, "data.totals.taxAmount"),
     total: requireFiniteNumber(t.total, "data.totals.total"),
   };
+  const taxableSubtotal = optionalFiniteNumber(
+    t.taxableSubtotal,
+    "data.totals.taxableSubtotal",
+  );
+  if (taxableSubtotal != null) totals.taxableSubtotal = taxableSubtotal;
+  if (t.taxes != null) totals.taxes = validateTaxLines(t.taxes);
+  return totals;
+}
+
+function validateTaxLines(input: unknown): TaxLine[] {
+  if (!Array.isArray(input)) {
+    throw new ValidationError("data.totals.taxes must be an array.");
+  }
+  if (input.length > MAX_TAX_LINES) {
+    throw new ValidationError(
+      `data.totals.taxes exceeds max of ${MAX_TAX_LINES}.`,
+    );
+  }
+  return input.map((raw, i) => {
+    const tl = requireObject(raw, `data.totals.taxes[${i}]`);
+    return {
+      name: requireString(tl.name, `data.totals.taxes[${i}].name`, 32),
+      rate: requireFiniteNumber(tl.rate, `data.totals.taxes[${i}].rate`),
+      taxableAmount: requireFiniteNumber(
+        tl.taxableAmount,
+        `data.totals.taxes[${i}].taxableAmount`,
+      ),
+      amount: requireFiniteNumber(tl.amount, `data.totals.taxes[${i}].amount`),
+    };
+  });
 }
 
 function requireObject(value: unknown, path: string): Record<string, unknown> {

@@ -24,6 +24,7 @@ export async function buildInvoiceHtml(
     : null;
 
   const showEtransfer = !!snapshot.etransferEmail;
+  const taxMarkers = hasMixedTaxability(data.lineItems);
   const showCard = !!data.payUrl;
   const showSurchargeNote = snapshot.chargeCustomerCardFees && showCard;
 
@@ -56,6 +57,7 @@ export async function buildInvoiceHtml(
       card: showCard,
       surchargeNote: showSurchargeNote,
       surchargeRow: showSurchargeRow,
+      taxMarkers,
     },
     surcharge: {
       amount: surchargeAmount,
@@ -105,6 +107,17 @@ function cssVarsFor(snapshot: TenantSnapshot): string {
   const accent2 = sanitizeColor(snapshot.secondaryColor) ?? "#764ba2";
   const fontFamily = sanitizeFont(snapshot.fontFamily) ?? "Inter";
   return `--accent:${accent};--accent-2:${accent2};--font-body:'${fontFamily}', system-ui, sans-serif;`;
+}
+
+// D4 — when an invoice mixes taxable and exempt lines, exempt lines are marked
+// and each tax row states its base, so the document identifies which supplies
+// carry GST/HST. Lines without a `taxable` flag count as taxable.
+export function hasMixedTaxability(
+  lineItems: Array<{ taxable?: boolean }>,
+): boolean {
+  const exempt = lineItems.some((li) => li.taxable === false);
+  const taxable = lineItems.some((li) => li.taxable !== false);
+  return exempt && taxable;
 }
 
 function sanitizeColor(value: string | null | undefined): string | null {

@@ -40,11 +40,10 @@ export async function createRecurringInvoiceHandler(
   // Server-computed line items + totals (preview values — recomputed at
   // generation time from current meta).
   const lineItems = computeLineItems(input.lineItems);
-  const totals = computeInvoiceTotals(
-    input.lineItems,
-    Number(meta.taxRate ?? 0),
-    input.applyTax,
-  );
+  const totals = computeInvoiceTotals(input.lineItems, {
+    rate: Number(meta.taxRate ?? 0),
+    name: String(meta.taxName ?? ""),
+  });
 
   // Derive anchorDay and initial nextRunAt from startDate.
   const anchorDay = extractAnchorDay(input.startDate);

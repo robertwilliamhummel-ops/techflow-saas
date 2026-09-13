@@ -10,14 +10,25 @@ import type { Timestamp, FieldValue } from "firebase-admin/firestore";
 // Types
 // ---------------------------------------------------------------------------
 
+// D4 — every line carries its own taxability. Mixed invoices (e.g. a taxable
+// cleaning + an HST-exempt exam) are first-class; `applyTax` on the document is
+// only the default for lines that don't specify.
 export interface LineItemInput {
   description: string;
   quantity: number;
   rate: number;
+  taxable: boolean;
 }
 
 export interface LineItem extends LineItemInput {
   amount: number; // server-computed: quantity * rate
+}
+
+export interface TaxLine {
+  name: string; // e.g. "HST"
+  rate: number; // fraction, e.g. 0.13
+  taxableAmount: number; // base this tax applied to
+  amount: number;
 }
 
 export interface CustomerInput {
@@ -35,10 +46,15 @@ export interface InvoiceInput {
   notes?: string | null;
 }
 
+// `taxes[]` is the authoritative breakdown (one entry per tax, so GST+PST/QST
+// provinces are an additive change later). `taxRate`/`taxAmount` remain as the
+// aggregate for list views and older consumers.
 export interface InvoiceTotals {
   subtotal: number;
+  taxableSubtotal: number;
   taxRate: number;
   taxAmount: number;
+  taxes: TaxLine[];
   total: number;
 }
 
@@ -143,55 +159,9 @@ export function validateInvoiceInput(data: unknown): InvoiceInput {
   const custPhone =
     cust.phone != null ? String(cust.phone).trim() || null : null;
 
-  // Line items
-  if (!Array.isArray(d.lineItems) || d.lineItems.length === 0) {
-    throw new HttpsError(
-      "invalid-argument",
-      "At least one line item required.",
-    );
-  }
-  if (d.lineItems.length > 100) {
-    throw new HttpsError(
-      "invalid-argument",
-      "Maximum 100 line items per invoice.",
-    );
-  }
-  const lineItems: LineItemInput[] = d.lineItems.map(
-    (item: unknown, i: number) => {
-      const li = item as Record<string, unknown>;
-      if (!li || typeof li !== "object") {
-        throw new HttpsError(
-          "invalid-argument",
-          `lineItems[${i}] must be an object.`,
-        );
-      }
-      const desc = String(li.description ?? "").trim();
-      if (!desc || desc.length > 500) {
-        throw new HttpsError(
-          "invalid-argument",
-          `lineItems[${i}].description must be 1–500 characters.`,
-        );
-      }
-      const qty = Number(li.quantity);
-      if (!Number.isFinite(qty) || qty <= 0) {
-        throw new HttpsError(
-          "invalid-argument",
-          `lineItems[${i}].quantity must be a positive number.`,
-        );
-      }
-      const rate = Number(li.rate);
-      if (!Number.isFinite(rate) || rate < 0) {
-        throw new HttpsError(
-          "invalid-argument",
-          `lineItems[${i}].rate must be a non-negative number.`,
-        );
-      }
-      return { description: desc, quantity: qty, rate };
-    },
-  );
-
-  // Tax flag
+  // Tax default — each line may override with its own `taxable` (D4).
   const applyTax = d.applyTax === true;
+  const lineItems = validateLineItems(d.lineItems, applyTax, "invoice");
 
   // Dates
   const dueDate = String(d.dueDate ?? "").trim();
@@ -229,22 +199,124 @@ export function validateInvoiceInput(data: unknown): InvoiceInput {
   };
 }
 
+// Shared by invoice, quote, and recurring-template validation. A line without
+// a `taxable` flag inherits the document's `applyTax` default.
+export function validateLineItems(
+  raw: unknown,
+  applyTax: boolean,
+  docLabel: "invoice" | "quote" | "recurring invoice",
+): LineItemInput[] {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new HttpsError(
+      "invalid-argument",
+      "At least one line item required.",
+    );
+  }
+  if (raw.length > 100) {
+    throw new HttpsError(
+      "invalid-argument",
+      `Maximum 100 line items per ${docLabel}.`,
+    );
+  }
+  return raw.map((item: unknown, i: number) => {
+    const li = item as Record<string, unknown>;
+    if (!li || typeof li !== "object") {
+      throw new HttpsError(
+        "invalid-argument",
+        `lineItems[${i}] must be an object.`,
+      );
+    }
+    const desc = String(li.description ?? "").trim();
+    if (!desc || desc.length > 500) {
+      throw new HttpsError(
+        "invalid-argument",
+        `lineItems[${i}].description must be 1–500 characters.`,
+      );
+    }
+    const qty = Number(li.quantity);
+    if (!Number.isFinite(qty) || qty <= 0) {
+      throw new HttpsError(
+        "invalid-argument",
+        `lineItems[${i}].quantity must be a positive number.`,
+      );
+    }
+    const rate = Number(li.rate);
+    if (!Number.isFinite(rate) || rate < 0) {
+      throw new HttpsError(
+        "invalid-argument",
+        `lineItems[${i}].rate must be a non-negative number.`,
+      );
+    }
+    if (li.taxable != null && typeof li.taxable !== "boolean") {
+      throw new HttpsError(
+        "invalid-argument",
+        `lineItems[${i}].taxable must be a boolean if provided.`,
+      );
+    }
+    const taxable = typeof li.taxable === "boolean" ? li.taxable : applyTax;
+    return { description: desc, quantity: qty, rate, taxable };
+  });
+}
+
+// Line items read back from a stored quote or recurring template. Lines saved
+// without a flag inherit the document's applyTax.
+export function resolveLineItems(
+  stored: unknown,
+  applyTax: boolean,
+): LineItemInput[] {
+  if (!Array.isArray(stored)) return [];
+  return stored.map((item) => {
+    const li = item as Record<string, unknown>;
+    return {
+      description: String(li.description ?? ""),
+      quantity: Number(li.quantity ?? 0),
+      rate: Number(li.rate ?? 0),
+      taxable: typeof li.taxable === "boolean" ? li.taxable : applyTax,
+    };
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Totals computation — server-authoritative, never trust client math
 // ---------------------------------------------------------------------------
 
 export function computeInvoiceTotals(
   lineItems: LineItemInput[],
-  taxRate: number,
-  applyTax: boolean,
+  tax: { rate: number; name: string },
 ): InvoiceTotals {
-  const subtotal = lineItems.reduce(
-    (sum, li) => sum + roundCents(li.quantity * li.rate),
-    0,
-  );
-  const taxAmount = applyTax ? roundCents(subtotal * taxRate) : 0;
-  const total = roundCents(subtotal + taxAmount);
-  return { subtotal, taxRate: applyTax ? taxRate : 0, taxAmount, total };
+  let subtotal = 0;
+  let taxableSubtotal = 0;
+  for (const li of lineItems) {
+    const amount = roundCents(li.quantity * li.rate);
+    subtotal += amount;
+    if (li.taxable) taxableSubtotal += amount;
+  }
+  subtotal = roundCents(subtotal);
+  taxableSubtotal = roundCents(taxableSubtotal);
+
+  const rate = Number.isFinite(tax.rate) && tax.rate > 0 ? tax.rate : 0;
+  const taxAmount =
+    rate > 0 && taxableSubtotal > 0 ? roundCents(taxableSubtotal * rate) : 0;
+  const taxes: TaxLine[] =
+    taxAmount > 0
+      ? [
+          {
+            name: tax.name || "Tax",
+            rate,
+            taxableAmount: taxableSubtotal,
+            amount: taxAmount,
+          },
+        ]
+      : [];
+
+  return {
+    subtotal,
+    taxableSubtotal,
+    taxRate: taxAmount > 0 ? rate : 0,
+    taxAmount,
+    taxes,
+    total: roundCents(subtotal + taxAmount),
+  };
 }
 
 export function computeLineItems(inputs: LineItemInput[]): LineItem[] {

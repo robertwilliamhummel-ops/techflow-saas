@@ -146,10 +146,19 @@ describe("createInvoice", () => {
     expect(data.totals.taxAmount).toBe(50.05);
     expect(data.totals.total).toBe(435.05);
 
+    // D4 — per-tax breakdown recorded alongside the aggregate.
+    expect(data.totals.taxableSubtotal).toBe(385);
+    expect(data.totals.taxes).toEqual([
+      { name: "HST", rate: 0.13, taxableAmount: 385, amount: 50.05 },
+    ]);
+
     // Line items have server-computed amounts
     expect(data.lineItems).toHaveLength(2);
     expect(data.lineItems[0].amount).toBe(300);
     expect(data.lineItems[1].amount).toBe(85);
+    // Lines without a flag inherit applyTax (D4).
+    expect(data.lineItems[0].taxable).toBe(true);
+    expect(data.lineItems[1].taxable).toBe(true);
 
     // Frozen tenantSnapshot
     expect(data.tenantSnapshot.version).toBe(1);
@@ -246,7 +255,69 @@ describe("createInvoice", () => {
     ).data()!;
     expect(inv.totals.taxRate).toBe(0);
     expect(inv.totals.taxAmount).toBe(0);
+    expect(inv.totals.taxes).toEqual([]);
     expect(inv.totals.total).toBe(385);
+  });
+
+  it("per-line taxable: exempt lines stay out of the tax base (D4)", async () => {
+    const result = await createInvoiceHandler(
+      fakeRequest(
+        validInvoiceData({
+          lineItems: [
+            { description: "Cleaning", quantity: 1, rate: 200 },
+            { description: "Exam (HST-exempt)", quantity: 1, rate: 100, taxable: false },
+          ],
+        }),
+        ownerAuth,
+      ),
+    );
+    const inv = (
+      await testDb.doc(`tenants/${TENANT}/invoices/${result.invoiceId}`).get()
+    ).data()!;
+    expect(inv.lineItems[0].taxable).toBe(true);
+    expect(inv.lineItems[1].taxable).toBe(false);
+    expect(inv.totals).toEqual({
+      subtotal: 300,
+      taxableSubtotal: 200,
+      taxRate: 0.13,
+      taxAmount: 26,
+      taxes: [{ name: "HST", rate: 0.13, taxableAmount: 200, amount: 26 }],
+      total: 326,
+    });
+  });
+
+  it("per-line taxable can opt a single line into tax when the invoice default is off (D4)", async () => {
+    const result = await createInvoiceHandler(
+      fakeRequest(
+        validInvoiceData({
+          applyTax: false,
+          lineItems: [
+            { description: "Parts", quantity: 1, rate: 100, taxable: true },
+            { description: "Exempt labour", quantity: 1, rate: 50 },
+          ],
+        }),
+        ownerAuth,
+      ),
+    );
+    const inv = (
+      await testDb.doc(`tenants/${TENANT}/invoices/${result.invoiceId}`).get()
+    ).data()!;
+    expect(inv.totals.taxableSubtotal).toBe(100);
+    expect(inv.totals.taxAmount).toBe(13);
+    expect(inv.totals.total).toBe(163);
+  });
+
+  it("rejects a non-boolean taxable flag (D4)", async () => {
+    await expect(
+      createInvoiceHandler(
+        fakeRequest(
+          validInvoiceData({
+            lineItems: [{ description: "X", quantity: 1, rate: 1, taxable: "yes" }],
+          }),
+          ownerAuth,
+        ),
+      ),
+    ).rejects.toThrow(/taxable must be a boolean/);
   });
 
   it("snapshot never enables surcharging while the cardSurcharge feature is off (D3)", async () => {

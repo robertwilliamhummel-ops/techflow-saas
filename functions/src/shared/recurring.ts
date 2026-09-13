@@ -6,7 +6,11 @@
 // leap years.
 
 import { HttpsError } from "firebase-functions/v2/https";
-import type { LineItemInput, CustomerInput } from "./invoice";
+import {
+  validateLineItems,
+  type LineItemInput,
+  type CustomerInput,
+} from "./invoice";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -72,55 +76,14 @@ export function validateRecurringInvoiceInput(
   const custPhone =
     cust.phone != null ? String(cust.phone).trim() || null : null;
 
-  // Line items — same rules as invoice
-  if (!Array.isArray(d.lineItems) || d.lineItems.length === 0) {
-    throw new HttpsError(
-      "invalid-argument",
-      "At least one line item required.",
-    );
-  }
-  if (d.lineItems.length > 100) {
-    throw new HttpsError(
-      "invalid-argument",
-      "Maximum 100 line items per recurring invoice.",
-    );
-  }
-  const lineItems: LineItemInput[] = d.lineItems.map(
-    (item: unknown, i: number) => {
-      const li = item as Record<string, unknown>;
-      if (!li || typeof li !== "object") {
-        throw new HttpsError(
-          "invalid-argument",
-          `lineItems[${i}] must be an object.`,
-        );
-      }
-      const desc = String(li.description ?? "").trim();
-      if (!desc || desc.length > 500) {
-        throw new HttpsError(
-          "invalid-argument",
-          `lineItems[${i}].description must be 1–500 characters.`,
-        );
-      }
-      const qty = Number(li.quantity);
-      if (!Number.isFinite(qty) || qty <= 0) {
-        throw new HttpsError(
-          "invalid-argument",
-          `lineItems[${i}].quantity must be a positive number.`,
-        );
-      }
-      const rate = Number(li.rate);
-      if (!Number.isFinite(rate) || rate < 0) {
-        throw new HttpsError(
-          "invalid-argument",
-          `lineItems[${i}].rate must be a non-negative number.`,
-        );
-      }
-      return { description: desc, quantity: qty, rate };
-    },
-  );
-
-  // Tax flag
+  // Tax default + line items — same rules as invoice; each line may override
+  // the default with its own `taxable` flag (D4).
   const applyTax = d.applyTax === true;
+  const lineItems: LineItemInput[] = validateLineItems(
+    d.lineItems,
+    applyTax,
+    "recurring invoice",
+  );
 
   // Notes
   const notes = d.notes != null ? String(d.notes).trim() || null : null;
