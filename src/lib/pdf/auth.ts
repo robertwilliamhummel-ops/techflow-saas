@@ -3,10 +3,12 @@
 // Two callers can request a PDF for tenants/{tenantId}/invoices/{invoiceId}:
 //   - Tenant user — token has `tenantId` claim that matches the invoice path.
 //   - Customer    — token has email_verified=true AND token email matches
-//                    the invoice's `customer.email` (case-insensitive).
+//                    the invoice's `customer.email` (case-insensitive), AND the
+//                    document is in a status customers may see (A-05, S-08).
 //
-// Anything else → 403. The proxy is the single security boundary; Cloud Run
-// trusts the proxy.
+// Anything else → 403, or 404 for the matching customer asking for a document
+// they may not see, answered as if it didn't exist. The proxy is the single
+// security boundary; Cloud Run trusts the proxy.
 
 import { getAdminAuth } from "@/lib/firebase/admin";
 import type { DecodedIdToken } from "firebase-admin/auth";
@@ -51,6 +53,8 @@ export async function verifyIdToken(token: string): Promise<DecodedIdToken> {
 export interface AuthorizeOptions {
   tenantId: string;
   customerEmail: string;
+  /** Whether the document's status is one customers see (never a draft). */
+  customerMayView: boolean;
 }
 
 export function authorizePdfAccess(
@@ -80,6 +84,9 @@ export function authorizePdfAccess(
       403,
       "Token does not authorize access to this document.",
     );
+  }
+  if (!opts.customerMayView) {
+    throw new PdfAuthError(404, "Document not found.");
   }
   return { uid: decoded.uid, mode: "customer" };
 }

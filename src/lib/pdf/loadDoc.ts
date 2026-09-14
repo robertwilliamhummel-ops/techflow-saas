@@ -18,6 +18,8 @@ export class PdfLoadError extends Error {
 
 export interface LoadedInvoice {
   customerEmail: string;
+  /** The stored status, "" when missing — the routes hide drafts from customers (S-08). */
+  status: string;
   body: {
     snapshot: Record<string, unknown>;
     data: Record<string, unknown>;
@@ -68,6 +70,7 @@ export async function loadInvoiceForPdf(
 
   return {
     customerEmail,
+    status: typeof data.status === "string" ? data.status : "",
     body: {
       snapshot,
       data: {
@@ -101,6 +104,8 @@ export async function loadInvoiceForPdf(
 
 export interface LoadedQuote {
   customerEmail: string;
+  /** The stored status, "" when missing — the routes hide drafts from customers (S-08). */
+  status: string;
   body: {
     snapshot: Record<string, unknown>;
     data: Record<string, unknown>;
@@ -132,6 +137,7 @@ export async function loadQuoteForPdf(
 
   return {
     customerEmail,
+    status: typeof data.status === "string" ? data.status : "",
     body: {
       snapshot,
       data: {

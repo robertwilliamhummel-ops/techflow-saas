@@ -2,8 +2,8 @@
 //
 // Customer-facing: requires email_verified, NO tenantId claim. The quote
 // companion to getCustomerInvoiceDetail, for /portal/quotes/[id]: returns the
-// quote after verifying the caller's email matches customer.email. Drafts
-// answer not-found (A-05). Quotes carry no pay token, so nothing is stripped.
+// customer's view of the quote (customerDocView.ts, S-08) after verifying the
+// caller's email matches customer.email. Drafts answer not-found (A-05).
 
 import {
   onCall,
@@ -16,10 +16,11 @@ import { requireDocId } from "../shared/docId";
 import { withSentryCallable } from "../shared/withSentry";
 import { lowerEmail } from "../shared/email";
 import { isCustomerVisibleQuoteStatus } from "../shared/customerVisibility";
+import { toCustomerQuoteView, type CustomerQuoteView } from "./customerDocView";
 
 export async function getCustomerQuoteDetailHandler(
   request: CallableRequest,
-): Promise<Record<string, unknown>> {
+): Promise<CustomerQuoteView> {
   const claims = readClaims(request);
   const { email } = requireVerifiedCustomer(claims);
   const normalizedEmail = lowerEmail(email);
@@ -45,11 +46,7 @@ export async function getCustomerQuoteDetailHandler(
     throw new HttpsError("not-found", "Quote not found.");
   }
 
-  return {
-    id: snap.id,
-    tenantId,
-    ...quote,
-  };
+  return toCustomerQuoteView(snap.id, tenantId, quote);
 }
 
 export const getCustomerQuoteDetail = onCall(

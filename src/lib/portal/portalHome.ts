@@ -14,28 +14,12 @@ import type {
   CustomerInvoiceListItem,
   CustomerQuoteListItem,
 } from "@/lib/portal/CustomerPortalContext";
+import {
+  isCustomerVisibleInvoiceStatus,
+  isCustomerVisibleQuoteStatus,
+} from "@/lib/portal/customerVisibility";
 import { displayQuoteStatus } from "@/lib/quotes/quoteStatus";
 import type { InvoiceStatus, QuoteStatus } from "@/lib/schema/tenant";
-
-// Mirror functions/src/shared/customerVisibility.ts; a test pins them together.
-export const PORTAL_INVOICE_STATUSES = [
-  "sent",
-  "unpaid",
-  "overdue",
-  "partial",
-  "paid",
-  "refunded",
-  "partially-refunded",
-  "void",
-] as const satisfies readonly InvoiceStatus[];
-
-export const PORTAL_QUOTE_STATUSES = [
-  "sent",
-  "accepted",
-  "declined",
-  "expired",
-  "converted",
-] as const satisfies readonly QuoteStatus[];
 
 export interface PortalInvoiceRow {
   invoice: CustomerInvoiceListItem;
@@ -74,18 +58,10 @@ export interface PortalHome {
   pastQuotes: PortalQuoteRow[];
 }
 
-function isPortalInvoiceStatus(status: string): status is InvoiceStatus {
-  return (PORTAL_INVOICE_STATUSES as readonly string[]).includes(status);
-}
-
-function isPortalQuoteStatus(status: string): status is QuoteStatus {
-  return (PORTAL_QUOTE_STATUSES as readonly string[]).includes(status);
-}
-
 /**
  * Groups the portal lists for the home page. `invoices` and `quotes` arrive
  * newest first (getCustomerInvoices / getCustomerQuotes); a row with a status
- * the portal doesn't show is left out.
+ * customers don't see is left out.
  */
 export function buildPortalHome(
   invoices: readonly CustomerInvoiceListItem[],
@@ -97,7 +73,7 @@ export function buildPortalHome(
 
   for (const invoice of invoices) {
     const stored = invoice.status;
-    if (!isPortalInvoiceStatus(stored)) continue;
+    if (!isCustomerVisibleInvoiceStatus(stored)) continue;
     if (!isPayableStatus(stored)) {
       pastInvoices.push({ invoice, status: stored, balanceCents: 0, daysOverdue: 0 });
       continue;
@@ -148,11 +124,9 @@ export function buildPortalHome(
   const openQuotes: PortalQuoteRow[] = [];
   const pastQuotes: PortalQuoteRow[] = [];
   for (const quote of quotes) {
-    if (!isPortalQuoteStatus(quote.status)) continue;
-    const status = displayQuoteStatus(
-      { status: quote.status, validUntil: quote.validUntil },
-      today,
-    );
+    const stored = quote.status;
+    if (!isCustomerVisibleQuoteStatus(stored)) continue;
+    const status = displayQuoteStatus({ status: stored, validUntil: quote.validUntil }, today);
     (status === "sent" ? openQuotes : pastQuotes).push({ quote, status });
   }
   openQuotes.sort((a, b) => a.quote.validUntil.localeCompare(b.quote.validUntil));

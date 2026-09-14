@@ -440,3 +440,75 @@ describe("GET /api/pdf/quote", () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe("S-08: customers never get a draft's PDF (A-05)", () => {
+  const customer = { uid: "cust1", email: "jane@example.com", email_verified: true };
+
+  it("404 for a draft invoice, without calling the PDF service", async () => {
+    seedTenantEntitlements("acme");
+    seedInvoice("acme", "INV-1", { status: "draft" });
+    verifyIdToken.mockResolvedValueOnce(customer);
+
+    const res = await invoiceGET(
+      makeRequest("https://app.example.test/api/pdf/invoice?tenantId=acme&invoiceId=INV-1", {
+        authorization: "Bearer good",
+      }),
+    );
+
+    expect(res.status).toBe(404);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("404 for a draft quote, without calling the PDF service", async () => {
+    seedTenantEntitlements("acme");
+    seedQuote("acme", "QT-1", { status: "draft" });
+    verifyIdToken.mockResolvedValueOnce(customer);
+
+    const res = await quoteGET(
+      makeRequest("https://app.example.test/api/pdf/quote?tenantId=acme&quoteId=QT-1", {
+        authorization: "Bearer good",
+      }),
+    );
+
+    expect(res.status).toBe(404);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("the business still gets its own draft's PDF", async () => {
+    seedTenantEntitlements("acme");
+    seedInvoice("acme", "INV-1", { status: "draft" });
+    verifyIdToken.mockResolvedValueOnce({ uid: "u1", tenantId: "acme" });
+    pdfReply();
+
+    const res = await invoiceGET(
+      makeRequest("https://app.example.test/api/pdf/invoice?tenantId=acme&invoiceId=INV-1", {
+        authorization: "Bearer good",
+      }),
+    );
+
+    expect(res.status).toBe(200);
+  });
+
+  it("a customer still gets a void invoice's PDF, and a converted quote's", async () => {
+    seedTenantEntitlements("acme");
+    seedInvoice("acme", "INV-1", { status: "void" });
+    seedQuote("acme", "QT-1", { status: "converted" });
+    verifyIdToken.mockResolvedValue(customer);
+    pdfReply();
+    pdfReply();
+
+    const invoiceRes = await invoiceGET(
+      makeRequest("https://app.example.test/api/pdf/invoice?tenantId=acme&invoiceId=INV-1", {
+        authorization: "Bearer good",
+      }),
+    );
+    const quoteRes = await quoteGET(
+      makeRequest("https://app.example.test/api/pdf/quote?tenantId=acme&quoteId=QT-1", {
+        authorization: "Bearer good",
+      }),
+    );
+
+    expect(invoiceRes.status).toBe(200);
+    expect(quoteRes.status).toBe(200);
+  });
+});

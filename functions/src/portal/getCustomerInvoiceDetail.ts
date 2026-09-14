@@ -1,10 +1,10 @@
 // getCustomerInvoiceDetail — Phase 2 Bundle F.
 //
-// Customer-facing: requires email_verified, NO tenantId claim.
-// Returns full invoice doc after verifying caller's email matches
-// customer.email. Strips raw payToken — customers discover the pay
-// URL from the email link or the portal "Pay Now" button, not from
-// this callable.
+// Customer-facing: requires email_verified, NO tenantId claim. Returns the
+// customer's view of the invoice (customerDocView.ts) after verifying the
+// caller's email matches customer.email: no internal fields, Timestamps as
+// epoch milliseconds, and the pay token only while the invoice is payable —
+// the portal's Pay button opens /pay/{payToken} (S-08).
 
 import {
   onCall,
@@ -17,10 +17,11 @@ import { requireDocId } from "../shared/docId";
 import { lowerEmail } from "../shared/email";
 import { isCustomerVisibleInvoiceStatus } from "../shared/customerVisibility";
 import { withSentryCallable } from "../shared/withSentry";
+import { toCustomerInvoiceView, type CustomerInvoiceView } from "./customerDocView";
 
 export async function getCustomerInvoiceDetailHandler(
   request: CallableRequest,
-): Promise<Record<string, unknown>> {
+): Promise<CustomerInvoiceView> {
   const claims = readClaims(request);
   const { email } = requireVerifiedCustomer(claims);
   const normalizedEmail = lowerEmail(email);
@@ -48,14 +49,7 @@ export async function getCustomerInvoiceDetailHandler(
     throw new HttpsError("not-found", "Invoice not found.");
   }
 
-  // Strip sensitive fields — customer should not see the raw JWT token.
-  const { payToken: _pt, ...safe } = invoice;
-
-  return {
-    id: snap.id,
-    tenantId,
-    ...safe,
-  };
+  return toCustomerInvoiceView(snap.id, tenantId, invoice);
 }
 
 export const getCustomerInvoiceDetail = onCall(

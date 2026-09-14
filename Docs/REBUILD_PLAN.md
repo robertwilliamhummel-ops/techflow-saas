@@ -116,6 +116,8 @@ Fixed: S-06, part 1 (2026-09-14) — `convertQuoteToInvoice` set the invoice's d
 
 Fixed: S-07 (2026-09-14) — `getCustomerInvoiceDetail` built its path from the raw `tenantId` and `invoiceId`, the one customer-facing callable S-04 missed; both now go through `requireDocId`, as `getCustomerQuoteDetail` already did. The portal lists also lacked what the home page needs to show money correctly: rows now carry the snapshot `currency`, so amounts from a USD business are never shown or added up as CAD, and `paidAmountCents`, so a partly paid invoice shows its balance rather than its full total. Covered by `customerFacing.test.ts` and `customerQuotes.test.ts`.
 
+Fixed: S-08, part 1 (2026-09-14) — the PDF routes checked who was asking but not what for: a verified customer whose email matched a draft invoice or quote got its PDF, pay link included, though drafts never reach customers (A-05). `authorizePdfAccess` now takes `customerMayView` from the document's status (`src/lib/portal/customerVisibility.ts`, pinned to the functions list by a test) and answers that customer 404; the business still gets its own drafts. The portal detail callables returned the stored document as it was, so the portal would have received who created or voided it, the void reason, Stripe ids, and email delivery status, with Timestamps arriving as `{_seconds, _nanoseconds}` objects that have no methods on the client. They now return an explicit customer view (`functions/src/portal/customerDocView.ts`) with Timestamps as epoch milliseconds. And `getCustomerInvoiceDetail` stripped `payToken`, though the plan's portal Pay button reads it there and Firestore rules already let that customer read it; it now returns the token and its expiry while the invoice is payable. Covered by `src/lib/pdf/__tests__/auth.test.ts`, `src/app/api/pdf/__tests__/routes.test.ts`, `customerFacing.test.ts`, and `customerQuotes.test.ts`.
+
 ### Platform deadlines
 
 - **Next.js:** on 16.3.5 with React 19.3 (Next 15's 2026-10-21 end of life no longer applies). Next 16 removed `next lint` — run `npm run lint`; `next build` no longer lints.
@@ -870,9 +872,9 @@ Caller-supplied document ids go through `requireDocId` (`functions/src/shared/do
 | Function | Notes |
 |---|---|
 | `getCustomerInvoices` | collection-group query on the lowercased email, max 100 (drafts + logo size A-05; pagination R8); each row carries the snapshot `currency` (default `CAD`) and `paidAmountCents`, so a partly paid invoice shows its balance (S-07) |
-| `getCustomerInvoiceDetail` | `{ tenantId, invoiceId }`, both through `requireDocId` (S-07); email must match `customer.email`; drafts answer not-found; strips `payToken` |
+| `getCustomerInvoiceDetail` | `{ tenantId, invoiceId }`, both through `requireDocId` (S-07); email must match `customer.email`; drafts answer not-found; returns the customer's view (`functions/src/portal/customerDocView.ts`, S-08) — no internal fields (creator, voider and void reason, Stripe ids, email delivery status), Timestamps as epoch milliseconds, and `payToken` with its expiry only while the invoice is payable, for the portal's Pay button |
 | `getCustomerQuotes` | the quote companion (P6): same paging, visibility, logo-URL, and `currency` rules over the `(customer.email, createdAt desc)` quotes index, max 100 |
-| `getCustomerQuoteDetail` | `{ tenantId, quoteId }`; email must match `customer.email`; drafts answer not-found (P6) |
+| `getCustomerQuoteDetail` | `{ tenantId, quoteId }`; email must match `customer.email`; drafts answer not-found (P6); returns the customer's view, as for invoices (S-08) |
 
 **Public callable (no sign-in):** `sendPortalSignInLink` — `{ email, continueUrl }`; emails a MagicLinkSignIn link generated with the Admin SDK. Always answers `{ ok: true }`; sends only to an address with a customer-visible invoice or quote; 5 requests an hour and one a minute per address (`signInLinkLimits/{sha256(email)}`, TTL-cleaned); `continueUrl` must be a `/portal` page on the shared portal host or a verified custom domain (E-01).
 

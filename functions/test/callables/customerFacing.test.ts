@@ -381,14 +381,89 @@ describe("getCustomerInvoiceDetail", () => {
     await seedTenantAndInvoice();
   });
 
-  it("returns invoice detail for the matching customer", async () => {
+  it("S-08: returns the customer's view — the pay token while payable, no internal fields", async () => {
+    const stored = (await testDb.doc(`tenants/${TENANT}/invoices/INV-0001`).get()).data()!;
+
     const result = await getCustomerInvoiceDetailHandler(
       fakeRequest({ tenantId: TENANT, invoiceId: "INV-0001" }, customerAuth),
     );
-    expect(result.id).toBe("INV-0001");
-    expect(result.tenantId).toBe(TENANT);
-    // payToken should be stripped
-    expect(result).not.toHaveProperty("payToken");
+
+    expect(result).toEqual({
+      id: "INV-0001",
+      tenantId: TENANT,
+      customer: { name: "Jane Doe", email: CUSTOMER_EMAIL, phone: null },
+      lineItems: [
+        { description: "Service call", quantity: 1, rate: 100, taxable: true, amount: 100 },
+      ],
+      totals: { subtotal: 100, taxAmount: 13, total: 113, taxes: [] },
+      tenantSnapshot: {
+        name: "Acme Plumbing",
+        logoUrl: null,
+        address: "123 Main St",
+        primaryColor: "#667eea",
+        businessNumber: "123456789",
+        currency: "CAD",
+      },
+      status: "sent",
+      issueDate: "2026-04-15",
+      dueDate: "2026-05-15",
+      notes: null,
+      sentAt: null,
+      paidAt: null,
+      paymentMethod: null,
+      paidAmountCents: null,
+      surchargeAmountCents: null,
+      refundedAt: null,
+      refundedAmountCents: null,
+      voidedAt: null,
+      payToken: stored.payToken,
+      // A callable would send a Timestamp as {_seconds, _nanoseconds}.
+      payTokenExpiresAt: stored.payTokenExpiresAt.toMillis(),
+    });
+  });
+
+  it("S-08: withholds the pay token once paid, and gives payment times as millis", async () => {
+    const paidAt = Timestamp.fromMillis(Date.UTC(2026, 4, 1, 15, 30));
+    await testDb.doc(`tenants/${TENANT}/invoices/INV-0001`).update({
+      status: "paid",
+      paidAt,
+      paymentMethod: "card",
+      paidAmountCents: 11_300,
+      stripePaymentIntentId: "pi_123",
+    });
+
+    const result = await getCustomerInvoiceDetailHandler(
+      fakeRequest({ tenantId: TENANT, invoiceId: "INV-0001" }, customerAuth),
+    );
+
+    expect(result).toMatchObject({
+      status: "paid",
+      payToken: null,
+      payTokenExpiresAt: null,
+      paidAt: paidAt.toMillis(),
+      paymentMethod: "card",
+      paidAmountCents: 11_300,
+    });
+    expect(result).not.toHaveProperty("stripePaymentIntentId");
+    expect(result).not.toHaveProperty("createdBy");
+  });
+
+  it("S-08: a void invoice has no pay token and keeps the business's void reason private", async () => {
+    const voidedAt = Timestamp.fromMillis(Date.UTC(2026, 4, 2));
+    await testDb.doc(`tenants/${TENANT}/invoices/INV-0001`).update({
+      status: "void",
+      voidedAt,
+      voidedBy: OWNER_UID,
+      voidReason: "Customer disputed the price",
+    });
+
+    const result = await getCustomerInvoiceDetailHandler(
+      fakeRequest({ tenantId: TENANT, invoiceId: "INV-0001" }, customerAuth),
+    );
+
+    expect(result).toMatchObject({ status: "void", payToken: null, voidedAt: voidedAt.toMillis() });
+    expect(result).not.toHaveProperty("voidReason");
+    expect(result).not.toHaveProperty("voidedBy");
   });
 
   it("rejects customer whose email does not match", async () => {

@@ -184,6 +184,29 @@ describe("getCustomerQuoteDetail (P-06)", () => {
     });
   });
 
+  it("S-08: returns the customer's view — no internal fields", async () => {
+    await seedQuote("QT-0001", { logoUrl: "https://storage.example.com/logo.png" });
+
+    const quote = await getCustomerQuoteDetailHandler(
+      fakeRequest({ tenantId: TENANT, quoteId: "QT-0001" }, customer()),
+    );
+
+    expect(quote.tenantSnapshot).toEqual({
+      name: "Acme Plumbing",
+      logoUrl: "https://storage.example.com/logo.png",
+      address: null,
+      primaryColor: "#123456",
+      businessNumber: null,
+      currency: "CAD",
+    });
+    expect(quote.lineItems).toEqual([
+      { description: "Estimate", quantity: 1, rate: 200, taxable: true, amount: 200 },
+    ]);
+    expect(quote.sentAt).toBeNull();
+    expect(quote).not.toHaveProperty("createdBy");
+    expect(quote).not.toHaveProperty("createdAt");
+  });
+
   it("refuses another customer's quote", async () => {
     await seedQuote("QT-0001");
     await expect(

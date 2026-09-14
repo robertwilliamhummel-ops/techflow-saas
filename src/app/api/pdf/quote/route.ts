@@ -11,6 +11,7 @@ import {
 import { PdfLoadError, loadQuoteForPdf } from "@/lib/pdf/loadDoc";
 import { withPdfLogo } from "@/lib/pdf/logo";
 import { PdfServiceError, proxyToPdfService } from "@/lib/pdf/proxy";
+import { isCustomerVisibleQuoteStatus } from "@/lib/portal/customerVisibility";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -35,6 +36,8 @@ export async function GET(req: Request): Promise<Response> {
     authorizePdfAccess(decoded, {
       tenantId,
       customerEmail: loaded.customerEmail,
+      // S-08: a customer never gets a draft (A-05).
+      customerMayView: isCustomerVisibleQuoteStatus(loaded.status),
     });
 
     return await proxyToPdfService({

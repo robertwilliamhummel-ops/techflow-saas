@@ -1,16 +1,10 @@
 import { describe, expect, it } from "vitest";
-import {
-  CUSTOMER_VISIBLE_INVOICE_STATUSES,
-  CUSTOMER_VISIBLE_QUOTE_STATUSES,
-} from "../../../functions/src/shared/customerVisibility";
 import type {
   CustomerInvoiceListItem,
   CustomerQuoteListItem,
 } from "../portal/CustomerPortalContext";
 import {
   PORTAL_FALLBACK_ACCENT,
-  PORTAL_INVOICE_STATUSES,
-  PORTAL_QUOTE_STATUSES,
   buildPortalHome,
   businessInitial,
   portalAccent,
@@ -60,13 +54,6 @@ function quote(
     ...overrides,
   };
 }
-
-describe("portal statuses", () => {
-  it("mirror the statuses the portal callables return", () => {
-    expect([...PORTAL_INVOICE_STATUSES]).toEqual([...CUSTOMER_VISIBLE_INVOICE_STATUSES]);
-    expect([...PORTAL_QUOTE_STATUSES]).toEqual([...CUSTOMER_VISIBLE_QUOTE_STATUSES]);
-  });
-});
 
 describe("buildPortalHome — invoices", () => {
   it("puts payable invoices in To pay and settled ones in the history, newest first", () => {
@@ -139,7 +126,7 @@ describe("buildPortalHome — invoices", () => {
     expect(buildPortalHome([invoice("INV-1", { status: "paid" })], [], TODAY).balances).toEqual([]);
   });
 
-  it("leaves out a status the portal doesn't show", () => {
+  it("leaves out a status customers don't see", () => {
     const home = buildPortalHome([invoice("INV-1", { status: "draft" })], [], TODAY);
     expect(home.toPay).toEqual([]);
     expect(home.pastInvoices).toEqual([]);
