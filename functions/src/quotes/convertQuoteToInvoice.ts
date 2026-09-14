@@ -8,6 +8,10 @@
 // - Transactional: quote status update + invoice creation in one shot
 // - Feature gate: BOTH quotes AND invoices
 // - Pay token generated on the new invoice (same as createInvoice)
+//
+// S-06: the invoice gets its own dates. A quote's validUntil says how long the
+// offer stood, not when payment is due, so it no longer becomes the due date —
+// an old quote used to make an invoice due before it was issued.
 
 import {
   HttpsError,
@@ -18,6 +22,7 @@ import { defineSecret } from "firebase-functions/params";
 import { sign } from "jsonwebtoken";
 import { db, FieldValue, Timestamp } from "../shared/admin";
 import { readClaims, requireTenant } from "../shared/auth";
+import { isIsoCalendarDate } from "../shared/dates";
 import { requireDocId } from "../shared/docId";
 import { requireFeature } from "../shared/requireFeature";
 import {
@@ -27,9 +32,25 @@ import {
   resolveLineItems,
 } from "../shared/invoice";
 import { applyLogoToSnapshot } from "../shared/logo";
+import { addDaysToISODate } from "../shared/recurring";
 import { withSentryCallable } from "../shared/withSentry";
 
 const PAY_TOKEN_SECRET = defineSecret("PAY_TOKEN_SECRET");
+
+// The same terms the new-invoice form starts with.
+export const DEFAULT_PAYMENT_TERMS_DAYS = 30;
+
+function optionalIsoDate(value: unknown, field: string): string | null {
+  if (value == null || value === "") return null;
+  const text = String(value).trim();
+  if (!isIsoCalendarDate(text)) {
+    throw new HttpsError(
+      "invalid-argument",
+      `${field} must be a real date (YYYY-MM-DD) if provided.`,
+    );
+  }
+  return text;
+}
 
 export async function convertQuoteToInvoiceHandler(
   request: CallableRequest,
@@ -43,6 +64,21 @@ export async function convertQuoteToInvoiceHandler(
 
   const data = request.data as Record<string, unknown> | undefined;
   const quoteId = requireDocId(data?.quoteId, "quoteId");
+
+  // The caller sends the viewer's local dates; without them, issue today (UTC)
+  // on the default terms.
+  const issueDate =
+    optionalIsoDate(data?.issueDate, "issueDate") ??
+    new Date().toISOString().slice(0, 10);
+  const dueDate =
+    optionalIsoDate(data?.dueDate, "dueDate") ??
+    addDaysToISODate(issueDate, DEFAULT_PAYMENT_TERMS_DAYS);
+  if (dueDate < issueDate) {
+    throw new HttpsError(
+      "invalid-argument",
+      "dueDate can't be before issueDate.",
+    );
+  }
 
   // Load quote outside transaction (read-only, avoids contention).
   const quoteRef = db.doc(`tenants/${tenantId}/quotes/${quoteId}`);
@@ -83,7 +119,6 @@ export async function convertQuoteToInvoiceHandler(
   });
 
   const prefix = String(meta.invoicePrefix ?? "INV");
-  const issueDate = new Date().toISOString().slice(0, 10);
 
   // Transactional: invoice counter + invoice create + quote status update.
   const invoiceId = await db.runTransaction(async (tx) => {
@@ -130,7 +165,7 @@ export async function convertQuoteToInvoiceHandler(
       totals,
       tenantSnapshot: snapshot,
       status: "draft",
-      dueDate: quote.validUntil ?? issueDate, // use quote's validUntil as default due date
+      dueDate,
       issueDate,
       notes: quote.notes ?? null,
       sourceQuoteId: quoteId,

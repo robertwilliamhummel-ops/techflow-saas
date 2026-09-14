@@ -49,6 +49,15 @@ export async function sendQuoteEmailHandler(
     );
   }
 
+  // S-06: a converted quote has become an invoice; emailing it again would ask
+  // the customer to review an offer that has already been invoiced.
+  if (quote.status === "converted") {
+    throw new HttpsError(
+      "failed-precondition",
+      "This quote was converted to an invoice, so it can't be sent. Send the invoice instead.",
+    );
+  }
+
   // Build email props.
   const snapshot = quote.tenantSnapshot ?? {};
   const tenant: TenantSnapshotForEmail = {

@@ -558,6 +558,50 @@ describe("convertQuoteToInvoice", () => {
     ]);
   });
 
+  it("S-06: the invoice is due 30 days after it's issued, never on the quote's validUntil", async () => {
+    // validQuoteData's validUntil (2026-06-30) is long past, so the old rule made
+    // an invoice due before it was issued.
+    const { quoteId } = await createQuoteHandler(fakeRequest(validQuoteData(), ownerAuth));
+
+    await convertQuoteToInvoiceHandler(fakeRequest({ quoteId }, ownerAuth));
+
+    const inv = (await testDb.doc(`tenants/${TENANT}/invoices/INV-0001`).get()).data()!;
+    const today = new Date().toISOString().slice(0, 10);
+    const due = new Date(`${today}T00:00:00Z`);
+    due.setUTCDate(due.getUTCDate() + 30);
+    expect(inv.issueDate).toBe(today);
+    expect(inv.dueDate).toBe(due.toISOString().slice(0, 10));
+  });
+
+  it("S-06: uses the issue and due dates the caller sends", async () => {
+    const { quoteId } = await createQuoteHandler(fakeRequest(validQuoteData(), ownerAuth));
+
+    await convertQuoteToInvoiceHandler(
+      fakeRequest({ quoteId, issueDate: "2026-09-14", dueDate: "2026-10-01" }, ownerAuth),
+    );
+
+    const inv = (await testDb.doc(`tenants/${TENANT}/invoices/INV-0001`).get()).data()!;
+    expect(inv.issueDate).toBe("2026-09-14");
+    expect(inv.dueDate).toBe("2026-10-01");
+  });
+
+  it("S-06: refuses impossible or out-of-order dates and leaves the quote unconverted", async () => {
+    const { quoteId } = await createQuoteHandler(fakeRequest(validQuoteData(), ownerAuth));
+
+    await expect(
+      convertQuoteToInvoiceHandler(
+        fakeRequest({ quoteId, issueDate: "2026-09-14", dueDate: "2026-09-01" }, ownerAuth),
+      ),
+    ).rejects.toThrow(/dueDate can't be before issueDate/);
+    await expect(
+      convertQuoteToInvoiceHandler(fakeRequest({ quoteId, dueDate: "2026-02-30" }, ownerAuth)),
+    ).rejects.toThrow(/dueDate must be a real date/);
+
+    const qt = (await testDb.doc(`tenants/${TENANT}/quotes/${quoteId}`).get()).data()!;
+    expect(qt.status).toBe("draft");
+    expect((await testDb.doc(`tenants/${TENANT}/invoices/INV-0001`).get()).exists).toBe(false);
+  });
+
   it("rejects double-conversion", async () => {
     const { quoteId } = await createQuoteHandler(
       fakeRequest(validQuoteData(), ownerAuth),

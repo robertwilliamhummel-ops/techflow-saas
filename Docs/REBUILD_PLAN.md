@@ -112,6 +112,8 @@ Fixed: S-03, part 1 (2026-09-14) — `validateInvoiceInput`, `validateQuoteInput
 
 Fixed: S-04, part 1 (2026-09-14) — the plan says caller-supplied document ids go through `requireDocId`, but nine callables built paths from the raw value: `updateInvoice`, `sendInvoiceEmail`, `previewInvoicePDF`, `regenerateInvoicePayLink`, `updateQuote`, `deleteQuote`, `sendQuoteEmail`, `previewQuotePDF`, and `convertQuoteToInvoice`. An id such as `INV-0001/paymentIncidents/x` addressed a different document inside the caller's own tenant — `updateInvoice` would have written invoice fields onto it. All nine now use `requireDocId`. Covered by `functions/test/callables/docIdGuard.test.ts`, which sends three malformed ids to every tenant callable that takes an invoice or quote id. The same pass found that `sendInvoiceEmail` refused only void invoices, so Resend on a paid or refunded invoice would have emailed the customer asking them to pay again; it now sends only a draft or a payable invoice — the statuses `regenerateInvoicePayLink` already limited itself to — and receipts for paid invoices stay with `onInvoicePaid` (covered in `customerFacing.test.ts`).
 
+Fixed: S-06, part 1 (2026-09-14) — `convertQuoteToInvoice` set the invoice's due date to the quote's `validUntil`, so converting a quote whose offer had lapsed made an invoice already overdue on the day it was issued (and due before its issue date, which the S-03 validation now refuses everywhere else); its issue date was also the UTC date, a day ahead on Canadian evenings. It now takes optional `issueDate` and `dueDate` from the caller, checked like any invoice's, and otherwise issues today with 30-day terms. `sendQuoteEmail` had no status check, so a converted quote could be emailed again as an open offer; it now refuses converted quotes. Covered by `functions/test/callables/quotes.test.ts` and `customerFacing.test.ts`.
+
 ### Platform deadlines
 
 - **Next.js:** on 16.3.5 with React 19.3 (Next 15's 2026-10-21 end of life no longer applies). Next 16 removed `next lint` — run `npm run lint`; `next build` no longer lints.
@@ -1106,6 +1108,7 @@ Reads a quote document, creates a new invoice document in the same tenant with:
 - Fresh `tenantSnapshot` (in case branding changed since quote was created)
 - Link back to the source quote: `sourceQuoteId: quoteId`
 - Marks the source quote as `status: 'converted'` and stores `convertedToInvoiceId`
+- Its own dates (S-06): optional `issueDate` and `dueDate` from the caller — real calendar dates, due not before issued — defaulting to today (UTC) and 30 days later. The quote's `validUntil` is how long the offer stood, not when payment is due, so it is not used as the due date
 
 Feature gate: must have BOTH `quotes` AND `invoices` enabled. If a tenant's `invoices` flag were ever false, they couldn't convert (shouldn't happen since `invoices` is a core feature, but the check is defensive).
 

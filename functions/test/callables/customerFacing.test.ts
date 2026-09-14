@@ -903,6 +903,17 @@ describe("sendQuoteEmail", () => {
     ).rejects.toThrow(/Quote not found/);
   });
 
+  it("S-06: refuses to email a quote that was converted to an invoice", async () => {
+    await testDb.doc(`tenants/${TENANT}/quotes/QT-0001`).update({
+      status: "converted",
+      convertedToInvoiceId: "INV-0001",
+    });
+    await expect(
+      sendQuoteEmailHandler(fakeRequest({ quoteId: "QT-0001" }, ownerAuth)),
+    ).rejects.toThrow(/converted to an invoice/);
+    expect(mockSesSend).not.toHaveBeenCalled();
+  });
+
   it("rejects unauthenticated", async () => {
     await expect(
       sendQuoteEmailHandler(
