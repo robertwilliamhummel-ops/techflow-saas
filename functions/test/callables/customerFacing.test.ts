@@ -275,6 +275,17 @@ describe("getCustomerInvoices", () => {
     expect(withoutCurrency.invoices[0].currency).toBe("CAD");
   });
 
+  it("S-07: rows carry paidAmountCents so a partial invoice shows its balance", async () => {
+    const before = await getCustomerInvoicesHandler(fakeRequest({}, customerAuth));
+    expect(before.invoices[0].paidAmountCents).toBeNull();
+
+    await testDb
+      .doc(`tenants/${TENANT}/invoices/INV-0001`)
+      .update({ status: "partial", paidAmountCents: 5_000 });
+    const after = await getCustomerInvoicesHandler(fakeRequest({}, customerAuth));
+    expect(after.invoices[0]).toMatchObject({ status: "partial", paidAmountCents: 5_000 });
+  });
+
   // A-05 — drafts and inlined logos never reach the portal list.
 
   async function seedCustomerInvoice(

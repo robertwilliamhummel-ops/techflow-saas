@@ -22,6 +22,8 @@ export interface CustomerInvoiceListItem {
   totals: { subtotal: number; taxAmount: number; total: number };
   /** The business's currency for this document (S-07). */
   currency: string;
+  /** Paid so far on a partly paid invoice, in cents (S-07). */
+  paidAmountCents: number | null;
   status: string;
   dueDate: string;
   issueDate: string;

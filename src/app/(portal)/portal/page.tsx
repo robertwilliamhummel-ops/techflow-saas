@@ -1,5 +1,5 @@
-import { PagePlaceholder } from "@/components/scaffold/PagePlaceholder";
+import { PortalHome } from "./PortalHome";
 
 export default function PortalHomePage() {
-  return <PagePlaceholder title="Your invoices" phase="Phase 5" />;
+  return <PortalHome />;
 }

@@ -23,7 +23,10 @@ const SHOWN_AS_OVERDUE: readonly InvoiceStatus[] = ["sent", "unpaid"];
 const DAY_MS = 86_400_000;
 
 export type DueFields = Pick<Invoice, "status" | "dueDate">;
-export type BalanceFields = Pick<Invoice, "status" | "totals" | "paidAmountCents">;
+// Only the total is needed, so portal list rows (S-07) qualify as well.
+export type BalanceFields = Pick<Invoice, "status" | "paidAmountCents"> & {
+  totals: Pick<Invoice["totals"], "total">;
+};
 export type ReceivableInvoice = DueFields &
   BalanceFields & { tenantSnapshot: { currency: CurrencyCode } };
 

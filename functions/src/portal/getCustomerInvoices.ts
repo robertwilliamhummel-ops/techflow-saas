@@ -31,8 +31,10 @@ export interface CustomerInvoiceListItem {
   tenantId: string;
   customer: { name: string; email: string };
   totals: { subtotal: number; taxAmount: number; total: number };
-  // S-07: each business bills in its own currency.
+  // S-07: each business bills in its own currency, and a partly paid invoice
+  // shows what is still owed.
   currency: string;
+  paidAmountCents: number | null;
   status: string;
   dueDate: string;
   issueDate: string;
@@ -64,6 +66,7 @@ function toListItem(
     },
     currency:
       typeof d.tenantSnapshot?.currency === "string" ? d.tenantSnapshot.currency : "CAD",
+    paidAmountCents: typeof d.paidAmountCents === "number" ? d.paidAmountCents : null,
     status: d.status,
     dueDate: d.dueDate ?? "",
     issueDate: d.issueDate ?? "",

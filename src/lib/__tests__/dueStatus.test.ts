@@ -23,14 +23,8 @@ function invoice(
   return {
     status,
     dueDate,
-    totals: {
-      subtotal: total,
-      taxableSubtotal: 0,
-      taxRate: 0,
-      taxAmount: 0,
-      taxes: [],
-      total,
-    },
+    // Balances read only the total.
+    totals: { total },
     paidAmountCents: extra.paidAmountCents ?? null,
     tenantSnapshot: { currency: extra.currency ?? "CAD" },
   };
