@@ -867,9 +867,9 @@ Caller-supplied document ids go through `requireDocId` (`functions/src/shared/do
 
 | Function | Notes |
 |---|---|
-| `getCustomerInvoices` | collection-group query on the lowercased email, max 100 (drafts + logo size A-05; pagination R8) |
-| `getCustomerInvoiceDetail` | email must match `customer.email`; strips `payToken` |
-| `getCustomerQuotes` | the quote companion (P6): same paging, visibility, and logo-URL rules over the `(customer.email, createdAt desc)` quotes index, max 100 |
+| `getCustomerInvoices` | collection-group query on the lowercased email, max 100 (drafts + logo size A-05; pagination R8); each row carries the snapshot `currency`, default `CAD` (S-07) |
+| `getCustomerInvoiceDetail` | `{ tenantId, invoiceId }`, both through `requireDocId` (S-07); email must match `customer.email`; drafts answer not-found; strips `payToken` |
+| `getCustomerQuotes` | the quote companion (P6): same paging, visibility, logo-URL, and `currency` rules over the `(customer.email, createdAt desc)` quotes index, max 100 |
 | `getCustomerQuoteDetail` | `{ tenantId, quoteId }`; email must match `customer.email`; drafts answer not-found (P6) |
 
 **Public callable (no sign-in):** `sendPortalSignInLink` — `{ email, continueUrl }`; emails a MagicLinkSignIn link generated with the Admin SDK. Always answers `{ ok: true }`; sends only to an address with a customer-visible invoice or quote; 5 requests an hour and one a minute per address (`signInLinkLimits/{sha256(email)}`, TTL-cleaned); `continueUrl` must be a `/portal` page on the shared portal host or a verified custom domain (E-01).

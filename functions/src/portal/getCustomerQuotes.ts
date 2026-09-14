@@ -9,7 +9,7 @@
 // customer-visible statuses, filtered while paging through the
 // (customer.email, createdAt) collection-group index, so no further composite
 // index is needed and the list still fills to its limit. Rows carry the
-// snapshot's logo URL, never the inlined base64 logo (callable responses are
+// snapshot's logo URL, never inlined image data (callable responses are
 // capped at 10 MB).
 
 import { onCall, type CallableRequest } from "firebase-functions/v2/https";
@@ -32,6 +32,8 @@ export interface CustomerQuoteListItem {
   tenantId: string;
   customer: { name: string; email: string };
   totals: { subtotal: number; taxAmount: number; total: number };
+  // S-07: each business quotes in its own currency.
+  currency: string;
   status: string;
   validUntil: string;
   issueDate: string;
@@ -61,6 +63,8 @@ function toListItem(
       taxAmount: d.totals?.taxAmount ?? 0,
       total: d.totals?.total ?? 0,
     },
+    currency:
+      typeof d.tenantSnapshot?.currency === "string" ? d.tenantSnapshot.currency : "CAD",
     status: d.status,
     validUntil: d.validUntil ?? "",
     issueDate: d.issueDate ?? "",

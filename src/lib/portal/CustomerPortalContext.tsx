@@ -20,13 +20,15 @@ export interface CustomerInvoiceListItem {
   tenantId: string;
   customer: { name: string; email: string };
   totals: { subtotal: number; taxAmount: number; total: number };
+  /** The business's currency for this document (S-07). */
+  currency: string;
   status: string;
   dueDate: string;
   issueDate: string;
   tenantBranding: {
     name: string;
     // Immutable https copy of the logo from the invoice snapshot (A-05/A-06);
-    // the list never carries the inlined base64 logo.
+    // the list never carries inlined image data.
     logoUrl: string | null;
     primaryColor: string;
   };
@@ -39,6 +41,7 @@ export interface CustomerQuoteListItem {
   tenantId: string;
   customer: { name: string; email: string };
   totals: { subtotal: number; taxAmount: number; total: number };
+  currency: string;
   status: string;
   validUntil: string;
   issueDate: string;

@@ -257,6 +257,24 @@ describe("getCustomerInvoices", () => {
     expect(result.invoices).toHaveLength(0);
   });
 
+  it("S-07: rows carry the snapshot currency, defaulting to CAD", async () => {
+    await testDb
+      .doc(`tenants/${TENANT}/invoices/INV-0001`)
+      .update({ "tenantSnapshot.currency": "USD" });
+    const withCurrency = await getCustomerInvoicesHandler(
+      fakeRequest({}, customerAuth),
+    );
+    expect(withCurrency.invoices[0].currency).toBe("USD");
+
+    await testDb
+      .doc(`tenants/${TENANT}/invoices/INV-0001`)
+      .update({ "tenantSnapshot.currency": FieldValue.delete() });
+    const withoutCurrency = await getCustomerInvoicesHandler(
+      fakeRequest({}, customerAuth),
+    );
+    expect(withoutCurrency.invoices[0].currency).toBe("CAD");
+  });
+
   // A-05 — drafts and inlined logos never reach the portal list.
 
   async function seedCustomerInvoice(
@@ -379,6 +397,24 @@ describe("getCustomerInvoiceDetail", () => {
         fakeRequest({ tenantId: TENANT }, customerAuth),
       ),
     ).rejects.toThrow(/invoiceId required/);
+  });
+
+  it("S-07: refuses ids that are not a single document id", async () => {
+    await expect(
+      getCustomerInvoiceDetailHandler(
+        fakeRequest({ invoiceId: "INV-0001" }, customerAuth),
+      ),
+    ).rejects.toThrow(/tenantId required/);
+    await expect(
+      getCustomerInvoiceDetailHandler(
+        fakeRequest({ tenantId: `${TENANT}/invoices/x`, invoiceId: "INV-0001" }, customerAuth),
+      ),
+    ).rejects.toThrow(/tenantId is invalid/);
+    await expect(
+      getCustomerInvoiceDetailHandler(
+        fakeRequest({ tenantId: TENANT, invoiceId: "INV-0001/x/y" }, customerAuth),
+      ),
+    ).rejects.toThrow(/invoiceId is invalid/);
   });
 
   it("returns not-found for non-existent invoice", async () => {

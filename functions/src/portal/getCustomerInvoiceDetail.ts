@@ -13,6 +13,7 @@ import {
 } from "firebase-functions/v2/https";
 import { db } from "../shared/admin";
 import { readClaims, requireVerifiedCustomer } from "../shared/auth";
+import { requireDocId } from "../shared/docId";
 import { lowerEmail } from "../shared/email";
 import { isCustomerVisibleInvoiceStatus } from "../shared/customerVisibility";
 import { withSentryCallable } from "../shared/withSentry";
@@ -24,16 +25,10 @@ export async function getCustomerInvoiceDetailHandler(
   const { email } = requireVerifiedCustomer(claims);
   const normalizedEmail = lowerEmail(email);
 
-  const { tenantId, invoiceId } = request.data as {
-    tenantId?: string;
-    invoiceId?: string;
-  };
-  if (!tenantId || typeof tenantId !== "string") {
-    throw new HttpsError("invalid-argument", "tenantId required.");
-  }
-  if (!invoiceId || typeof invoiceId !== "string") {
-    throw new HttpsError("invalid-argument", "invoiceId required.");
-  }
+  // S-07: both ids become path segments, like every caller-supplied id.
+  const data = request.data as Record<string, unknown> | undefined;
+  const tenantId = requireDocId(data?.tenantId, "tenantId");
+  const invoiceId = requireDocId(data?.invoiceId, "invoiceId");
 
   const docRef = db.doc(`tenants/${tenantId}/invoices/${invoiceId}`);
   const snap = await docRef.get();
@@ -41,20 +36,20 @@ export async function getCustomerInvoiceDetailHandler(
     throw new HttpsError("not-found", "Invoice not found.");
   }
 
-  const data = snap.data()!;
+  const invoice = snap.data()!;
 
   // Verify caller email matches invoice's customer.email.
-  if (lowerEmail(data.customer?.email) !== normalizedEmail) {
+  if (lowerEmail(invoice.customer?.email) !== normalizedEmail) {
     throw new HttpsError("permission-denied", "Not your invoice.");
   }
 
   // A-05 — drafts aren't shown to customers; answer as if it didn't exist.
-  if (!isCustomerVisibleInvoiceStatus(data.status)) {
+  if (!isCustomerVisibleInvoiceStatus(invoice.status)) {
     throw new HttpsError("not-found", "Invoice not found.");
   }
 
   // Strip sensitive fields — customer should not see the raw JWT token.
-  const { payToken: _pt, ...safe } = data;
+  const { payToken: _pt, ...safe } = invoice;
 
   return {
     id: snap.id,

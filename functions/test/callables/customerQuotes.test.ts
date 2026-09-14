@@ -78,6 +78,8 @@ describe("getCustomerQuotes (P-06)", () => {
       tenantId: TENANT,
       customer: { name: "Jane Doe", email: CUSTOMER_EMAIL },
       totals: { subtotal: 200, taxAmount: 26, total: 226 },
+      // S-07: no currency on the seeded snapshot falls back to CAD.
+      currency: "CAD",
       status: "sent",
       validUntil: "2026-10-31",
       issueDate: "2026-09-01",
@@ -87,6 +89,17 @@ describe("getCustomerQuotes (P-06)", () => {
         primaryColor: "#123456",
       },
     });
+  });
+
+  it("S-07: rows carry the business's currency from the snapshot", async () => {
+    await seedQuote("QT-0001");
+    await testDb
+      .doc(`tenants/${TENANT}/quotes/QT-0001`)
+      .update({ "tenantSnapshot.currency": "USD" });
+
+    const { quotes } = await getCustomerQuotesHandler(fakeRequest({}, customer()));
+
+    expect(quotes[0].currency).toBe("USD");
   });
 
   it("matches the verified email case-insensitively", async () => {
