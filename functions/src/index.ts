@@ -1,5 +1,10 @@
-// MUST stay the first import — sets the default region (D2) before any
-// function module below is evaluated. See shared/globalOptions.ts.
+// Sentry first, as its setup guide asks: it initialises before firebase-functions
+// or any function module loads (O-01). See shared/sentry.ts.
+import "./shared/sentry";
+
+// MUST come before every function module — sets the default region (D2) and
+// the App Check switch (R-04) before any function is defined. See
+// shared/globalOptions.ts.
 import "./shared/globalOptions";
 
 // Shared admin-app init lives in shared/admin.ts and self-guards against

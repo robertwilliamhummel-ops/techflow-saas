@@ -10,6 +10,7 @@ import { onSchedule } from "firebase-functions/v2/scheduler";
 import { google } from "googleapis";
 import * as logger from "firebase-functions/logger";
 import { SCHEDULER_REGION } from "../shared/globalOptions";
+import { withSentryEvent } from "../shared/withSentry";
 
 export async function scheduledFirestoreExportHandler(): Promise<void> {
   const firestore = google.firestore("v1");
@@ -36,5 +37,5 @@ export async function scheduledFirestoreExportHandler(): Promise<void> {
 
 export const scheduledFirestoreExport = onSchedule(
   { schedule: "every day 03:00", timeZone: "UTC", region: SCHEDULER_REGION },
-  scheduledFirestoreExportHandler,
+  withSentryEvent("scheduledFirestoreExport", scheduledFirestoreExportHandler),
 );

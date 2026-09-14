@@ -29,7 +29,7 @@
 | P10 Email typo → invoice never reachable | Done — D5 `sesEventsWebhook` records `lastEmailStatus` |
 | P11 Second-tab stale token | Accepted for MVP |
 | P12 Magic link for unverified password accounts | Open — customer magic link isn't built yet |
-| P13 Sentry quota | Deploy Runbook item; Next.js Sentry loads from `src/instrumentation*.ts` once a DSN is set |
+| P13 Sentry quota | Deploy Runbook item; Next.js Sentry loads from `src/instrumentation*.ts` and Cloud Functions from `functions/src/shared/sentry.ts` once a DSN is set (O-01, 2026-09-14) — set quota alerts before launch |
 | P14 Portal list unbounded | Same as R8 |
 
 The per-item narratives below are the original audit text, kept for rationale. Code samples in them (Resend, Express, `us-central1`, `tenants/{id}/meta`) predate the build — see the status table and REBUILD_PLAN for what is current.

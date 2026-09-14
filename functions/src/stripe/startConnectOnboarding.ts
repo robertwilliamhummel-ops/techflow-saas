@@ -20,6 +20,7 @@
 // as meta.stripeAccountId, so Connect webhooks (account.updated) route even if
 // the tenant never returns through /billing/return.
 
+import { withSentryCallable } from "../shared/withSentry";
 import {
   HttpsError,
   onCall,
@@ -122,5 +123,5 @@ export async function startConnectOnboardingHandler(
 
 export const startConnectOnboarding = onCall(
   { secrets: [STRIPE_SECRET_KEY] },
-  startConnectOnboardingHandler,
+  withSentryCallable("startConnectOnboarding", startConnectOnboardingHandler),
 );

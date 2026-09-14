@@ -13,6 +13,7 @@ import {
 import { db } from "../shared/admin";
 import { readClaims, requireVerifiedCustomer } from "../shared/auth";
 import { requireDocId } from "../shared/docId";
+import { withSentryCallable } from "../shared/withSentry";
 import { lowerEmail } from "../shared/email";
 import { isCustomerVisibleQuoteStatus } from "../shared/customerVisibility";
 
@@ -51,4 +52,6 @@ export async function getCustomerQuoteDetailHandler(
   };
 }
 
-export const getCustomerQuoteDetail = onCall(getCustomerQuoteDetailHandler);
+export const getCustomerQuoteDetail = onCall(
+  withSentryCallable("getCustomerQuoteDetail", getCustomerQuoteDetailHandler),
+);

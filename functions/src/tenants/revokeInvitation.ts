@@ -5,6 +5,7 @@ import {
 } from "firebase-functions/v2/https";
 import { db, FieldValue } from "../shared/admin";
 import { readClaims, requireRole, requireTenant } from "../shared/auth";
+import { withSentryCallable } from "../shared/withSentry";
 
 interface Input {
   invitationId?: unknown;
@@ -60,4 +61,6 @@ export async function revokeInvitationHandler(
   return { ok: true };
 }
 
-export const revokeInvitation = onCall<Input>(revokeInvitationHandler);
+export const revokeInvitation = onCall<Input>(
+  withSentryCallable("revokeInvitation", revokeInvitationHandler),
+);

@@ -15,6 +15,7 @@ import { db } from "../shared/admin";
 import { readClaims, requireVerifiedCustomer } from "../shared/auth";
 import { lowerEmail } from "../shared/email";
 import { isCustomerVisibleInvoiceStatus } from "../shared/customerVisibility";
+import { withSentryCallable } from "../shared/withSentry";
 
 export async function getCustomerInvoiceDetailHandler(
   request: CallableRequest,
@@ -63,5 +64,5 @@ export async function getCustomerInvoiceDetailHandler(
 }
 
 export const getCustomerInvoiceDetail = onCall(
-  getCustomerInvoiceDetailHandler,
+  withSentryCallable("getCustomerInvoiceDetail", getCustomerInvoiceDetailHandler),
 );

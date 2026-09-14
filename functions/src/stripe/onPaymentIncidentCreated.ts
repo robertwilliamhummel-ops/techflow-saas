@@ -10,6 +10,7 @@ import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import * as logger from "firebase-functions/logger";
 import { db } from "../shared/admin";
 import { EMAIL_SECRETS, sendEmail } from "../emails/send";
+import { withSentryEvent } from "../shared/withSentry";
 import {
   buildPaymentIncidentEmail,
   isNotifiableIncidentKind,
@@ -91,7 +92,7 @@ export const onPaymentIncidentCreated = onDocumentCreated(
       "tenants/{tenantId}/invoices/{invoiceId}/paymentIncidents/{incidentId}",
     secrets: EMAIL_SECRETS,
   },
-  async (event) => {
+  withSentryEvent("onPaymentIncidentCreated", async (event) => {
     const incident = event.data?.data();
     if (!incident) return;
     await handlePaymentIncidentCreated({
@@ -100,5 +101,5 @@ export const onPaymentIncidentCreated = onDocumentCreated(
       incidentId: event.params.incidentId,
       incident,
     });
-  },
+  }),
 );

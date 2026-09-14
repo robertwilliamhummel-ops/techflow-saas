@@ -15,6 +15,7 @@ import { db } from "../shared/admin";
 import { checkAndUpdateDomainStatus } from "../domain/setupCustomDomain";
 import { VERCEL_SECRETS } from "../shared/vercel";
 import { SCHEDULER_REGION } from "../shared/globalOptions";
+import { withSentryEvent } from "../shared/withSentry";
 
 export async function recheckPendingDomainsHandler(): Promise<void> {
   // Collection-group query across every tenant's meta/settings doc filtered
@@ -60,5 +61,5 @@ export const recheckPendingDomains = onSchedule(
     region: SCHEDULER_REGION,
     secrets: [...VERCEL_SECRETS],
   },
-  recheckPendingDomainsHandler,
+  withSentryEvent("recheckPendingDomains", recheckPendingDomainsHandler),
 );

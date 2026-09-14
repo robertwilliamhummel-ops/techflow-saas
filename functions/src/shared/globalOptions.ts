@@ -7,9 +7,11 @@
 // Cloud Scheduler is not offered in Toronto, so scheduled functions pin to
 // northamerica-northeast1 (Montréal), the other Canadian region.
 //
-// This module must be the FIRST import in src/index.ts: firebase-functions
-// captures global options when each function is defined, so any function
-// module imported before setGlobalOptions runs would deploy to us-central1.
+// src/index.ts must import this module before any function module (only
+// shared/sentry.ts, which defines no functions, comes earlier):
+// firebase-functions captures global options when each function is defined,
+// so a function module imported before setGlobalOptions runs would deploy to
+// us-central1.
 
 import { setGlobalOptions } from "firebase-functions/v2";
 

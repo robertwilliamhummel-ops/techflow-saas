@@ -13,6 +13,7 @@ import {
 import { db } from "../shared/admin";
 import { readClaims, requireTenant, requireRole } from "../shared/auth";
 import { requireDocId } from "../shared/docId";
+import { withSentryCallable } from "../shared/withSentry";
 import { requireFeature } from "../shared/requireFeature";
 
 export async function deleteInvoiceHandler(
@@ -53,4 +54,6 @@ export async function deleteInvoiceHandler(
   return { deleted: true };
 }
 
-export const deleteInvoice = onCall(deleteInvoiceHandler);
+export const deleteInvoice = onCall(
+  withSentryCallable("deleteInvoice", deleteInvoiceHandler),
+);

@@ -14,6 +14,7 @@ import {
   buildTenantSnapshot,
 } from "../shared/invoice";
 import { applyLogoToSnapshot } from "../shared/logo";
+import { withSentryCallable } from "../shared/withSentry";
 import { validateQuoteInput } from "../shared/quote";
 
 // Quotes have their own counter, so they need their own prefix or a quote
@@ -99,4 +100,6 @@ export async function createQuoteHandler(
   return { quoteId };
 }
 
-export const createQuote = onCall(createQuoteHandler);
+export const createQuote = onCall(
+  withSentryCallable("createQuote", createQuoteHandler),
+);

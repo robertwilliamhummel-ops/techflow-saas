@@ -28,6 +28,7 @@ import {
 import { applyLogoToSnapshot, emailLogoUrl } from "../shared/logo";
 import { computeNextRunAt, addDaysToISODate } from "../shared/recurring";
 import { SCHEDULER_REGION } from "../shared/globalOptions";
+import { reportError, withSentryEvent } from "../shared/withSentry";
 import { sanitizeEmailField } from "../emails/sanitize";
 import { EMAIL_SECRETS, pickReplyTo, sendEmail } from "../emails/send";
 import { formatCurrency } from "../emails/format";
@@ -66,6 +67,12 @@ export async function processRecurringInvoicesHandler(): Promise<void> {
       logger.error("processRecurringInvoices: unhandled error", {
         docPath: doc.ref.path,
         error: String(err),
+      });
+      // Swallowed so the run continues, but it means a bug (O-01).
+      await reportError(err, {
+        functionName: "processRecurringInvoices",
+        tenantId: doc.ref.parent.parent?.id ?? null,
+        extra: { docPath: doc.ref.path },
       });
     }
   }
@@ -426,5 +433,5 @@ export const processRecurringInvoices = onSchedule(
     region: SCHEDULER_REGION,
     secrets: [PAY_TOKEN_SECRET, ...EMAIL_SECRETS],
   },
-  processRecurringInvoicesHandler,
+  withSentryEvent("processRecurringInvoices", processRecurringInvoicesHandler),
 );

@@ -11,6 +11,7 @@ import {
 import { db } from "../shared/admin";
 import { readClaims, requireRole, requireTenant } from "../shared/auth";
 import { requireDocId } from "../shared/docId";
+import { withSentryCallable } from "../shared/withSentry";
 
 export async function deleteCustomerHandler(
   request: CallableRequest,
@@ -32,4 +33,6 @@ export async function deleteCustomerHandler(
   return { deleted: true };
 }
 
-export const deleteCustomer = onCall(deleteCustomerHandler);
+export const deleteCustomer = onCall(
+  withSentryCallable("deleteCustomer", deleteCustomerHandler),
+);

@@ -28,6 +28,7 @@ import { db, FieldValue, Timestamp } from "../shared/admin";
 import { readClaims, requireRole, requireTenant } from "../shared/auth";
 import { requireDocId } from "../shared/docId";
 import { requireFeature } from "../shared/requireFeature";
+import { withSentryCallable } from "../shared/withSentry";
 import {
   computeResumeRunAt,
   VALID_INTERVALS,
@@ -186,4 +187,6 @@ function scheduleExhausted(
   );
 }
 
-export const updateRecurringInvoice = onCall(updateRecurringInvoiceHandler);
+export const updateRecurringInvoice = onCall(
+  withSentryCallable("updateRecurringInvoice", updateRecurringInvoiceHandler),
+);

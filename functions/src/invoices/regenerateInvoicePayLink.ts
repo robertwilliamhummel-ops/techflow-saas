@@ -19,6 +19,7 @@ import { readClaims, requireTenant, requireRole } from "../shared/auth";
 import { isPayableInvoiceStatus } from "../shared/invoiceStatus";
 import { requireFeature } from "../shared/requireFeature";
 import { signPayToken } from "../shared/payToken";
+import { withSentryCallable } from "../shared/withSentry";
 
 const PAY_TOKEN_SECRET = defineSecret("PAY_TOKEN_SECRET");
 
@@ -69,5 +70,5 @@ export async function regenerateInvoicePayLinkHandler(
 
 export const regenerateInvoicePayLink = onCall(
   { secrets: [PAY_TOKEN_SECRET] },
-  regenerateInvoicePayLinkHandler,
+  withSentryCallable("regenerateInvoicePayLink", regenerateInvoicePayLinkHandler),
 );

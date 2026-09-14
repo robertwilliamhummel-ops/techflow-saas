@@ -7,6 +7,7 @@ import { db, FieldValue } from "../shared/admin";
 import { readClaims, requireRole, requireTenant } from "../shared/auth";
 import { isValidHexColor, meetsWcagAA } from "../shared/contrast";
 import { isValidEmail, lowerEmail } from "../shared/email";
+import { withSentryCallable } from "../shared/withSentry";
 
 // Whitelisted branding + business-identity fields editable via the settings
 // page. Stripe/payment fields live on updatePaymentSettings. Custom-domain
@@ -212,4 +213,6 @@ export async function updateTenantBrandingHandler(
   return { ok: true };
 }
 
-export const updateTenantBranding = onCall<Input>(updateTenantBrandingHandler);
+export const updateTenantBranding = onCall<Input>(
+  withSentryCallable("updateTenantBranding", updateTenantBrandingHandler),
+);

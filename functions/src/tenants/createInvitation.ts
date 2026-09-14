@@ -9,6 +9,7 @@ import { readClaims, requireRole, requireTenant } from "../shared/auth";
 import type { MembershipRole } from "../shared/auth";
 import { isValidEmail, lowerEmail } from "../shared/email";
 import { RATE_LIMITS, enforceRateLimit } from "../shared/rateLimit";
+import { withSentryCallable } from "../shared/withSentry";
 import { generateOpaqueToken } from "../shared/tokens";
 import * as logger from "firebase-functions/logger";
 import { EMAIL_SECRETS, sendInvitationEmail } from "../emails/send";
@@ -131,7 +132,7 @@ export async function createInvitationHandler(
 
 export const createInvitation = onCall<Input>(
   { secrets: EMAIL_SECRETS },
-  createInvitationHandler,
+  withSentryCallable("createInvitation", createInvitationHandler),
 );
 
 function buildAcceptUrl(

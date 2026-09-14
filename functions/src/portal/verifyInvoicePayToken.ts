@@ -19,6 +19,7 @@ import { isPayableInvoiceStatus } from "../shared/invoiceStatus";
 import { verifyPayToken } from "../shared/payToken";
 import { loadFeatures } from "../shared/requireFeature";
 import { effectiveCardSurcharge } from "../shared/surcharge";
+import { withSentryCallable } from "../shared/withSentry";
 
 const PAY_TOKEN_SECRET = defineSecret("PAY_TOKEN_SECRET");
 
@@ -159,5 +160,5 @@ export async function verifyInvoicePayTokenHandler(
 
 export const verifyInvoicePayToken = onCall(
   { secrets: [PAY_TOKEN_SECRET] },
-  verifyInvoicePayTokenHandler,
+  withSentryCallable("verifyInvoicePayToken", verifyInvoicePayTokenHandler),
 );

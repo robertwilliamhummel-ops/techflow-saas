@@ -19,6 +19,7 @@ import { db, FieldValue } from "../shared/admin";
 import { readClaims, requireTenant, requireRole } from "../shared/auth";
 import { requireDocId } from "../shared/docId";
 import { isPayableInvoiceStatus } from "../shared/invoiceStatus";
+import { withSentryCallable } from "../shared/withSentry";
 import { requireFeature } from "../shared/requireFeature";
 import type { ManualPaymentMethod } from "../shared/invoice";
 
@@ -91,4 +92,6 @@ export async function markInvoicePaidHandler(
   return { invoiceId, status: "paid" };
 }
 
-export const markInvoicePaid = onCall(markInvoicePaidHandler);
+export const markInvoicePaid = onCall(
+  withSentryCallable("markInvoicePaid", markInvoicePaidHandler),
+);

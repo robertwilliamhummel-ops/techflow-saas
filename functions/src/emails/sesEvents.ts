@@ -16,6 +16,7 @@ import { createVerify } from "node:crypto";
 import { onRequest } from "firebase-functions/v2/https";
 import * as logger from "firebase-functions/logger";
 import { db, FieldValue } from "../shared/admin";
+import { reportError, withSentryRequest } from "../shared/withSentry";
 
 // ---------------------------------------------------------------------------
 // SNS signature verification
@@ -254,20 +255,23 @@ export async function handleSnsRequest(
   return { status: 200, body: "Ignored" };
 }
 
-export const sesEventsWebhook = onRequest(async (req, res) => {
-  if (req.method !== "POST") {
-    res.status(405).send("Method not allowed");
-    return;
-  }
-  const rawBody =
-    req.rawBody?.toString("utf8") ??
-    (typeof req.body === "string" ? req.body : JSON.stringify(req.body ?? {}));
-  try {
-    const result = await handleSnsRequest(rawBody);
-    res.status(result.status).send(result.body);
-  } catch (err) {
-    logger.error("sesEvents: handler failed", { error: String(err) });
-    // 500 → SNS retries with backoff.
-    res.status(500).send("Handler failed");
-  }
-});
+export const sesEventsWebhook = onRequest(
+  withSentryRequest("sesEventsWebhook", async (req, res) => {
+    if (req.method !== "POST") {
+      res.status(405).send("Method not allowed");
+      return;
+    }
+    const rawBody =
+      req.rawBody?.toString("utf8") ??
+      (typeof req.body === "string" ? req.body : JSON.stringify(req.body ?? {}));
+    try {
+      const result = await handleSnsRequest(rawBody);
+      res.status(result.status).send(result.body);
+    } catch (err) {
+      logger.error("sesEvents: handler failed", { error: String(err) });
+      await reportError(err, { functionName: "sesEventsWebhook" });
+      // 500 → SNS retries with backoff.
+      res.status(500).send("Handler failed");
+    }
+  }),
+);

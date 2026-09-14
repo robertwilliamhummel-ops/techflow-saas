@@ -7,6 +7,7 @@ import { adminAuth, db, FieldValue } from "../shared/admin";
 import { lowerEmail } from "../shared/email";
 import { pickTenantId } from "../shared/tenantId";
 import { defaultTenantMeta } from "../shared/meta";
+import { withSentryCallable } from "../shared/withSentry";
 
 interface SignupInput {
   businessName?: unknown;
@@ -189,4 +190,6 @@ async function claimTenant(
   return { tenantId, role: "owner" };
 }
 
-export const onSignup = onCall<SignupInput>(onSignupHandler);
+export const onSignup = onCall<SignupInput>(
+  withSentryCallable("onSignup", onSignupHandler),
+);

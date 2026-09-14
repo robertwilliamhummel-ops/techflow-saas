@@ -19,6 +19,7 @@ import { db, FieldValue } from "../shared/admin";
 import { readClaims, requireTenant } from "../shared/auth";
 import { requireDocId } from "../shared/docId";
 import { isValidEmail, lowerEmail } from "../shared/email";
+import { withSentryCallable } from "../shared/withSentry";
 
 export interface CustomerFields {
   name: string;
@@ -106,4 +107,6 @@ export async function upsertCustomerHandler(
   return { customerId, created: false };
 }
 
-export const upsertCustomer = onCall(upsertCustomerHandler);
+export const upsertCustomer = onCall(
+  withSentryCallable("upsertCustomer", upsertCustomerHandler),
+);

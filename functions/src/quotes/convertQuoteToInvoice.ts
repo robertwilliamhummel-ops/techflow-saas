@@ -26,6 +26,7 @@ import {
   resolveLineItems,
 } from "../shared/invoice";
 import { applyLogoToSnapshot } from "../shared/logo";
+import { withSentryCallable } from "../shared/withSentry";
 
 const PAY_TOKEN_SECRET = defineSecret("PAY_TOKEN_SECRET");
 
@@ -157,5 +158,5 @@ export async function convertQuoteToInvoiceHandler(
 
 export const convertQuoteToInvoice = onCall(
   { secrets: [PAY_TOKEN_SECRET] },
-  convertQuoteToInvoiceHandler,
+  withSentryCallable("convertQuoteToInvoice", convertQuoteToInvoiceHandler),
 );

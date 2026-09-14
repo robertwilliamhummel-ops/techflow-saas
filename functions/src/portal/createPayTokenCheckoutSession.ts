@@ -15,6 +15,7 @@ import { defineSecret } from "firebase-functions/params";
 import Stripe from "stripe";
 import { db, FieldValue, Timestamp } from "../shared/admin";
 import { verifyPayToken } from "../shared/payToken";
+import { withSentryCallable } from "../shared/withSentry";
 import { loadFeatures } from "../shared/requireFeature";
 import {
   computeSurchargeCents,
@@ -223,5 +224,8 @@ export async function createPayTokenCheckoutSessionHandler(
 
 export const createPayTokenCheckoutSession = onCall(
   { secrets: [PAY_TOKEN_SECRET, STRIPE_SECRET_KEY] },
-  createPayTokenCheckoutSessionHandler,
+  withSentryCallable(
+    "createPayTokenCheckoutSession",
+    createPayTokenCheckoutSessionHandler,
+  ),
 );

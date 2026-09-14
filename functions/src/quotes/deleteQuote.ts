@@ -11,6 +11,7 @@ import {
 import { db } from "../shared/admin";
 import { readClaims, requireTenant, requireRole } from "../shared/auth";
 import { requireFeature } from "../shared/requireFeature";
+import { withSentryCallable } from "../shared/withSentry";
 
 export async function deleteQuoteHandler(
   request: CallableRequest,
@@ -44,4 +45,6 @@ export async function deleteQuoteHandler(
   return { deleted: true };
 }
 
-export const deleteQuote = onCall(deleteQuoteHandler);
+export const deleteQuote = onCall(
+  withSentryCallable("deleteQuote", deleteQuoteHandler),
+);

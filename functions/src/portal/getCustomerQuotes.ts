@@ -17,6 +17,7 @@ import { db } from "../shared/admin";
 import { readClaims, requireVerifiedCustomer } from "../shared/auth";
 import { lowerEmail } from "../shared/email";
 import { isCustomerVisibleQuoteStatus } from "../shared/customerVisibility";
+import { withSentryCallable } from "../shared/withSentry";
 
 export const CUSTOMER_QUOTE_LIST_LIMIT = 100;
 
@@ -114,4 +115,6 @@ export async function getCustomerQuotesHandler(
   return { quotes: await listCustomerQuotes(email) };
 }
 
-export const getCustomerQuotes = onCall(getCustomerQuotesHandler);
+export const getCustomerQuotes = onCall(
+  withSentryCallable("getCustomerQuotes", getCustomerQuotesHandler),
+);

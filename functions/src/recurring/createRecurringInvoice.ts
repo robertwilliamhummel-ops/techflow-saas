@@ -12,6 +12,7 @@ import { db, FieldValue, Timestamp } from "../shared/admin";
 import { readClaims, requireTenant } from "../shared/auth";
 import { requireFeature } from "../shared/requireFeature";
 import { lowerEmail } from "../shared/email";
+import { withSentryCallable } from "../shared/withSentry";
 import { computeInvoiceTotals, computeLineItems } from "../shared/invoice";
 import {
   validateRecurringInvoiceInput,
@@ -99,4 +100,6 @@ export async function createRecurringInvoiceHandler(
   return { recurringInvoiceId: docRef.id };
 }
 
-export const createRecurringInvoice = onCall(createRecurringInvoiceHandler);
+export const createRecurringInvoice = onCall(
+  withSentryCallable("createRecurringInvoice", createRecurringInvoiceHandler),
+);

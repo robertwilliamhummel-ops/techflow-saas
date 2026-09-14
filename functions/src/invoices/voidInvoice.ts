@@ -18,6 +18,7 @@ import { readClaims, requireRole, requireTenant } from "../shared/auth";
 import { requireDocId } from "../shared/docId";
 import { isVoidableInvoiceStatus } from "../shared/invoiceStatus";
 import { requireFeature } from "../shared/requireFeature";
+import { withSentryCallable } from "../shared/withSentry";
 
 export async function voidInvoiceHandler(
   request: CallableRequest,
@@ -76,4 +77,6 @@ export async function voidInvoiceHandler(
   });
 }
 
-export const voidInvoice = onCall(voidInvoiceHandler);
+export const voidInvoice = onCall(
+  withSentryCallable("voidInvoice", voidInvoiceHandler),
+);

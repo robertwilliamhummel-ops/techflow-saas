@@ -24,6 +24,7 @@ import {
   removeRecaptchaAllowedDomain,
 } from "../shared/recaptchaKey";
 import { domainCacheKey } from "../shared/domainCacheKey";
+import { withSentryCallable } from "../shared/withSentry";
 
 interface Input {
   domain?: unknown;
@@ -213,7 +214,7 @@ async function detachDomain(domain: string): Promise<void> {
 
 export const setupCustomDomain = onCall<Input>(
   { secrets: [...VERCEL_SECRETS] },
-  setupCustomDomainHandler,
+  withSentryCallable("setupCustomDomain", setupCustomDomainHandler),
 );
 
 // ---------------------------------------------------------------------------
@@ -259,7 +260,7 @@ export async function removeCustomDomainHandler(
 
 export const removeCustomDomain = onCall(
   { secrets: [...VERCEL_SECRETS] },
-  removeCustomDomainHandler,
+  withSentryCallable("removeCustomDomain", removeCustomDomainHandler),
 );
 
 // ---------------------------------------------------------------------------
@@ -340,5 +341,5 @@ export async function recheckCustomDomainHandler(
 
 export const recheckCustomDomain = onCall(
   { secrets: [...VERCEL_SECRETS] },
-  recheckCustomDomainHandler,
+  withSentryCallable("recheckCustomDomain", recheckCustomDomainHandler),
 );

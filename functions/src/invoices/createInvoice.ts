@@ -21,6 +21,7 @@ import {
   buildTenantSnapshot,
 } from "../shared/invoice";
 import { applyLogoToSnapshot } from "../shared/logo";
+import { withSentryCallable } from "../shared/withSentry";
 
 const PAY_TOKEN_SECRET = defineSecret("PAY_TOKEN_SECRET");
 
@@ -121,5 +122,5 @@ export async function createInvoiceHandler(
 
 export const createInvoice = onCall(
   { secrets: [PAY_TOKEN_SECRET] },
-  createInvoiceHandler,
+  withSentryCallable("createInvoice", createInvoiceHandler),
 );

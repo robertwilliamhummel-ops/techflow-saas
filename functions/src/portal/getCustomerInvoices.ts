@@ -16,6 +16,7 @@ import { db } from "../shared/admin";
 import { readClaims, requireVerifiedCustomer } from "../shared/auth";
 import { lowerEmail } from "../shared/email";
 import { isCustomerVisibleInvoiceStatus } from "../shared/customerVisibility";
+import { withSentryCallable } from "../shared/withSentry";
 
 export const CUSTOMER_INVOICE_LIST_LIMIT = 100;
 
@@ -113,4 +114,6 @@ export async function getCustomerInvoicesHandler(
   return { invoices: await listCustomerInvoices(email) };
 }
 
-export const getCustomerInvoices = onCall(getCustomerInvoicesHandler);
+export const getCustomerInvoices = onCall(
+  withSentryCallable("getCustomerInvoices", getCustomerInvoicesHandler),
+);

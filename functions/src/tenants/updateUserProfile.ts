@@ -5,6 +5,7 @@ import {
 } from "firebase-functions/v2/https";
 import { db, FieldValue } from "../shared/admin";
 import { readClaims } from "../shared/auth";
+import { withSentryCallable } from "../shared/withSentry";
 
 interface Input {
   displayName?: unknown;
@@ -48,4 +49,6 @@ export async function updateUserProfileHandler(
   return { ok: true };
 }
 
-export const updateUserProfile = onCall<Input>(updateUserProfileHandler);
+export const updateUserProfile = onCall<Input>(
+  withSentryCallable("updateUserProfile", updateUserProfileHandler),
+);

@@ -7,6 +7,7 @@ import { db, FieldValue } from "../shared/admin";
 import { readClaims, requireRole, requireTenant } from "../shared/auth";
 import { isValidEmail, lowerEmail } from "../shared/email";
 import { requireFeature } from "../shared/requireFeature";
+import { withSentryCallable } from "../shared/withSentry";
 
 // Payment-related tenant meta. Stripe Connect onboarding writes are handled by
 // the Stripe callables in Phase 4. This callable only lets owners/admins edit:
@@ -168,5 +169,5 @@ export async function updatePaymentSettingsHandler(
 }
 
 export const updatePaymentSettings = onCall<Input>(
-  updatePaymentSettingsHandler,
+  withSentryCallable("updatePaymentSettings", updatePaymentSettingsHandler),
 );

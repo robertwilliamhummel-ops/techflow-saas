@@ -15,6 +15,7 @@ import {
 import { db, FieldValue } from "../shared/admin";
 import { readClaims, requireRole, requireTenant } from "../shared/auth";
 import { requireFeature } from "../shared/requireFeature";
+import { withSentryCallable } from "../shared/withSentry";
 import {
   buildStripeStatusFromAccount,
   getStripe,
@@ -79,5 +80,5 @@ export async function completeConnectOnboardingHandler(
 
 export const completeConnectOnboarding = onCall(
   { secrets: [STRIPE_SECRET_KEY] },
-  completeConnectOnboardingHandler,
+  withSentryCallable("completeConnectOnboarding", completeConnectOnboardingHandler),
 );

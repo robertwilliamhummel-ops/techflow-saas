@@ -14,6 +14,7 @@ import { db, FieldValue } from "../shared/admin";
 import { readClaims, requireTenant } from "../shared/auth";
 import { requireFeature } from "../shared/requireFeature";
 import { RATE_LIMITS, enforceRateLimit } from "../shared/rateLimit";
+import { withSentryCallable } from "../shared/withSentry";
 import { sanitizeEmailField } from "../emails/sanitize";
 import { EMAIL_SECRETS, pickReplyTo, sendEmail } from "../emails/send";
 import { formatCurrency } from "../emails/format";
@@ -112,5 +113,5 @@ export async function sendQuoteEmailHandler(
 
 export const sendQuoteEmail = onCall(
   { secrets: EMAIL_SECRETS },
-  sendQuoteEmailHandler,
+  withSentryCallable("sendQuoteEmail", sendQuoteEmailHandler),
 );

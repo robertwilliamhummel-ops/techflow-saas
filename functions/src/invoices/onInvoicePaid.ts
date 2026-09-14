@@ -22,6 +22,7 @@ import { EMAIL_SECRETS, pickReplyTo, sendEmail } from "../emails/send";
 import { formatCurrency } from "../emails/format";
 import { sanitizeEmailField } from "../emails/sanitize";
 import { PaymentReceipt } from "../emails/templates/PaymentReceipt";
+import { withSentryEvent } from "../shared/withSentry";
 
 const METHOD_LABELS: Record<string, string> = {
   card: "Credit card",
@@ -142,12 +143,12 @@ export const onInvoicePaid = onDocumentUpdated(
     document: "tenants/{tenantId}/invoices/{invoiceId}",
     secrets: EMAIL_SECRETS,
   },
-  async (event) => {
+  withSentryEvent("onInvoicePaid", async (event) => {
     await handleInvoicePaid({
       tenantId: event.params.tenantId,
       invoiceId: event.params.invoiceId,
       before: event.data?.before.data(),
       after: event.data?.after.data(),
     });
-  },
+  }),
 );

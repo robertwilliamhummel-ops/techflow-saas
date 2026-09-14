@@ -39,6 +39,7 @@ import { sanitizeEmailField } from "../emails/sanitize";
 import { MagicLinkSignIn } from "../emails/templates/MagicLinkSignIn";
 import { listCustomerInvoices } from "./getCustomerInvoices";
 import { listCustomerQuotes } from "./getCustomerQuotes";
+import { withSentryCallable } from "../shared/withSentry";
 
 export const SIGN_IN_LINKS_PER_HOUR = 5;
 export const SIGN_IN_LINK_MIN_INTERVAL_MS = 60 * 1000;
@@ -214,5 +215,5 @@ async function hasVisibleDocuments(email: string): Promise<boolean> {
 
 export const sendPortalSignInLink = onCall(
   { secrets: EMAIL_SECRETS },
-  sendPortalSignInLinkHandler,
+  withSentryCallable("sendPortalSignInLink", sendPortalSignInLinkHandler),
 );

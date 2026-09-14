@@ -14,6 +14,7 @@ import { db } from "../shared/admin";
 import { readClaims, requireTenant } from "../shared/auth";
 import { requireFeature } from "../shared/requireFeature";
 import { RATE_LIMITS, enforceRateLimit } from "../shared/rateLimit";
+import { withSentryCallable } from "../shared/withSentry";
 import { renderViaPdfService } from "../shared/pdfService";
 
 const PDF_SERVICE_API_KEY = defineSecret("PDF_SERVICE_API_KEY");
@@ -90,5 +91,5 @@ export async function previewQuotePDFHandler(
 
 export const previewQuotePDF = onCall(
   { secrets: [PDF_SERVICE_API_KEY] },
-  previewQuotePDFHandler,
+  withSentryCallable("previewQuotePDF", previewQuotePDFHandler),
 );

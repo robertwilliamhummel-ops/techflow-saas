@@ -22,6 +22,7 @@ import { readClaims, requireTenant } from "../shared/auth";
 import { requireFeature } from "../shared/requireFeature";
 import { lowerEmail } from "../shared/email";
 import { signPayToken } from "../shared/payToken";
+import { withSentryCallable } from "../shared/withSentry";
 import {
   validateInvoiceInput,
   computeInvoiceTotals,
@@ -121,5 +122,5 @@ export async function updateInvoiceHandler(
 
 export const updateInvoice = onCall(
   { secrets: [PAY_TOKEN_SECRET] },
-  updateInvoiceHandler,
+  withSentryCallable("updateInvoice", updateInvoiceHandler),
 );

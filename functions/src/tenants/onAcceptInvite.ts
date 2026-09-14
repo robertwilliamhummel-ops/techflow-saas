@@ -7,6 +7,7 @@ import { adminAuth, db, FieldValue } from "../shared/admin";
 import { readClaims } from "../shared/auth";
 import { lowerEmail } from "../shared/email";
 import { hashToken } from "../shared/tokens";
+import { withSentryCallable } from "../shared/withSentry";
 
 interface Input {
   tenantId?: unknown;
@@ -133,4 +134,6 @@ export async function onAcceptInviteHandler(
   return { tenantId, role: acceptedRole };
 }
 
-export const onAcceptInvite = onCall<Input>(onAcceptInviteHandler);
+export const onAcceptInvite = onCall<Input>(
+  withSentryCallable("onAcceptInvite", onAcceptInviteHandler),
+);

@@ -6,6 +6,7 @@ import {
 import { adminAuth, db, FieldValue } from "../shared/admin";
 import { readClaims, requireRole, requireTenant } from "../shared/auth";
 import type { MembershipRole } from "../shared/auth";
+import { withSentryCallable } from "../shared/withSentry";
 
 interface Input {
   targetUid?: unknown;
@@ -71,4 +72,6 @@ export async function setUserRoleHandler(
   return { ok: true };
 }
 
-export const setUserRole = onCall<Input>(setUserRoleHandler);
+export const setUserRole = onCall<Input>(
+  withSentryCallable("setUserRole", setUserRoleHandler),
+);

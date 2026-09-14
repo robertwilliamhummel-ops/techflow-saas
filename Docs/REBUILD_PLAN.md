@@ -65,7 +65,7 @@
 |---|---|---|
 | 1 Schema, rules, claims | Done — 62 Firestore + 18 Storage rules tests; indexes and TTL policies in `firestore.indexes.json`, pinned to their queries by tests; customer + recurring-management callables (A-10) | — |
 | 1.5 Design system | Done | — |
-| 2 Cloud Functions | Mostly done — 405 callable, 69 email, 109 shared tests; PaymentReceipt and MagicLinkSignIn emails (E-01); App Check switch and per-user rate limits (R-04) | Sentry in functions |
+| 2 Cloud Functions | Done — 405 callable, 69 email, 175 shared tests; PaymentReceipt and MagicLinkSignIn emails (E-01); App Check switch and per-user rate limits (R-04); Sentry reporting on every function (O-01) | — |
 | 3 Frontend architecture | Contexts, guards, auth recovery done | 12 placeholder pages: `/dashboard`, `/invoices`, `/invoices/new`, `/invoices/[id]`, `/customers`, `/quotes/[id]`, `/portal`, `/portal/invoices/[id]`, `/portal/quotes/[id]`, `/pay/[token]`, `/pay/[token]/success`, `/pay/[token]/cancelled`; dashboard navigation |
 | 4 Stripe Connect | Backend done (D1 applied); webhook money bugs A-02, A-03, A-08 fixed | Public pay page UI |
 | 5 Onboarding & domains | Signup, login, settings, team, domain, billing UI done; host-routing proxy loads | Customer magic-link sign-in (portal login is password-only today) |
@@ -1472,7 +1472,7 @@ When 50 tenants run on the same codebase, "the PDF is broken" from one tenant wi
 4. For Cloud Functions: `npm install @sentry/node` in `functions/`, init in the function entry point, wrap handlers with `Sentry.withScope` to tag tenantId per request.
 5. Separate Sentry projects per environment (`techflow-saas-dev`, `techflow-saas-staging`, `techflow-saas-prod`) so dev noise doesn't pollute prod alerts.
 
-**As built:** the Next.js side uses `src/instrumentation.ts` / `src/instrumentation-client.ts` rather than the wizard's `sentry.*.config.ts` (DSNs from `SENTRY_DSN` / `NEXT_PUBLIC_SENTRY_DSN`; no DSN means Sentry no-ops). Cloud Functions Sentry (step 4) is not wired.
+**As built:** the Next.js side uses `src/instrumentation.ts` / `src/instrumentation-client.ts` rather than the wizard's `sentry.*.config.ts` (DSNs from `SENTRY_DSN` / `NEXT_PUBLIC_SENTRY_DSN`; no DSN means Sentry no-ops). Cloud Functions (O-01): `@sentry/node` (same 10.x line as `@sentry/nextjs`), initialised in `functions/src/shared/sentry.ts`, imported first in `src/index.ts`, with `SENTRY_DSN` from `functions/.env.<projectId>` (unset sends nothing). Sentry's automatic Firebase integration only instruments firebase-functions below 7, so step 4 is built differently: every exported function wraps its handler in `withSentryCallable` / `withSentryEvent` / `withSentryRequest` (`functions/src/shared/withSentry.ts`). A wrapper reports errors that aren't a callable's expected answers — anything but an `HttpsError`, plus `internal`, `unknown`, `data-loss`, and `unavailable` — tagged with the function name, `tenantId`, and uid on the event itself (not `withScope`, so concurrent requests on one instance can't mix tags), flushes up to 2 s, and rethrows unchanged. The recurring processor's per-template safety net and the SES webhook's catch also report. `functions/test/shared/sentryCoverage.test.ts` fails if any deployed function isn't wrapped.
 
 **Cost:** Sentry free tier (5k events/month) is enough for MVP. Paid tier ($26/month) when usage outgrows free.
 
@@ -2464,7 +2464,7 @@ Not MVP-critical. Shape is reserved so it can be added later without schema migr
 | `NEXT_PUBLIC_APP_CHECK_DEBUG_TOKEN` | local development and CI only — a debug token registered in App Check, or `true` to print one. Ignored by production builds; never set it in a Vercel production scope |
 | `NEXT_PUBLIC_APP_URL` | pay links in PDFs (`https://portal.techflowsolutions.ca` in prod) |
 | `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | pay page (when built) |
-| `NEXT_PUBLIC_SENTRY_DSN`, `SENTRY_DSN` | Sentry client and server (only load once A-01 is fixed) |
+| `NEXT_PUBLIC_SENTRY_DSN`, `SENTRY_DSN` | Sentry client and server for the Next.js app; Cloud Functions read their own `SENTRY_DSN` from `functions/.env.<projectId>` (O-01) |
 | `FIREBASE_ADMIN_CLIENT_EMAIL`, `FIREBASE_ADMIN_PRIVATE_KEY` | Admin SDK in the proxy, PDF routes, webhooks, branded pages — store the key with escaped `\n` |
 | `STRIPE_SECRET_KEY` | webhook auto-refunds |
 | `STRIPE_PLATFORM_WEBHOOK_SECRET`, `STRIPE_CONNECT_WEBHOOK_SECRET` | the two webhook routes |
@@ -2498,6 +2498,7 @@ The Next.js app sends no email and needs no AWS credentials (D5).
 | `SES_EVENTS_TOPIC_ARN` | — | the only SNS topic `sesEventsWebhook` accepts |
 | `SES_TENANTS_ENABLED` | `false` | set `true` only after SES tenants are provisioned |
 | `ENFORCE_APP_CHECK` | `false` | `true` makes every callable reject requests without a valid App Check token (R-04). Turn it on only after the web app is registered in App Check and the App Check metrics show the app's own traffic passing |
+| `SENTRY_DSN` | — | the environment's Sentry project for Cloud Functions (O-01); unset sends nothing. Events are tagged with the function name, `tenantId`, and uid, and the environment is the Firebase project id |
 | `RECAPTCHA_KEY_ID` | — | the reCAPTCHA Enterprise website key App Check uses; `setupCustomDomain` adds and removes tenant custom domains on it (the functions service account needs `recaptchaenterprise.keys.get` and `recaptchaenterprise.keys.update`). Unset skips that sync |
 
 Vercel env vars and Cloud Functions secrets are parallel systems — both must be populated for every environment; a value present in one is `undefined` in the other.

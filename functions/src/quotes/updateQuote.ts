@@ -14,6 +14,7 @@ import { requireFeature } from "../shared/requireFeature";
 import { lowerEmail } from "../shared/email";
 import { computeInvoiceTotals, computeLineItems } from "../shared/invoice";
 import { validateQuoteInput } from "../shared/quote";
+import { withSentryCallable } from "../shared/withSentry";
 
 export async function updateQuoteHandler(
   request: CallableRequest,
@@ -73,4 +74,6 @@ export async function updateQuoteHandler(
   return { quoteId };
 }
 
-export const updateQuote = onCall(updateQuoteHandler);
+export const updateQuote = onCall(
+  withSentryCallable("updateQuote", updateQuoteHandler),
+);

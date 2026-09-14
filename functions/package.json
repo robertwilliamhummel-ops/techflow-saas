@@ -20,6 +20,7 @@
     "@aws-sdk/client-sesv2": "^3.1131.0",
     "@react-email/components": "^1.0.12",
     "@react-email/render": "^2.0.6",
+    "@sentry/node": "^10.74.0",
     "@types/stripe": "^8.0.416",
     "firebase-admin": "^14.4.0",
     "firebase-functions": "^7.3.2",

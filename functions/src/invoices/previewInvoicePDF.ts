@@ -18,6 +18,7 @@ import { db } from "../shared/admin";
 import { readClaims, requireTenant } from "../shared/auth";
 import { requireFeature } from "../shared/requireFeature";
 import { RATE_LIMITS, enforceRateLimit } from "../shared/rateLimit";
+import { withSentryCallable } from "../shared/withSentry";
 import { renderViaPdfService } from "../shared/pdfService";
 import { effectiveCardSurcharge } from "../shared/surcharge";
 
@@ -125,7 +126,7 @@ export async function previewInvoicePDFHandler(
 
 export const previewInvoicePDF = onCall(
   { secrets: [PDF_SERVICE_API_KEY] },
-  previewInvoicePDFHandler,
+  withSentryCallable("previewInvoicePDF", previewInvoicePDFHandler),
 );
 
 function serializeTimestamp(value: unknown): string | null {
