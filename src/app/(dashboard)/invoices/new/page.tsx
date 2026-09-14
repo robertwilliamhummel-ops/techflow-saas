@@ -1,5 +1,5 @@
-import { PagePlaceholder } from "@/components/scaffold/PagePlaceholder";
+import { NewInvoiceForm } from "@/components/invoices/NewInvoiceForm";
 
 export default function NewInvoicePage() {
-  return <PagePlaceholder title="New invoice" phase="Phase 5" />;
+  return <NewInvoiceForm />;
 }
