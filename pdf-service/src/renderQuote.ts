@@ -29,7 +29,9 @@ async function htmlToPdf(html: string): Promise<Buffer> {
   const page = await browser.newPage();
   try {
     await page.setExtraHTTPHeaders({ "Content-Security-Policy": CSP });
-    await page.setContent(html, { waitUntil: "networkidle0", timeout: 30_000 });
+    // "load" (U-02) — see renderInvoice.ts: setContent no longer takes
+    // networkidle options, and templates load nothing over the network.
+    await page.setContent(html, { waitUntil: "load", timeout: 30_000 });
     const pdf = await page.pdf({
       format: "A4",
       printBackground: true,

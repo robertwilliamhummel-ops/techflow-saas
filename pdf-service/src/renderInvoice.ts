@@ -79,7 +79,11 @@ async function htmlToPdf(html: string): Promise<Buffer> {
   try {
     // CSP enforced at the page level — defense-in-depth in case Handlebars escape misses something.
     await page.setExtraHTTPHeaders({ "Content-Security-Policy": CSP });
-    await page.setContent(html, { waitUntil: "networkidle0", timeout: 30_000 });
+    // "load" (U-02): Puppeteer dropped networkidle options from setContent in
+    // 24.43.1 because they never worked reliably there. Templates load nothing
+    // over the network — logo and QR are data URLs (test/template.test.ts) — so
+    // everything has rendered by the load event.
+    await page.setContent(html, { waitUntil: "load", timeout: 30_000 });
     const pdf = await page.pdf({
       format: "A4",
       printBackground: true,

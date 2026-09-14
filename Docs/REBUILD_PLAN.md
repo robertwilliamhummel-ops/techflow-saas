@@ -69,7 +69,7 @@
 | 3 Frontend architecture | Contexts, guards, auth recovery done | 12 placeholder pages: `/dashboard`, `/invoices`, `/invoices/new`, `/invoices/[id]`, `/customers`, `/quotes/[id]`, `/portal`, `/portal/invoices/[id]`, `/portal/quotes/[id]`, `/pay/[token]`, `/pay/[token]/success`, `/pay/[token]/cancelled`; dashboard navigation |
 | 4 Stripe Connect | Backend done (D1 applied); webhook money bugs A-02, A-03, A-08 fixed | Public pay page UI |
 | 5 Onboarding & domains | Signup, login, settings, team, domain, billing UI done; host-routing proxy loads | Customer magic-link sign-in (portal login is password-only today) |
-| 6 PDF | Code done — 222 tests; Node 24 image (D6) | Deploy (the Docker image has not been built yet) |
+| 6 PDF | Code done — 229 tests; Node 24 image (D6); `puppeteer-core` 25 with Chrome for Testing pinned to it (U-02) | Deploy — build the image and render a real PDF on staging (no Docker locally) |
 | 7 Testing & first onboarding | Bundles A–E done | Test matrix, staging project, backup restore drill, first onboarding |
 | Deploy | Nothing deployed | "Environment Strategy & Deploy Runbook" |
 
@@ -112,6 +112,7 @@ Fixed: A-12, part 4 (2026-09-13) — `onSignup` checked for an existing membersh
 - **Next.js:** on 16.3.5 with React 19.3 (Next 15's 2026-10-21 end of life no longer applies). Next 16 removed `next lint` — run `npm run lint`; `next build` no longer lints.
 - **Node.js:** 24 everywhere (D6). Cloud Functions deprecates Node 24 on 2028-04-30; Vercel deprecates Node 20 on 2026-10-01, which the `engines.node: 24.x` pin avoids.
 - **Stripe:** SDK 22.6.2 in both the app and functions, pinning API version `2026-08-26.dahlia` (U-01, 2026-09-14; was 18.5). Stripe's Clover and Dahlia changelogs list no breaking change to the calls we make (Checkout Session create without `ui_mode`, refunds with idempotency keys, charge retrieval, v1 accounts with controller properties, account links, and the webhook events we handle). v22 made `Stripe` a real class — every call site already uses `new Stripe(key)`. Webhook endpoints must be created on the same API version (Deploy Runbook, Stripe).
+- **Puppeteer:** `puppeteer-core` 25.10.0 in `pdf-service`, rendering with Chrome for Testing 152.0.7977.75 — the build that release is tested against, installed at that exact version by the Dockerfile (U-02, 2026-09-14; was 23.10 with an unpinned `google-chrome-stable`). v25 is ESM-only and needs Node ≥ 22.12; the service stays CommonJS and loads it through Node 24's `require(esm)`. `page.setContent` now waits for `load` — Puppeteer removed the networkidle options there because they never worked reliably, and the templates fetch nothing over the network. Not yet verified: building the image and rendering a real PDF on staging (no Docker locally).
 
 ### Path to launch (in order)
 
@@ -165,7 +166,7 @@ Two rebuilds = ~10 weeks total and two transition states. One rebuild into the f
 PDF generation runs as a **dedicated Cloud Run microservice**, not inside the Vercel app. This was evaluated against the Vercel + `@sparticuz/chromium` alternative and Cloud Run wins for this app:
 
 - **Already working.** The old Vite repo's Cloud Run PDF service works today. Porting it beats rebuilding PDF rendering on a new platform.
-- **Full Chrome in Docker, no hacks.** A standard Dockerfile installs stable Google Chrome. No `@sparticuz/chromium` binary, no version-pinning dance against `puppeteer-core` majors, no Next.js `serverExternalPackages` config, no 250 MB bundle ceiling to tiptoe around.
+- **Full Chrome in Docker, no hacks.** A standard Dockerfile installs full Chrome for Testing at the exact build `puppeteer-core` pins (U-02). No `@sparticuz/chromium` binary, no Next.js `serverExternalPackages` config, no 250 MB bundle ceiling to tiptoe around.
 - **Real RAM headroom.** Cloud Run allows 2–32 GB per instance. Vercel Pro tops out at ~3 GB per function. Puppeteer spikes on complex invoices (many line items, custom fonts) can trip Vercel's ceiling and return silent failures.
 - **Separation of concerns.** Vercel stays lean (UI + lightweight API routes). The heavy-lifting PDF service can be scaled, monitored, and redeployed independently. Classic microservice split.
 - **Load distribution.** Keeps Vercel function concurrency for user-facing requests instead of burning it on 3–5-second PDF renders.
@@ -175,7 +176,7 @@ PDF generation runs as a **dedicated Cloud Run microservice**, not inside the Ve
 
 ```
 pdf-service/
-  Dockerfile                   ← base image with Chrome stable pre-installed
+  Dockerfile                   ← Node 24 image with Chrome for Testing pinned to puppeteer-core
   package.json
   src/
     index.ts                   ← small Express (or Hono) app
@@ -196,29 +197,9 @@ The Cloud Run service is NOT publicly open. Two layers:
 
 This keeps PDF service stateless and fast: it receives `{ html, snapshot }` (or `{ invoiceData }`) and returns a PDF buffer. All tenant/customer authorization happens upstream.
 
-### Dockerfile sketch
+### Dockerfile (as built — `pdf-service/Dockerfile`)
 
-```dockerfile
-FROM node:24-slim
-
-# Install Chrome stable + fonts
-RUN apt-get update && apt-get install -y \
-    google-chrome-stable \
-    fonts-liberation fonts-noto-color-emoji \
-    --no-install-recommends \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci --only=production
-COPY . .
-
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
-EXPOSE 8080
-CMD ["node", "src/index.js"]
-```
-
-(Final Dockerfile tuning — user namespace, non-root user, sandbox flags — happens during Phase 6 porting, not now.)
+Two stages: a builder compiles the TypeScript; the runtime image (`node:24-slim`, non-root `pdf` user) installs production dependencies, fonts, and **Chrome for Testing pinned to the exact build the installed `puppeteer-core` is tested against**. The build id comes from `puppeteer-core/internal/revisions.js` (`PUPPETEER_REVISIONS.chrome`); Puppeteer's own `@puppeteer/browsers install chrome@<build> --install-deps` downloads it with its Debian libraries, and it is linked at `/usr/local/bin/chrome` (`PUPPETEER_EXECUTABLE_PATH`). Puppeteer only guarantees the Chrome build each release lists (pptr.dev/supported-browsers), so the earlier unpinned `google-chrome-stable` could drift ahead of `puppeteer-core` between image builds (U-02). Upgrading `puppeteer-core` moves Chrome with it; `pdf-service/test/puppeteerRuntime.test.ts` pins the Dockerfile to that pairing and checks the ESM-only package still loads from the CommonJS build.
 
 ### Env vars (set per Cloud Run service)
 

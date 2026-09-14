@@ -12,8 +12,10 @@ export function getBrowser(): Promise<Browser> {
 }
 
 async function launchBrowser(): Promise<Browser> {
+  // The Dockerfile installs the Chrome for Testing build this puppeteer-core
+  // release is tested against and links it here (U-02).
   const executablePath =
-    process.env.PUPPETEER_EXECUTABLE_PATH ?? "/usr/bin/google-chrome-stable";
+    process.env.PUPPETEER_EXECUTABLE_PATH ?? "/usr/local/bin/chrome";
   const browser = await puppeteer.launch({
     executablePath,
     headless: true,

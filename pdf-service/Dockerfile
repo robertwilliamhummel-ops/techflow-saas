@@ -7,25 +7,9 @@ COPY src ./src
 RUN npm run build
 
 # ---------------------------------------------------------------------------
-# Runtime image — Chrome stable + production deps only.
+# Runtime image — production deps, Chrome for Testing, fonts.
 # ---------------------------------------------------------------------------
 FROM node:24-slim
-
-# Install Chrome stable and the font packages Puppeteer needs to render
-# realistic invoices. Slim image keeps the surface area small.
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends \
-       wget gnupg ca-certificates \
-  && wget -q -O - https://dl.google.com/linux/linux_signing_key.pub \
-       | gpg --dearmor -o /usr/share/keyrings/googlechrome-linux-keyring.gpg \
-  && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/googlechrome-linux-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main" \
-       > /etc/apt/sources.list.d/google-chrome.list \
-  && apt-get update \
-  && apt-get install -y --no-install-recommends \
-       google-chrome-stable \
-       fonts-liberation fonts-noto-color-emoji fonts-noto-cjk \
-       libxss1 libnss3 libgbm1 \
-  && rm -rf /var/lib/apt/lists/*
 
 # Run as non-root for the sandbox.
 RUN groupadd -r pdf && useradd -r -g pdf -G audio,video pdf \
@@ -36,13 +20,27 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci --omit=dev && npm cache clean --force
 
+# Chrome for Testing, pinned to the exact build this puppeteer-core release is
+# tested against (pptr.dev/supported-browsers), installed with Puppeteer's own
+# @puppeteer/browsers CLI; --install-deps adds the shared libraries Chrome needs
+# on Debian. An unpinned google-chrome-stable could move ahead of puppeteer-core
+# between image builds (U-02). The fonts render realistic invoices.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+       ca-certificates fonts-liberation fonts-noto-color-emoji fonts-noto-cjk \
+  && CHROME_BUILD="$(node -p "require('puppeteer-core/internal/revisions.js').PUPPETEER_REVISIONS.chrome")" \
+  && CHROME_PATH="$(node node_modules/@puppeteer/browsers/lib/main-cli.js install "chrome@${CHROME_BUILD}" --path /opt/chrome --install-deps --format '{{path}}' | tail -n 1)" \
+  && test -x "${CHROME_PATH}" \
+  && ln -s "${CHROME_PATH}" /usr/local/bin/chrome \
+  && rm -rf /var/lib/apt/lists/*
+
 COPY --from=builder /build/dist ./dist
 COPY src/templates ./dist/templates
 
 USER pdf
 
 ENV NODE_ENV=production
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/local/bin/chrome
 ENV PORT=8080
 EXPOSE 8080
 

@@ -271,6 +271,17 @@ describe("invoice template", () => {
     expect(html).toContain("How to pay");
   });
 
+  it("U-02: loads nothing over the network, so rendering can wait for load", async () => {
+    const html = await buildInvoiceHtml({
+      ...baseInvoice,
+      snapshot: { ...baseSnapshot, logo: "data:image/png;base64,iVBORw0KGgo" },
+    });
+    // The pay URL appears as text; no attribute or CSS may fetch from the web.
+    expect(html).not.toMatch(/\b(src|href)\s*=\s*["']?\s*(https?:)?\/\//i);
+    expect(html).not.toMatch(/url\(\s*["']?\s*(https?:)?\/\//i);
+    expect(html).not.toMatch(/@import/i);
+  });
+
   it("includes CSP meta tag", async () => {
     const html = await buildInvoiceHtml(baseInvoice);
     expect(html).toContain('http-equiv="Content-Security-Policy"');
