@@ -96,6 +96,35 @@ const COMPOSITE_INDEXES: Array<{
       { fieldPath: "createdAt", order: "DESCENDING" },
     ],
   },
+  {
+    query: "Dashboard home — a tenant's unpaid invoices, newest first (S-01)",
+    file: "src/app/(dashboard)/dashboard/page.tsx",
+    mustContain: [
+      /where\("status", "in", \[\.\.\.PAYABLE_INVOICE_STATUSES\]\)/,
+      /orderBy\("createdAt", "desc"\)/,
+    ],
+    collectionGroup: "invoices",
+    queryScope: "COLLECTION",
+    // An `in` filter is an equality filter for index purposes.
+    fields: [
+      { fieldPath: "status", order: "ASCENDING" },
+      { fieldPath: "createdAt", order: "DESCENDING" },
+    ],
+  },
+  {
+    query: "Dashboard home — a tenant's drafts, newest first (S-01)",
+    file: "src/app/(dashboard)/dashboard/page.tsx",
+    mustContain: [
+      /where\("status", "==", "draft"\)/,
+      /orderBy\("createdAt", "desc"\)/,
+    ],
+    collectionGroup: "invoices",
+    queryScope: "COLLECTION",
+    fields: [
+      { fieldPath: "status", order: "ASCENDING" },
+      { fieldPath: "createdAt", order: "DESCENDING" },
+    ],
+  },
 ];
 
 // Collection-group single-field indexes aren't maintained by default, so even a

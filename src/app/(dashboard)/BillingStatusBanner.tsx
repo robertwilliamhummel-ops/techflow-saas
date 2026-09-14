@@ -2,14 +2,18 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { isOwnerOrAdmin } from "@/lib/navigation/dashboardNav";
+import type { MembershipRole } from "@/lib/schema/tenant";
 import { useTenantContext } from "@/lib/tenant/TenantContext";
 
-export function BillingStatusBanner() {
+export function BillingStatusBanner({ role }: { role: MembershipRole | undefined }) {
   const { meta, features, loading } = useTenantContext();
   const pathname = usePathname();
 
   if (loading) return null;
   if (!features.stripePayments) return null;
+  // Only owners and admins can connect Stripe (startConnectOnboarding).
+  if (!isOwnerOrAdmin(role)) return null;
   if (pathname?.startsWith("/billing")) return null;
 
   const accountId = meta?.stripeAccountId ?? null;

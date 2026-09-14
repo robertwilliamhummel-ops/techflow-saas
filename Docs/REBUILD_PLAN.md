@@ -66,7 +66,7 @@
 | 1 Schema, rules, claims | Done — 62 Firestore + 18 Storage rules tests; indexes and TTL policies in `firestore.indexes.json`, pinned to their queries by tests; customer + recurring-management callables (A-10) | — |
 | 1.5 Design system | Done | — |
 | 2 Cloud Functions | Done — 405 callable, 69 email, 175 shared tests; PaymentReceipt and MagicLinkSignIn emails (E-01); App Check switch and per-user rate limits (R-04); Sentry reporting on every function (O-01) | — |
-| 3 Frontend architecture | Contexts, guards, auth recovery done | 12 placeholder pages: `/dashboard`, `/invoices`, `/invoices/new`, `/invoices/[id]`, `/customers`, `/quotes/[id]`, `/portal`, `/portal/invoices/[id]`, `/portal/quotes/[id]`, `/pay/[token]`, `/pay/[token]/success`, `/pay/[token]/cancelled`; dashboard navigation |
+| 3 Frontend architecture | Contexts, guards, auth recovery done; dashboard navigation and home (S-01) | 11 placeholder pages: `/invoices`, `/invoices/new`, `/invoices/[id]`, `/customers`, `/quotes/[id]`, `/portal`, `/portal/invoices/[id]`, `/portal/quotes/[id]`, `/pay/[token]`, `/pay/[token]/success`, `/pay/[token]/cancelled` |
 | 4 Stripe Connect | Backend done (D1 applied); webhook money bugs A-02, A-03, A-08 fixed | Public pay page UI |
 | 5 Onboarding & domains | Signup, login, settings, team, domain, billing UI done; host-routing proxy loads | Customer magic-link sign-in (portal login is password-only today) |
 | 6 PDF | Code done — 229 tests; Node 24 image (D6); `puppeteer-core` 25 with Chrome for Testing pinned to it (U-02) | Deploy — build the image and render a real PDF on staging (no Docker locally) |
@@ -715,7 +715,7 @@ Belt + suspenders: validation prevents the bad input; computed fallback prevents
 
 **No user toggle.** A toggle adds state to persist, doubles QA surface, and undermines the "portal = trustworthy/light, dashboard = working tool/dark" intent. If a user demands it later, it's a one-flag addition — easier to add than to remove.
 
-Tailwind config: dashboard layout sets `<html className="dark">` server-side; portal layout omits it. No flash-of-wrong-theme because mode is a layout-level decision, not a client toggle.
+Tailwind config: dashboard layout sets `<html className="dark">` server-side; portal layout omits it. No flash-of-wrong-theme because mode is a layout-level decision, not a client toggle. As built: `DashboardShell` puts `dark` on its wrapper and, while mounted, on `<html>` too — menus, selects and dialogs render in a portal under `<body>`, outside the wrapper, and would otherwise come out light (S-01).
 
 ### Font system
 
@@ -758,7 +758,7 @@ Invoice and quote status badges use the shadcn `Badge` component with these vari
 
 Centralized in `src/lib/invoices/statusBadge.ts` as `getInvoiceStatusBadgeProps(status)` and `getQuoteStatusBadgeProps(status)`. Never inline status → color logic at the call site.
 
-**Note on `unpaid` (intentional departure from the old Vite app):** the old app showed unpaid invoices in red, which was aggressive — it alarmed tenants about invoices that weren't even overdue yet. The new mapping reserves red (`destructive`) for `overdue` only, where it carries real signal. `unpaid` uses the tenant's brand color (`--primary`) as a neutral "awaiting payment" state. This matches the Stripe Dashboard, QuickBooks, and FreshBooks conventions. The transition `unpaid → overdue` happens automatically when `Date.now() > invoice.dueDate`, triggered by a scheduled Cloud Function or computed at read time — implementation detail for Phase 2.
+**Note on `unpaid` (intentional departure from the old Vite app):** the old app showed unpaid invoices in red, which was aggressive — it alarmed tenants about invoices that weren't even overdue yet. The new mapping reserves red (`destructive`) for `overdue` only, where it carries real signal. `unpaid` uses the tenant's brand color (`--primary`) as a neutral "awaiting payment" state. This matches the Stripe Dashboard, QuickBooks, and FreshBooks conventions. The transition `unpaid → overdue` happens automatically when `Date.now() > invoice.dueDate`, triggered by a scheduled Cloud Function or computed at read time — implementation detail for Phase 2. As built (S-01): computed at read time. No function writes `overdue`; `src/lib/invoices/dueStatus.ts` shows a `sent` or `unpaid` invoice as overdue once its due date is before today in the viewer's time zone (an invoice due today isn't overdue), and counts a past-due `partial` invoice toward overdue totals while it keeps its own badge. Its payable list mirrors `functions/src/shared/invoiceStatus.ts`, pinned by a test.
 
 ### Composition rule
 
@@ -1424,6 +1424,10 @@ const NAV = [
 {NAV.filter(item => !item.feature || hasFeature(item.feature))
     .map(item => <NavLink key={item.href} {...item} />)}
 ```
+
+As built (S-01): the config is `DASHBOARD_NAV` in `src/lib/navigation/dashboardNav.ts` — Dashboard, Invoices (`invoices`), Customers, Billing, Settings — and `DashboardShell` renders it as a sidebar on desktop and a scrolling bar under the header on phones, with an account menu (email, role, Sign out). Items can also be limited by role: Billing shows to owners and admins only, since only they can start Stripe onboarding, and the Stripe setup banner is hidden from staff for the same reason. Feature-gated items wait for entitlements to load. Quotes joins the menu with its list page (S-06). A test checks every item links to an existing page.
+
+The dashboard home (`/dashboard`) shows outstanding and overdue balances per currency (never added across currencies), the draft count, the five most overdue invoices, and the eight most recent. It reads Firestore directly with live listeners: unpaid invoices (`status in` the payable list) and drafts, both on the `(status, createdAt desc)` index and pinned in `firestoreIndexes.test.ts`, plus the latest invoices by `createdAt`. Totals cover the 500 most recent unpaid invoices, and the page says so when a tenant reaches that.
 
 ### Tenant-scoped query wrapper
 Every Firestore read goes through a helper that injects the tenant path. Because it calls `useTenant()` internally, it IS a React hook and MUST be named with the `use` prefix to satisfy the `react-hooks/rules-of-hooks` ESLint rule:
