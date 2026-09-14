@@ -111,6 +111,7 @@ Fixed: A-12, part 4 (2026-09-13) — `onSignup` checked for an existing membersh
 
 - **Next.js:** on 16.3.5 with React 19.3 (Next 15's 2026-10-21 end of life no longer applies). Next 16 removed `next lint` — run `npm run lint`; `next build` no longer lints.
 - **Node.js:** 24 everywhere (D6). Cloud Functions deprecates Node 24 on 2028-04-30; Vercel deprecates Node 20 on 2026-10-01, which the `engines.node: 24.x` pin avoids.
+- **Stripe:** SDK 22.6.2 in both the app and functions, pinning API version `2026-08-26.dahlia` (U-01, 2026-09-14; was 18.5). Stripe's Clover and Dahlia changelogs list no breaking change to the calls we make (Checkout Session create without `ui_mode`, refunds with idempotency keys, charge retrieval, v1 accounts with controller properties, account links, and the webhook events we handle). v22 made `Stripe` a real class — every call site already uses `new Stripe(key)`. Webhook endpoints must be created on the same API version (Deploy Runbook, Stripe).
 
 ### Path to launch (in order)
 
@@ -2531,6 +2532,7 @@ Vercel env vars and Cloud Functions secrets are parallel systems — both must b
 
 **4. Stripe** (test mode for dev and staging, live for prod)
 - Complete the Connect platform profile (D1 accounts: Stripe-liable, full dashboard).
+- API version (U-01): the SDK pins `2026-08-26.dahlia`. Create both webhook endpoints on that version — events are rendered in the endpoint's API version, or the account default when none is set, and the handlers read fields in the SDK's shape. When a later SDK upgrade moves the pin, move the endpoints with it.
 - Endpoint, scope *Your account*: `https://<portal>/api/webhooks/stripe/platform` → `STRIPE_PLATFORM_WEBHOOK_SECRET`.
 - Endpoint, scope *Connected accounts*: `https://<portal>/api/webhooks/stripe/connect` with `checkout.session.completed`, `payment_intent.payment_failed`, `charge.refunded`, `charge.dispute.created`, `charge.dispute.closed`, `account.updated`, `account.application.deauthorized` → `STRIPE_CONNECT_WEBHOOK_SECRET`.
 
