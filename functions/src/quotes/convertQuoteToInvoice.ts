@@ -18,6 +18,7 @@ import { defineSecret } from "firebase-functions/params";
 import { sign } from "jsonwebtoken";
 import { db, FieldValue, Timestamp } from "../shared/admin";
 import { readClaims, requireTenant } from "../shared/auth";
+import { requireDocId } from "../shared/docId";
 import { requireFeature } from "../shared/requireFeature";
 import {
   computeInvoiceTotals,
@@ -41,10 +42,7 @@ export async function convertQuoteToInvoiceHandler(
   const features = await requireFeature(tenantId, "invoices");
 
   const data = request.data as Record<string, unknown> | undefined;
-  const quoteId = String(data?.quoteId ?? "").trim();
-  if (!quoteId) {
-    throw new HttpsError("invalid-argument", "quoteId required.");
-  }
+  const quoteId = requireDocId(data?.quoteId, "quoteId");
 
   // Load quote outside transaction (read-only, avoids contention).
   const quoteRef = db.doc(`tenants/${tenantId}/quotes/${quoteId}`);

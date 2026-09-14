@@ -771,6 +771,16 @@ describe("sendInvoiceEmail", () => {
     ).rejects.toThrow(/Invoice not found/);
   });
 
+  it("S-04: refuses to email an invoice with nothing left to pay", async () => {
+    for (const status of ["paid", "refunded", "partially-refunded"]) {
+      await testDb.doc(`tenants/${TENANT}/invoices/INV-0001`).update({ status });
+      await expect(
+        sendInvoiceEmailHandler(fakeRequest({ invoiceId: "INV-0001" }, ownerAuth)),
+      ).rejects.toThrow(/nothing left to pay/);
+    }
+    expect(mockSesSend).not.toHaveBeenCalled();
+  });
+
   it("rejects when neither card nor e-transfer rail is ready (preflight)", async () => {
     await testDb.doc(`tenants/${TENANT}/meta/settings`).update({
       etransferEmail: FieldValue.delete(),

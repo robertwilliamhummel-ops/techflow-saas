@@ -13,6 +13,8 @@ import { createElement } from "react";
 import { render } from "@react-email/render";
 import { db, FieldValue } from "../shared/admin";
 import { readClaims, requireTenant } from "../shared/auth";
+import { requireDocId } from "../shared/docId";
+import { isPayableInvoiceStatus } from "../shared/invoiceStatus";
 import { requireFeature } from "../shared/requireFeature";
 import { RATE_LIMITS, enforceRateLimit } from "../shared/rateLimit";
 import { withSentryCallable } from "../shared/withSentry";
@@ -31,10 +33,8 @@ export async function sendInvoiceEmailHandler(
   await requireFeature(tenantId, "invoices");
   await enforceRateLimit(uid, RATE_LIMITS.sendEmail);
 
-  const { invoiceId } = (request.data ?? {}) as { invoiceId?: string };
-  if (!invoiceId || typeof invoiceId !== "string") {
-    throw new HttpsError("invalid-argument", "invoiceId required.");
-  }
+  const data = request.data as Record<string, unknown> | undefined;
+  const invoiceId = requireDocId(data?.invoiceId, "invoiceId");
 
   // Load invoice.
   const invoiceRef = db.doc(`tenants/${tenantId}/invoices/${invoiceId}`);
@@ -56,6 +56,18 @@ export async function sendInvoiceEmailHandler(
     throw new HttpsError(
       "failed-precondition",
       "This invoice is void and can't be sent.",
+    );
+  }
+
+  // S-04: the email asks the customer to pay, so only a draft or an invoice
+  // that still has something to pay can go out (the same statuses
+  // regenerateInvoicePayLink issues links for). Receipts for paid invoices come
+  // from onInvoicePaid.
+  if (invoice.status !== "draft" && !isPayableInvoiceStatus(invoice.status)) {
+    const status = String(invoice.status ?? "unknown").replace("-", " ");
+    throw new HttpsError(
+      "failed-precondition",
+      `This invoice is ${status}, so there's nothing left to pay and it can't be sent.`,
     );
   }
 
@@ -84,7 +96,7 @@ export async function sendInvoiceEmailHandler(
   const tenant: TenantSnapshotForEmail = {
     name: snapshot.name ?? "",
     address: snapshot.address ?? null,
-    // A-06: hosted copy, never the base64 logo (Gmail clips emails over 102 KB).
+    // A-06: hosted copy, never inline image data (Gmail clips emails over 102 KB).
     logoUrl: emailLogoUrl(snapshot),
     emailFooter: snapshot.emailFooter ?? null,
     primaryColor: snapshot.primaryColor ?? null,

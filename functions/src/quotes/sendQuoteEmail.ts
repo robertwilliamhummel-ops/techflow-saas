@@ -12,6 +12,7 @@ import { createElement } from "react";
 import { render } from "@react-email/render";
 import { db, FieldValue } from "../shared/admin";
 import { readClaims, requireTenant } from "../shared/auth";
+import { requireDocId } from "../shared/docId";
 import { requireFeature } from "../shared/requireFeature";
 import { RATE_LIMITS, enforceRateLimit } from "../shared/rateLimit";
 import { withSentryCallable } from "../shared/withSentry";
@@ -30,10 +31,8 @@ export async function sendQuoteEmailHandler(
   await requireFeature(tenantId, "quotes");
   await enforceRateLimit(uid, RATE_LIMITS.sendEmail);
 
-  const { quoteId } = (request.data ?? {}) as { quoteId?: string };
-  if (!quoteId || typeof quoteId !== "string") {
-    throw new HttpsError("invalid-argument", "quoteId required.");
-  }
+  const data = request.data as Record<string, unknown> | undefined;
+  const quoteId = requireDocId(data?.quoteId, "quoteId");
 
   // Load quote.
   const quoteRef = db.doc(`tenants/${tenantId}/quotes/${quoteId}`);

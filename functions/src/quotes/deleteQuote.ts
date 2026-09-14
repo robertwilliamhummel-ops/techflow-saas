@@ -10,6 +10,7 @@ import {
 } from "firebase-functions/v2/https";
 import { db } from "../shared/admin";
 import { readClaims, requireTenant, requireRole } from "../shared/auth";
+import { requireDocId } from "../shared/docId";
 import { requireFeature } from "../shared/requireFeature";
 import { withSentryCallable } from "../shared/withSentry";
 
@@ -22,10 +23,7 @@ export async function deleteQuoteHandler(
   await requireFeature(tenantId, "quotes");
 
   const data = request.data as Record<string, unknown> | undefined;
-  const quoteId = String(data?.quoteId ?? "").trim();
-  if (!quoteId) {
-    throw new HttpsError("invalid-argument", "quoteId required.");
-  }
+  const quoteId = requireDocId(data?.quoteId, "quoteId");
 
   const quoteRef = db.doc(`tenants/${tenantId}/quotes/${quoteId}`);
   const snap = await quoteRef.get();

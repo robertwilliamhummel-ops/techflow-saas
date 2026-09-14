@@ -19,6 +19,7 @@ import {
 import { defineSecret } from "firebase-functions/params";
 import { db, FieldValue, Timestamp } from "../shared/admin";
 import { readClaims, requireTenant } from "../shared/auth";
+import { requireDocId } from "../shared/docId";
 import { requireFeature } from "../shared/requireFeature";
 import { lowerEmail } from "../shared/email";
 import { signPayToken } from "../shared/payToken";
@@ -42,10 +43,7 @@ export async function updateInvoiceHandler(
   await requireFeature(tenantId, "invoices");
 
   const data = request.data as Record<string, unknown> | undefined;
-  const invoiceId = String(data?.invoiceId ?? "").trim();
-  if (!invoiceId) {
-    throw new HttpsError("invalid-argument", "invoiceId required.");
-  }
+  const invoiceId = requireDocId(data?.invoiceId, "invoiceId");
 
   const input = validateInvoiceInput(data);
   const customerEmail = lowerEmail(input.customer.email);

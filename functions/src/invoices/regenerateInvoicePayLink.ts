@@ -16,6 +16,7 @@ import {
 import { defineSecret } from "firebase-functions/params";
 import { db, Timestamp } from "../shared/admin";
 import { readClaims, requireTenant, requireRole } from "../shared/auth";
+import { requireDocId } from "../shared/docId";
 import { isPayableInvoiceStatus } from "../shared/invoiceStatus";
 import { requireFeature } from "../shared/requireFeature";
 import { signPayToken } from "../shared/payToken";
@@ -31,10 +32,8 @@ export async function regenerateInvoicePayLinkHandler(
   requireRole(claims, ["owner", "admin"]);
   await requireFeature(tenantId, "invoices");
 
-  const { invoiceId } = (request.data ?? {}) as { invoiceId?: string };
-  if (!invoiceId || typeof invoiceId !== "string") {
-    throw new HttpsError("invalid-argument", "invoiceId required.");
-  }
+  const data = request.data as Record<string, unknown> | undefined;
+  const invoiceId = requireDocId(data?.invoiceId, "invoiceId");
 
   const invoiceRef = db.doc(`tenants/${tenantId}/invoices/${invoiceId}`);
   const snap = await invoiceRef.get();
@@ -42,8 +41,8 @@ export async function regenerateInvoicePayLinkHandler(
     throw new HttpsError("not-found", "Invoice not found.");
   }
 
-  const data = snap.data()!;
-  const status = String(data.status ?? "");
+  const invoice = snap.data()!;
+  const status = String(invoice.status ?? "");
   if (status !== "draft" && !isPayableInvoiceStatus(status)) {
     throw new HttpsError(
       "failed-precondition",
@@ -51,7 +50,7 @@ export async function regenerateInvoicePayLinkHandler(
     );
   }
 
-  const newVersion = (data.payTokenVersion ?? 0) + 1;
+  const newVersion = (invoice.payTokenVersion ?? 0) + 1;
   const expiresAtMs = Date.now() + 60 * 24 * 60 * 60 * 1000; // 60 days
 
   const payToken = signPayToken(

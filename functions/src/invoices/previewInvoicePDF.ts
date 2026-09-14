@@ -16,6 +16,7 @@ import {
 import { defineSecret } from "firebase-functions/params";
 import { db } from "../shared/admin";
 import { readClaims, requireTenant } from "../shared/auth";
+import { requireDocId } from "../shared/docId";
 import { pdfLogoDataUrl } from "../shared/logo";
 import { requireFeature } from "../shared/requireFeature";
 import { RATE_LIMITS, enforceRateLimit } from "../shared/rateLimit";
@@ -43,10 +44,7 @@ export async function previewInvoicePDFHandler(
   const features = await requireFeature(tenantId, "invoices");
   await enforceRateLimit(uid, RATE_LIMITS.pdfPreview);
 
-  const invoiceId = request.data?.invoiceId;
-  if (!invoiceId || typeof invoiceId !== "string") {
-    throw new HttpsError("invalid-argument", "invoiceId required.");
-  }
+  const invoiceId = requireDocId(request.data?.invoiceId, "invoiceId");
 
   const snap = await db.doc(`tenants/${tenantId}/invoices/${invoiceId}`).get();
   if (!snap.exists) {

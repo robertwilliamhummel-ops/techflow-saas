@@ -10,6 +10,7 @@ import {
 } from "firebase-functions/v2/https";
 import { db, FieldValue } from "../shared/admin";
 import { readClaims, requireTenant } from "../shared/auth";
+import { requireDocId } from "../shared/docId";
 import { requireFeature } from "../shared/requireFeature";
 import { lowerEmail } from "../shared/email";
 import { computeInvoiceTotals, computeLineItems } from "../shared/invoice";
@@ -24,10 +25,7 @@ export async function updateQuoteHandler(
   await requireFeature(tenantId, "quotes");
 
   const data = request.data as Record<string, unknown> | undefined;
-  const quoteId = String(data?.quoteId ?? "").trim();
-  if (!quoteId) {
-    throw new HttpsError("invalid-argument", "quoteId required.");
-  }
+  const quoteId = requireDocId(data?.quoteId, "quoteId");
 
   const input = validateQuoteInput(data);
   const customerEmail = lowerEmail(input.customer.email);
