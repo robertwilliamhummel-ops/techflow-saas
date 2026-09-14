@@ -1,5 +1,5 @@
-import { PagePlaceholder } from "@/components/scaffold/PagePlaceholder";
+import { CustomersList } from "@/components/customers/CustomersList";
 
 export default function CustomersPage() {
-  return <PagePlaceholder title="Customers" phase="Phase 5" />;
+  return <CustomersList />;
 }

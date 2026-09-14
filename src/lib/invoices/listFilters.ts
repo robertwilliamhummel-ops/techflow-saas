@@ -4,6 +4,7 @@
 // Firestore has no text search, so search matches the invoices already loaded.
 
 import { PAYABLE_INVOICE_STATUSES, isPastDue } from "./dueStatus";
+import { matchesSearch } from "@/lib/search";
 import type { Invoice, InvoiceStatus } from "@/lib/schema/tenant";
 
 export type InvoiceFilterKey =
@@ -44,20 +45,11 @@ export function invoiceFilterHref(key: InvoiceFilterKey): string {
   return key === "all" ? "/invoices" : `/invoices?status=${key}`;
 }
 
-// Lowercase without accents, so "helene" finds "Hélène".
-function fold(text: string): string {
-  return text.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase();
-}
-
 export type SearchableInvoice = Pick<Invoice, "customer"> & { id: string };
 
 /** Matches customer name, customer email, or invoice number. */
 export function matchesInvoiceSearch(invoice: SearchableInvoice, query: string): boolean {
-  const needle = fold(query.trim());
-  if (!needle) return true;
-  return [invoice.id, invoice.customer.name, invoice.customer.email].some((value) =>
-    fold(value ?? "").includes(needle),
-  );
+  return matchesSearch([invoice.id, invoice.customer.name, invoice.customer.email], query);
 }
 
 export function visibleInvoices<

@@ -5,8 +5,8 @@
 // (src/lib/isoDate.ts, src/lib/email.ts, src/lib/invoices/draftTotals.ts).
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 import { Controller, useFieldArray, useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -233,6 +233,22 @@ function InvoiceFormBody({ meta }: { meta: TenantMeta }) {
     form.setValue("customerEmail", customer.email, options);
     form.setValue("customerPhone", customer.phone ?? "", options);
   }
+
+  // Customers → New invoice links here with ?customer=<id>; pick that customer
+  // once, when the saved customers have loaded.
+  const searchParams = useSearchParams();
+  const preselectId = searchParams.get("customer");
+  const preselected = useRef(false);
+  useEffect(() => {
+    if (preselected.current || !preselectId || customers.loading) return;
+    preselected.current = true;
+    const customer = customers.data.find((c) => c.id === preselectId);
+    if (!customer) return;
+    form.setValue("customerId", customer.id);
+    form.setValue("customerName", customer.name);
+    form.setValue("customerEmail", customer.email);
+    form.setValue("customerPhone", customer.phone ?? "");
+  }, [preselectId, customers.loading, customers.data, form]);
 
   function setTaxOnEveryLine(value: boolean) {
     form.setValue("applyTax", value);
