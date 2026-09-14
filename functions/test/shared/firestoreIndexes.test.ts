@@ -112,6 +112,20 @@ const COMPOSITE_INDEXES: Array<{
     ],
   },
   {
+    query: "Invoices list — a status filter, newest first (S-02)",
+    file: "src/app/(dashboard)/invoices/InvoicesList.tsx",
+    mustContain: [
+      /where\("status", "in", \[\.\.\.filter\.statuses\]\)/,
+      /orderBy\("createdAt", "desc"\)/,
+    ],
+    collectionGroup: "invoices",
+    queryScope: "COLLECTION",
+    fields: [
+      { fieldPath: "status", order: "ASCENDING" },
+      { fieldPath: "createdAt", order: "DESCENDING" },
+    ],
+  },
+  {
     query: "Dashboard home — a tenant's drafts, newest first (S-01)",
     file: "src/app/(dashboard)/dashboard/page.tsx",
     mustContain: [

@@ -6,7 +6,11 @@ import { limit, orderBy, where } from "firebase/firestore";
 import { Plus } from "lucide-react";
 import * as Sentry from "@sentry/nextjs";
 
-import { InvoiceStatusBadge } from "@/components/invoices/InvoiceStatusBadge";
+import {
+  InvoiceTable,
+  invoiceHref,
+  type InvoiceWithId,
+} from "@/components/invoices/InvoiceTable";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { buttonVariants } from "@/components/ui/button";
 import {
@@ -18,31 +22,21 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { dollarsToCents, formatIsoDate, formatMoneyCents } from "@/lib/format";
+import { formatIsoDate, formatMoneyCents } from "@/lib/format";
 import {
   PAYABLE_INVOICE_STATUSES,
   balanceDueCents,
   daysPastDue,
-  displayInvoiceStatus,
   isPastDue,
   localIsoDate,
   summarizeReceivables,
   type ReceivablesSummary,
 } from "@/lib/invoices/dueStatus";
-import type { CurrencyCode, Invoice } from "@/lib/schema/tenant";
+import { invoiceFilterHref } from "@/lib/invoices/listFilters";
+import type { CurrencyCode } from "@/lib/schema/tenant";
 import { useTenantContext } from "@/lib/tenant/TenantContext";
 import { useTenantCollection } from "@/lib/tenant/useTenantCollection";
 import { cn } from "@/lib/utils";
-
-type InvoiceRow = Invoice & { id: string };
 
 const OUTSTANDING_LIMIT = 500;
 const DRAFTS_LIMIT = 100;
@@ -66,10 +60,6 @@ const RECENT_QUERY = [orderBy("createdAt", "desc"), limit(RECENT_LIMIT)];
 
 function plural(count: number, word: string): string {
   return `${count} ${word}${count === 1 ? "" : "s"}`;
-}
-
-function invoiceHref(id: string): string {
-  return `/invoices/${encodeURIComponent(id)}`;
 }
 
 export default function DashboardPage() {
@@ -143,9 +133,9 @@ function PageFrame({
 function DashboardHome({ currency }: { currency: CurrencyCode }) {
   // Fixed for the life of the page — reload to roll over at midnight.
   const [today] = useState(() => localIsoDate(new Date()));
-  const outstanding = useTenantCollection<InvoiceRow>("invoices", OUTSTANDING_QUERY);
-  const drafts = useTenantCollection<InvoiceRow>("invoices", DRAFTS_QUERY);
-  const recent = useTenantCollection<InvoiceRow>("invoices", RECENT_QUERY);
+  const outstanding = useTenantCollection<InvoiceWithId>("invoices", OUTSTANDING_QUERY);
+  const drafts = useTenantCollection<InvoiceWithId>("invoices", DRAFTS_QUERY);
+  const recent = useTenantCollection<InvoiceWithId>("invoices", RECENT_QUERY);
 
   const summaries = useMemo(
     () => summarizeReceivables(outstanding.data, today, currency),
@@ -257,9 +247,12 @@ function DashboardHome({ currency }: { currency: CurrencyCode }) {
               </ul>
             )}
             {overdue.length > OVERDUE_SHOWN ? (
-              <p className="mt-3 text-xs text-muted-foreground">
-                {plural(overdue.length - OVERDUE_SHOWN, "more overdue invoice")}.
-              </p>
+              <Link
+                href={invoiceFilterHref("overdue")}
+                className="mt-3 inline-block text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+              >
+                See all {overdue.length} overdue invoices
+              </Link>
             ) : null}
           </CardContent>
         </Card>
@@ -292,53 +285,7 @@ function DashboardHome({ currency }: { currency: CurrencyCode }) {
                 .
               </p>
             ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Customer</TableHead>
-                    <TableHead className="hidden sm:table-cell">Due</TableHead>
-                    <TableHead className="text-right">Amount</TableHead>
-                    <TableHead className="hidden sm:table-cell">Status</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {recent.data.map((invoice) => {
-                    const status = displayInvoiceStatus(invoice, today);
-                    return (
-                      <TableRow key={invoice.id}>
-                        <TableCell>
-                          {/* On a phone the number sits under the name and the
-                              status under the amount, so no column runs off screen. */}
-                          <Link
-                            href={invoiceHref(invoice.id)}
-                            className="block max-w-40 truncate font-medium underline-offset-4 hover:underline sm:max-w-64"
-                          >
-                            {invoice.customer.name}
-                          </Link>
-                          <span className="block text-xs text-muted-foreground">
-                            {invoice.id}
-                          </span>
-                        </TableCell>
-                        <TableCell className="hidden sm:table-cell">
-                          {formatIsoDate(invoice.dueDate)}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {formatMoneyCents(
-                            dollarsToCents(invoice.totals.total),
-                            invoice.tenantSnapshot.currency,
-                          )}
-                          <span className="mt-1 flex justify-end sm:hidden">
-                            <InvoiceStatusBadge status={status} />
-                          </span>
-                        </TableCell>
-                        <TableCell className="hidden sm:table-cell">
-                          <InvoiceStatusBadge status={status} />
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
+              <InvoiceTable invoices={recent.data} today={today} />
             )}
           </CardContent>
         </Card>
