@@ -19,6 +19,10 @@ import {
   addAuthorizedDomain,
   removeAuthorizedDomain,
 } from "../shared/identityToolkit";
+import {
+  addRecaptchaAllowedDomain,
+  removeRecaptchaAllowedDomain,
+} from "../shared/recaptchaKey";
 import { domainCacheKey } from "../shared/domainCacheKey";
 
 interface Input {
@@ -119,6 +123,24 @@ export async function setupCustomDomainHandler(
     );
   }
 
+  // Step 2b: the reCAPTCHA Enterprise key behind App Check (R-04). Once
+  // enforcement is on, customers on a domain the key doesn't list are rejected.
+  // Skipped while RECAPTCHA_KEY_ID isn't configured.
+  try {
+    await addRecaptchaAllowedDomain(domain);
+  } catch (err) {
+    logger.error("setupCustomDomain: reCAPTCHA domain add failed", {
+      domain,
+      err,
+    });
+    await vercelRemoveDomain(domain).catch(() => {});
+    await removeAuthorizedDomain(domain).catch(() => {});
+    throw new HttpsError(
+      "internal",
+      err instanceof Error ? err.message : "reCAPTCHA key update failed.",
+    );
+  }
+
   // Step 3: Firestore — domain index doc + meta update in one batch.
   try {
     const batch = db.batch();
@@ -144,6 +166,7 @@ export async function setupCustomDomainHandler(
     logger.error("setupCustomDomain: firestore write failed", { domain, err });
     await vercelRemoveDomain(domain).catch(() => {});
     await removeAuthorizedDomain(domain).catch(() => {});
+    await removeRecaptchaAllowedDomain(domain).catch(() => {});
     throw new HttpsError("internal", "Failed to record custom domain.");
   }
 
@@ -182,6 +205,7 @@ async function detachDomain(domain: string): Promise<void> {
   await Promise.allSettled([
     vercelRemoveDomain(domain),
     removeAuthorizedDomain(domain),
+    removeRecaptchaAllowedDomain(domain),
     cacheKey ? edgeConfigDelete(cacheKey) : Promise.resolve(),
     db.doc(`customDomains/${domain}`).delete(),
   ]);

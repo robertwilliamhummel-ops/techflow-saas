@@ -8,6 +8,7 @@ import { db, FieldValue, Timestamp } from "../shared/admin";
 import { readClaims, requireRole, requireTenant } from "../shared/auth";
 import type { MembershipRole } from "../shared/auth";
 import { isValidEmail, lowerEmail } from "../shared/email";
+import { RATE_LIMITS, enforceRateLimit } from "../shared/rateLimit";
 import { generateOpaqueToken } from "../shared/tokens";
 import * as logger from "firebase-functions/logger";
 import { EMAIL_SECRETS, sendInvitationEmail } from "../emails/send";
@@ -38,6 +39,7 @@ export async function createInvitationHandler(
   const claims = readClaims(request);
   const { tenantId, uid: inviterUid } = requireTenant(claims);
   requireRole(claims, ["owner", "admin"]);
+  await enforceRateLimit(inviterUid, RATE_LIMITS.invitation);
 
   const data = (request.data as Input | undefined) ?? {};
   const email = lowerEmail(data.email);

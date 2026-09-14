@@ -136,6 +136,11 @@ const TTL_POLICIES = [
     file: "functions/src/portal/sendPortalSignInLink.ts",
     marker: /signInLinkLimits\//,
   },
+  {
+    collectionGroup: "rateLimits",
+    file: "functions/src/shared/rateLimit.ts",
+    marker: /rateLimits\//,
+  },
 ];
 
 describe("Firestore composite indexes (A-04)", () => {

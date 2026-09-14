@@ -60,6 +60,14 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // ---------- rateLimits/{uid}_{action} ----------
+    // Per-user limits on email sends, PDF previews, and invitations (R-04).
+    // Cloud Functions only; removed by the TTL policy on `expireAt`.
+    match /rateLimits/{limitId} {
+      allow read: if false;
+      allow write: if false;
+    }
+
     // ---------- customDomains/{domain} ----------
     match /customDomains/{domain} {
       allow read: if false;

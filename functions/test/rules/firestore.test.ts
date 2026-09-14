@@ -134,6 +134,24 @@ describe("signInLinkLimits/{emailHash} (E-01)", () => {
   });
 });
 
+describe("rateLimits/{uid}_{action} (R-04)", () => {
+  it("clients can't read or reset their own rate-limit counters", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "rateLimits/alice_send-email"), {
+        count: 50,
+      });
+    });
+    await assertFails(
+      getDoc(doc(authed("alice", { tenantId: "t1" }), "rateLimits/alice_send-email")),
+    );
+    await assertFails(
+      setDoc(doc(authed("alice", { tenantId: "t1" }), "rateLimits/alice_send-email"), {
+        count: 0,
+      }),
+    );
+  });
+});
+
 describe("tenants/{tenantId}/meta", () => {
   it("member reads meta", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {

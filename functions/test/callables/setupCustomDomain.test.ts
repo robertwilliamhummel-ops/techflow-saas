@@ -43,6 +43,17 @@ vi.mock("../../src/shared/identityToolkit", () => ({
     removeAuthorizedDomain(...args),
 }));
 
+// R-04 — the reCAPTCHA Enterprise key behind App Check.
+const addRecaptchaAllowedDomain = vi.fn().mockResolvedValue(undefined);
+const removeRecaptchaAllowedDomain = vi.fn().mockResolvedValue(undefined);
+
+vi.mock("../../src/shared/recaptchaKey", () => ({
+  addRecaptchaAllowedDomain: (...args: unknown[]) =>
+    addRecaptchaAllowedDomain(...args),
+  removeRecaptchaAllowedDomain: (...args: unknown[]) =>
+    removeRecaptchaAllowedDomain(...args),
+}));
+
 import {
   setupCustomDomainHandler,
   removeCustomDomainHandler,
@@ -218,6 +229,64 @@ describe("setupCustomDomain", () => {
     expect(edgeConfigDelete).toHaveBeenCalledWith("domain_first_test_ca");
     const oldIdx = await testDb.doc(`customDomains/first.test.ca`).get();
     expect(oldIdx.exists).toBe(false);
+  });
+});
+
+describe("setupCustomDomain — reCAPTCHA key behind App Check (R-04)", () => {
+  beforeEach(async () => {
+    await clearFirestore();
+    await clearAuthUsers();
+    vi.clearAllMocks();
+    vercelAddDomain.mockResolvedValue(undefined);
+    vercelRemoveDomain.mockResolvedValue(undefined);
+    edgeConfigUpsert.mockResolvedValue(undefined);
+    addAuthorizedDomain.mockResolvedValue(undefined);
+    removeAuthorizedDomain.mockResolvedValue(undefined);
+    addRecaptchaAllowedDomain.mockResolvedValue(undefined);
+    removeRecaptchaAllowedDomain.mockResolvedValue(undefined);
+  });
+
+  it("adds the custom domain to the reCAPTCHA key", async () => {
+    await seedTenant();
+    await setupCustomDomainHandler(
+      ownerReq({ domain: "invoices.smithplumbing.ca" }),
+    );
+    expect(addRecaptchaAllowedDomain).toHaveBeenCalledWith(
+      "invoices.smithplumbing.ca",
+    );
+  });
+
+  it("rolls back Vercel and the Auth domain when the key can't take the domain", async () => {
+    await seedTenant();
+    addRecaptchaAllowedDomain.mockRejectedValueOnce(
+      new Error(
+        "The reCAPTCHA key already allows 250 domains, the most App Check supports.",
+      ),
+    );
+
+    await expect(
+      setupCustomDomainHandler(ownerReq({ domain: "full.test.ca" })),
+    ).rejects.toMatchObject({
+      code: "internal",
+      message: expect.stringContaining("250 domains"),
+    });
+
+    expect(vercelRemoveDomain).toHaveBeenCalledWith("full.test.ca");
+    expect(removeAuthorizedDomain).toHaveBeenCalledWith("full.test.ca");
+    expect((await testDb.doc("customDomains/full.test.ca").get()).exists).toBe(
+      false,
+    );
+    const meta = (
+      await testDb.doc(`tenants/${TENANT}/meta/settings`).get()
+    ).data();
+    expect(meta?.customDomain).toBeNull();
+  });
+
+  it("takes a replaced domain off the reCAPTCHA key", async () => {
+    await seedTenant();
+    await setupCustomDomainHandler(ownerReq({ domain: "first.test.ca" }));
+    await setupCustomDomainHandler(ownerReq({ domain: "second.test.ca" }));
+    expect(removeRecaptchaAllowedDomain).toHaveBeenCalledWith("first.test.ca");
   });
 });
 

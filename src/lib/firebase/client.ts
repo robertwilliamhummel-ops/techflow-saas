@@ -1,4 +1,8 @@
 import { initializeApp, getApps, getApp, type FirebaseApp } from "firebase/app";
+import {
+  initializeAppCheck,
+  ReCaptchaEnterpriseProvider,
+} from "firebase/app-check";
 import { getAuth, connectAuthEmulator, type Auth } from "firebase/auth";
 import {
   getFirestore,
@@ -33,7 +37,35 @@ const FUNCTIONS_REGION =
 
 function getOrCreateApp(): FirebaseApp {
   if (getApps().length) return getApp();
-  return initializeApp(firebaseConfig);
+  const app = initializeApp(firebaseConfig);
+  startAppCheck(app);
+  return app;
+}
+
+/**
+ * App Check (R-04): attests that requests come from this web app, so Cloud
+ * Functions can reject everything else once ENFORCE_APP_CHECK is on. Runs in
+ * the browser only, and only when the reCAPTCHA Enterprise site key is set.
+ * The Functions client attaches the token to every callable automatically.
+ */
+export function startAppCheck(app: FirebaseApp): boolean {
+  const siteKey = process.env.NEXT_PUBLIC_RECAPTCHA_ENTERPRISE_SITE_KEY;
+  if (typeof window === "undefined" || !siteKey) return false;
+
+  // A debug token lets localhost and CI through enforcement. Firebase warns a
+  // leaked debug token opens the backend to anyone, so a production build
+  // never uses one, even if the variable is set.
+  const debugToken = process.env.NEXT_PUBLIC_APP_CHECK_DEBUG_TOKEN;
+  if (debugToken && process.env.NODE_ENV !== "production") {
+    (self as unknown as { FIREBASE_APPCHECK_DEBUG_TOKEN?: string | boolean })
+      .FIREBASE_APPCHECK_DEBUG_TOKEN = debugToken === "true" ? true : debugToken;
+  }
+
+  initializeAppCheck(app, {
+    provider: new ReCaptchaEnterpriseProvider(siteKey),
+    isTokenAutoRefreshEnabled: true,
+  });
+  return true;
 }
 
 // Lazy init — avoid crashing during next build when env vars are absent.

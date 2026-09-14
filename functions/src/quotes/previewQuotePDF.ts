@@ -13,6 +13,7 @@ import { defineSecret } from "firebase-functions/params";
 import { db } from "../shared/admin";
 import { readClaims, requireTenant } from "../shared/auth";
 import { requireFeature } from "../shared/requireFeature";
+import { RATE_LIMITS, enforceRateLimit } from "../shared/rateLimit";
 import { renderViaPdfService } from "../shared/pdfService";
 
 const PDF_SERVICE_API_KEY = defineSecret("PDF_SERVICE_API_KEY");
@@ -31,8 +32,9 @@ export async function previewQuotePDFHandler(
   request: CallableRequest<PreviewQuotePDFInput>,
 ): Promise<PreviewQuotePDFResult> {
   const claims = readClaims(request);
-  const { tenantId } = requireTenant(claims);
+  const { uid, tenantId } = requireTenant(claims);
   await requireFeature(tenantId, "quotes");
+  await enforceRateLimit(uid, RATE_LIMITS.pdfPreview);
 
   const quoteId = request.data?.quoteId;
   if (!quoteId || typeof quoteId !== "string") {

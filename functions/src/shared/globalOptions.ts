@@ -16,4 +16,15 @@ import { setGlobalOptions } from "firebase-functions/v2";
 export const FUNCTIONS_REGION = "northamerica-northeast2";
 export const SCHEDULER_REGION = "northamerica-northeast1";
 
-setGlobalOptions({ region: FUNCTIONS_REGION });
+// App Check (R-04). With ENFORCE_APP_CHECK=true in functions/.env.<projectId>,
+// every callable rejects requests without a valid App Check token (401).
+// Leave it off until the web app is registered in App Check with a reCAPTCHA
+// Enterprise key and the App Check metrics show the app's own traffic passing;
+// turning it on earlier rejects every call. Callables read this default when
+// they're defined; Firestore, scheduled, and HTTP-request functions ignore it.
+export const ENFORCE_APP_CHECK = process.env.ENFORCE_APP_CHECK === "true";
+
+setGlobalOptions({
+  region: FUNCTIONS_REGION,
+  enforceAppCheck: ENFORCE_APP_CHECK,
+});

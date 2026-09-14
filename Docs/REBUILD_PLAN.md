@@ -63,9 +63,9 @@
 
 | Phase | Status | Remaining |
 |---|---|---|
-| 1 Schema, rules, claims | Done — 61 Firestore + 18 Storage rules tests; indexes and TTL policies in `firestore.indexes.json`, pinned to their queries by tests; customer + recurring-management callables (A-10) | — |
+| 1 Schema, rules, claims | Done — 62 Firestore + 18 Storage rules tests; indexes and TTL policies in `firestore.indexes.json`, pinned to their queries by tests; customer + recurring-management callables (A-10) | — |
 | 1.5 Design system | Done | — |
-| 2 Cloud Functions | Mostly done — 391 callable, 69 email, 93 shared tests; PaymentReceipt and MagicLinkSignIn emails (E-01) | App Check + send rate limits (R4), Sentry in functions |
+| 2 Cloud Functions | Mostly done — 405 callable, 69 email, 109 shared tests; PaymentReceipt and MagicLinkSignIn emails (E-01); App Check switch and per-user rate limits (R-04) | Sentry in functions |
 | 3 Frontend architecture | Contexts, guards, auth recovery done | 12 placeholder pages: `/dashboard`, `/invoices`, `/invoices/new`, `/invoices/[id]`, `/customers`, `/quotes/[id]`, `/portal`, `/portal/invoices/[id]`, `/portal/quotes/[id]`, `/pay/[token]`, `/pay/[token]/success`, `/pay/[token]/cancelled`; dashboard navigation |
 | 4 Stripe Connect | Backend done (D1 applied); webhook money bugs A-02, A-03, A-08 fixed | Public pay page UI |
 | 5 Onboarding & domains | Signup, login, settings, team, domain, billing UI done; host-routing proxy loads | Customer magic-link sign-in (portal login is password-only today) |
@@ -387,6 +387,10 @@ signups/{uid}                              ← one per self-signup; created with
 signInLinkLimits/{sha256(email)}           ← per-address limit on portal sign-in link emails
   { windowStartedAt, count, lastAt, expireAt } (E-01); admin-SDK only; TTL on expireAt
 
+rateLimits/{uid}_{action}                  ← per-user limits: send-email 50/h, pdf-preview 60/h,
+  { uid, action, windowStartedAt, count,     invitation 20/h (R-04); admin-SDK only; TTL on
+    expireAt }                               expireAt
+
 customDomains/{domain}        { tenantId, createdAt }                 ← middleware fallback lookup
 stripeAccounts/{accountId}    { tenantId, linkedAt }                  ← Connect webhook routing;
                                                                         written at account creation
@@ -508,7 +512,7 @@ Platform admins have no `tenantId` claim. No rule lets any client — platform a
 
 ### Security rules (as built)
 
-`firestore.rules` is authoritative, verified by 61 emulator tests in `functions/test/rules/firestore.test.ts`. The April sketch that used to live here allowed client writes to `meta`, `customers`, `recurringInvoices`, and `invitations`; the build tightened every one of them to callable-only writes.
+`firestore.rules` is authoritative, verified by 62 emulator tests in `functions/test/rules/firestore.test.ts`. The April sketch that used to live here allowed client writes to `meta`, `customers`, `recurringInvoices`, and `invitations`; the build tightened every one of them to callable-only writes.
 
 Two identity patterns are enforced:
 
@@ -523,7 +527,7 @@ Two identity patterns are enforced:
 | `tenants/{t}/invoices/{id}`, `tenants/{t}/quotes/{id}` | members of `t`, **or** an `email_verified` user whose lowercased email equals `customer.email` and the document is in a customer-visible status (never `draft`, A-05) | none |
 | `tenants/{t}/invoices/{id}/paymentIncidents/*` | members of `t` | none |
 | `tenants/{t}/invoices/{id}/payAttempts/*` | none | none |
-| `customDomains/*`, `stripeAccounts/*`, `stripeEvents/*`, `emailSends/*`, `signups/*`, `signInLinkLimits/*` | none | none |
+| `customDomains/*`, `stripeAccounts/*`, `stripeEvents/*`, `emailSends/*`, `signups/*`, `signInLinkLimits/*`, `rateLimits/*` | none | none |
 | `platformAdmins/*` | `platformAdmin` claim | none |
 | anything else | none | none |
 
@@ -590,7 +594,7 @@ No migration needed. Existing Firestore data is 73 test invoices — discarded. 
   - Collection group `quotes`: `customer.email` (ASC) + `createdAt` (DESC) (same pattern for customer quote access)
   - Collection group `recurringInvoices`: `status` (ASC) + `nextRunAt` (ASC) — the daily recurring processor (A-04)
   - Field override, collection group `meta`: `customDomainStatus.stage` (collection-group single-field indexes aren't maintained by default) — `recheckPendingDomains`
-  - TTL field overrides (`ttl: true`, indexing disabled): `stripeEvents.expireAt`, `payAttempts.expireAt`, `emailSends.expireAt`, `signInLinkLimits.expireAt` (E-01)
+  - TTL field overrides (`ttl: true`, indexing disabled): `stripeEvents.expireAt`, `payAttempts.expireAt`, `emailSends.expireAt`, `signInLinkLimits.expireAt` (E-01), `rateLimits.expireAt` (R-04)
   - The `firestore.indexes.json` file lives in the repo and is deployed alongside rules via `firebase deploy --only firestore`. `functions/test/shared/firestoreIndexes.test.ts` pins each query to its index — add an entry there with every new index-requiring query.
   - **Note:** the Stripe webhook does NOT require a `collectionGroup('meta')` index because we use the `stripeAccounts/{stripeAccountId}` reverse lookup collection instead. Direct doc read, no composite index needed.
 - **Firebase Storage rules deployed (`storage.rules`)** — separate from Firestore rules. Firebase Storage has its own rules file. Required rules:
@@ -840,7 +844,7 @@ export async function requireFeature(
 
 ### Function inventory (as built)
 
-Region: callables, HTTP functions, and Firestore triggers run in `northamerica-northeast2`; scheduled functions in `northamerica-northeast1` (D2). Tenant callables require a `tenantId` claim (`requireTenant`); feature gates use `requireFeature`, which throws `permission-denied` and returns the resolved feature map.
+Region: callables, HTTP functions, and Firestore triggers run in `northamerica-northeast2`; scheduled functions in `northamerica-northeast1` (D2). Tenant callables require a `tenantId` claim (`requireTenant`); feature gates use `requireFeature`, which throws `permission-denied` and returns the resolved feature map. App Check: every callable enforces it once `ENFORCE_APP_CHECK=true` (off by default; `functions/src/shared/globalOptions.ts`, R-04). Per-user hourly limits (`functions/src/shared/rateLimit.ts`, R-04): `sendInvoiceEmail` + `sendQuoteEmail` 50 combined, `previewInvoicePDF` + `previewQuotePDF` 60 combined, `createInvitation` 20 — over the limit a call fails with `resource-exhausted` before doing any work.
 
 **Tenant-facing callables**
 
@@ -1936,7 +1940,7 @@ Two domain tiers per tenant:
   Even with Node.js runtime and the `config.matcher` above, the naive implementation runs one Firestore read per HTML page view per custom domain. Cold-path Firestore reads are 100–300ms — that's latency a user feels before the login page starts rendering. At 50 tenants × 1000 page views/day, it's also ~50k Firestore reads/day purely for domain resolution, when the data changes maybe once a month.
 
   **Required — Vercel Edge Config as the authoritative lookup, Firestore as the write-side source:**
-  1. The `setupCustomDomain` Cloud Function (the same one that manages Vercel Domains API + Firebase authorized domains) also writes `{ [domainCacheKey(domain)]: tenantId }` to Vercel Global Config (Vercel's 2026 name for Edge Config) via `PATCH /v1/global-config/{id}/items`. Keys must match `^[\w-]+$` (≤ 256 chars), so `domainCacheKey` encodes the host as `domain_` + host with `.` → `_` (A-07).
+  1. The `setupCustomDomain` Cloud Function (the same one that manages Vercel Domains API + Firebase authorized domains, and the App Check reCAPTCHA key's allowed domains when `RECAPTCHA_KEY_ID` is set — R-04) also writes `{ [domainCacheKey(domain)]: tenantId }` to Vercel Global Config (Vercel's 2026 name for Edge Config) via `PATCH /v1/global-config/{id}/items`. Keys must match `^[\w-]+$` (≤ 256 chars), so `domainCacheKey` encodes the host as `domain_` + host with `.` → `_` (A-07).
   2. The proxy reads through the `@vercel/global-config` SDK (`createClient(GLOBAL_CONFIG || EDGE_CONFIG).get(key)`) — Vercel only applies its read optimizations to SDK reads — so there's no Firestore read on the hot path.
   3. Firestore `customDomains/{domain}` remains the durable source of truth (for audit + recovery if Edge Config is ever inconsistent), and is what the Cloud Function updates first.
   4. Eventual-consistency lag (~seconds) between "tenant saves custom domain" and "domain resolves in middleware" is acceptable — adding a custom domain is already a multi-minute DNS propagation operation; a few seconds of cache lag is invisible.
@@ -2234,7 +2238,7 @@ const qrDataUrl = await QRCode.toDataURL(payUrl, { width: 120, margin: 1 });
    - Trigger a client-side error in the portal → Sentry receives it with correct customer email tag
 
 8. **Custom domain verification (if Phase 5 custom domains are complete):**
-   - Set `customDomain` on a test tenant → Cloud Function adds Vercel domain + Firebase Auth authorized domain + `customDomains/{domain}` doc
+   - Set `customDomain` on a test tenant → Cloud Function adds Vercel domain + Firebase Auth authorized domain + reCAPTCHA key allowed domain (R-04) + `customDomains/{domain}` doc
    - Access the custom domain → middleware resolves correct tenant → branded login page renders
    - Magic link flow works on the custom domain (Firebase Auth authorized domains list is correct)
    - Remove `customDomain` → Cloud Function cleans up all three (Vercel, Firebase Auth, Firestore)
@@ -2456,6 +2460,8 @@ Not MVP-critical. Shape is reserved so it can be added later without schema migr
 |---|---|
 | `NEXT_PUBLIC_FIREBASE_API_KEY`, `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`, `NEXT_PUBLIC_FIREBASE_PROJECT_ID`, `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET`, `NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID`, `NEXT_PUBLIC_FIREBASE_APP_ID` | Firebase client SDK |
 | `NEXT_PUBLIC_FIREBASE_FUNCTIONS_REGION` | optional override; default `northamerica-northeast2` |
+| `NEXT_PUBLIC_RECAPTCHA_ENTERPRISE_SITE_KEY` | App Check in the browser (R-04); unset leaves App Check off. The key must list the platform domain; tenant custom domains are added by `setupCustomDomain` |
+| `NEXT_PUBLIC_APP_CHECK_DEBUG_TOKEN` | local development and CI only — a debug token registered in App Check, or `true` to print one. Ignored by production builds; never set it in a Vercel production scope |
 | `NEXT_PUBLIC_APP_URL` | pay links in PDFs (`https://portal.techflowsolutions.ca` in prod) |
 | `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | pay page (when built) |
 | `NEXT_PUBLIC_SENTRY_DSN`, `SENTRY_DSN` | Sentry client and server (only load once A-01 is fixed) |
@@ -2491,6 +2497,8 @@ The Next.js app sends no email and needs no AWS credentials (D5).
 | `SES_CONFIGURATION_SET` | — | required for bounce/complaint events |
 | `SES_EVENTS_TOPIC_ARN` | — | the only SNS topic `sesEventsWebhook` accepts |
 | `SES_TENANTS_ENABLED` | `false` | set `true` only after SES tenants are provisioned |
+| `ENFORCE_APP_CHECK` | `false` | `true` makes every callable reject requests without a valid App Check token (R-04). Turn it on only after the web app is registered in App Check and the App Check metrics show the app's own traffic passing |
+| `RECAPTCHA_KEY_ID` | — | the reCAPTCHA Enterprise website key App Check uses; `setupCustomDomain` adds and removes tenant custom domains on it (the functions service account needs `recaptchaenterprise.keys.get` and `recaptchaenterprise.keys.update`). Unset skips that sync |
 
 Vercel env vars and Cloud Functions secrets are parallel systems — both must be populated for every environment; a value present in one is `undefined` in the other.
 
@@ -2501,10 +2509,15 @@ Vercel env vars and Cloud Functions secrets are parallel systems — both must b
 - Enable APIs: Cloud Functions, Cloud Run, Cloud Build, Artifact Registry, Eventarc, Cloud Scheduler, Secret Manager, Identity Toolkit.
 - Prod: enable Firestore PITR and delete protection.
 - Backups: create `{projectId}-firestore-backups` in the same region with a 30-day lifecycle rule; grant the functions service account `datastore.databases.export` and object create on the bucket.
-- Firestore TTL policies (`payAttempts`, `stripeEvents`, `emailSends`, `signInLinkLimits` on `expireAt`) are declared in `firestore.indexes.json` and created by the indexes deploy below — nothing to set by hand. Expired documents are typically deleted within 24 hours.
+- Firestore TTL policies (`payAttempts`, `stripeEvents`, `emailSends`, `signInLinkLimits`, `rateLimits` on `expireAt`) are declared in `firestore.indexes.json` and created by the indexes deploy below — nothing to set by hand. Expired documents are typically deleted within 24 hours.
 - Run the emulator suites, take a manual export, then `firebase deploy --only firestore:rules,firestore:indexes,storage --project <projectId>`. New composite indexes take a few minutes to build; check they show "Enabled" in the Firebase Console before relying on the queries.
 - Set the functions secrets and `functions/.env.<projectId>`, then `firebase deploy --only functions --project <projectId>`.
 - Firebase Auth: authorized domains include the portal domain (custom domains are added by `setupCustomDomain`); password-reset and verification email action URL → `https://<portal-domain>/auth/action`; **SMTP settings → SES SMTP credentials**, so auth emails send from the platform domain instead of `*.firebaseapp.com`.
+- App Check (R-04), in this order:
+  1. In Google Cloud, enable the reCAPTCHA Enterprise API and create a **Website** key (score-based, no checkbox challenge) listing the platform domain — `techflowsolutions.ca` also covers its subdomains. Never add `localhost` to a production key; use a separate test key or the App Check debug provider (`NEXT_PUBLIC_APP_CHECK_DEBUG_TOKEN`, development and CI only).
+  2. Register the web app in Firebase Console → Security → App Check with that key. Put the key in `NEXT_PUBLIC_RECAPTCHA_ENTERPRISE_SITE_KEY` (Vercel) and its id in `RECAPTCHA_KEY_ID` (`functions/.env.<projectId>`), and grant the functions service account `recaptchaenterprise.keys.get` and `recaptchaenterprise.keys.update` so `setupCustomDomain` can add tenant domains to the key. Existing custom domains must be added to the key by hand once.
+  3. Deploy both, then watch the App Check metrics until the app's own requests show as verified. Only then set `ENFORCE_APP_CHECK=true` and redeploy functions — turning it on earlier rejects every call.
+  - Limits: a key lists at most 250 domains, and App Check doesn't support a web app on more than 250 domains, so custom domains top out near 250 tenants. Each token refresh is a reCAPTCHA assessment, billed beyond the free quota.
 - Platform admin: `npx ts-node functions/src/scripts/setPlatformAdmin.ts <uid> <email>` with application default credentials.
 
 **2. Cloud Run `pdf-service`**

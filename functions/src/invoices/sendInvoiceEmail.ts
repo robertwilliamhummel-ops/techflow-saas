@@ -14,6 +14,7 @@ import { render } from "@react-email/render";
 import { db, FieldValue } from "../shared/admin";
 import { readClaims, requireTenant } from "../shared/auth";
 import { requireFeature } from "../shared/requireFeature";
+import { RATE_LIMITS, enforceRateLimit } from "../shared/rateLimit";
 import { sanitizeEmailField } from "../emails/sanitize";
 import { EMAIL_SECRETS, pickReplyTo, sendEmail } from "../emails/send";
 import { formatCurrency } from "../emails/format";
@@ -25,8 +26,9 @@ export async function sendInvoiceEmailHandler(
   request: CallableRequest,
 ): Promise<{ success: true }> {
   const claims = readClaims(request);
-  const { tenantId } = requireTenant(claims);
+  const { uid, tenantId } = requireTenant(claims);
   await requireFeature(tenantId, "invoices");
+  await enforceRateLimit(uid, RATE_LIMITS.sendEmail);
 
   const { invoiceId } = (request.data ?? {}) as { invoiceId?: string };
   if (!invoiceId || typeof invoiceId !== "string") {

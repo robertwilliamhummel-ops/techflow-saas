@@ -13,6 +13,7 @@ import { render } from "@react-email/render";
 import { db, FieldValue } from "../shared/admin";
 import { readClaims, requireTenant } from "../shared/auth";
 import { requireFeature } from "../shared/requireFeature";
+import { RATE_LIMITS, enforceRateLimit } from "../shared/rateLimit";
 import { sanitizeEmailField } from "../emails/sanitize";
 import { EMAIL_SECRETS, pickReplyTo, sendEmail } from "../emails/send";
 import { formatCurrency } from "../emails/format";
@@ -24,8 +25,9 @@ export async function sendQuoteEmailHandler(
   request: CallableRequest,
 ): Promise<{ success: true }> {
   const claims = readClaims(request);
-  const { tenantId } = requireTenant(claims);
+  const { uid, tenantId } = requireTenant(claims);
   await requireFeature(tenantId, "quotes");
+  await enforceRateLimit(uid, RATE_LIMITS.sendEmail);
 
   const { quoteId } = (request.data ?? {}) as { quoteId?: string };
   if (!quoteId || typeof quoteId !== "string") {

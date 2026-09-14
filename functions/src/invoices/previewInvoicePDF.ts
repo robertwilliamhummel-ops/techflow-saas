@@ -17,6 +17,7 @@ import { defineSecret } from "firebase-functions/params";
 import { db } from "../shared/admin";
 import { readClaims, requireTenant } from "../shared/auth";
 import { requireFeature } from "../shared/requireFeature";
+import { RATE_LIMITS, enforceRateLimit } from "../shared/rateLimit";
 import { renderViaPdfService } from "../shared/pdfService";
 import { effectiveCardSurcharge } from "../shared/surcharge";
 
@@ -36,8 +37,9 @@ export async function previewInvoicePDFHandler(
   request: CallableRequest<PreviewInvoicePDFInput>,
 ): Promise<PreviewInvoicePDFResult> {
   const claims = readClaims(request);
-  const { tenantId } = requireTenant(claims);
+  const { uid, tenantId } = requireTenant(claims);
   const features = await requireFeature(tenantId, "invoices");
+  await enforceRateLimit(uid, RATE_LIMITS.pdfPreview);
 
   const invoiceId = request.data?.invoiceId;
   if (!invoiceId || typeof invoiceId !== "string") {
