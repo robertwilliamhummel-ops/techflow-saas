@@ -16,6 +16,7 @@ describe("visibleNavItems", () => {
     expect(hrefs(visibleNavItems(DASHBOARD_NAV, { hasFeature: defaults, role: "owner" }))).toEqual([
       "/dashboard",
       "/invoices",
+      "/quotes",
       "/customers",
       "/billing",
       "/settings",
@@ -33,11 +34,12 @@ describe("visibleNavItems", () => {
     );
   });
 
-  it("hides Invoices when the plan doesn't include them", () => {
-    const hasFeature = (key: FeatureKey) => key !== "invoices" && FEATURE_DEFAULTS[key];
-    expect(hrefs(visibleNavItems(DASHBOARD_NAV, { hasFeature, role: "owner" }))).not.toContain(
-      "/invoices",
-    );
+  it("hides Invoices and Quotes when the plan doesn't include them", () => {
+    const hasFeature = (key: FeatureKey) =>
+      key !== "invoices" && key !== "quotes" && FEATURE_DEFAULTS[key];
+    const shown = hrefs(visibleNavItems(DASHBOARD_NAV, { hasFeature, role: "owner" }));
+    expect(shown).not.toContain("/invoices");
+    expect(shown).not.toContain("/quotes");
   });
 });
 

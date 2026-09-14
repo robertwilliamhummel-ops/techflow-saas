@@ -1,4 +1,4 @@
-import { PagePlaceholder } from "@/components/scaffold/PagePlaceholder";
+import { QuoteDetail } from "@/components/quotes/QuoteDetail";
 
 export default async function QuoteDetailPage({
   params,
@@ -6,5 +6,5 @@ export default async function QuoteDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  return <PagePlaceholder title="Quote detail" phase="Phase 5" meta={{ id }} />;
+  return <QuoteDetail quoteId={id} />;
 }

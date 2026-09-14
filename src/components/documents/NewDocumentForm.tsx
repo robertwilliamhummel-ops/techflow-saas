@@ -1,8 +1,10 @@
 "use client";
 
-// New invoice (S-03). Cloud Functions validate everything again and compute
-// the saved totals; the checks and the totals preview here mirror them
-// (src/lib/isoDate.ts, src/lib/email.ts, src/lib/invoices/draftTotals.ts).
+// New invoice (S-03) and new quote (S-06) share one form: a quote is an invoice
+// without a pay link, valid until a date instead of due on one. Cloud Functions
+// validate everything again and compute the saved totals; the checks and the
+// totals preview here mirror them (src/lib/isoDate.ts, src/lib/email.ts,
+// src/lib/invoices/draftTotals.ts).
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -38,15 +40,82 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
+import { FieldError, TextField } from "@/components/forms/fields";
 import { isValidEmail } from "@/lib/email";
+import type { FeatureKey } from "@/lib/features";
 import { getClientFunctions } from "@/lib/firebase/client";
 import { dollarsToCents, formatMoneyCents } from "@/lib/format";
 import { localIsoDate } from "@/lib/invoices/dueStatus";
 import { computeDraftTotals, draftLineAmount } from "@/lib/invoices/draftTotals";
 import { addDaysIso, isIsoCalendarDate } from "@/lib/isoDate";
+import { quoteHref } from "@/lib/quotes/quoteStatus";
 import type { Customer, TenantMeta } from "@/lib/schema/tenant";
 import { useTenantContext } from "@/lib/tenant/TenantContext";
 import { useTenantCollection } from "@/lib/tenant/useTenantCollection";
+
+export type DocumentKind = "invoice" | "quote";
+
+interface KindConfig {
+  title: string;
+  noun: string;
+  nounCapitalized: string;
+  listHref: string;
+  listLabel: string;
+  feature: FeatureKey;
+  planName: string;
+  endLabel: string;
+  endHint: string;
+  endOrderMessage: string;
+  createCallable: string;
+  sendCallable: string;
+  idField: "invoiceId" | "quoteId";
+  endPayloadField: "dueDate" | "validUntil";
+  detailHref: (id: string) => string;
+  /** sendInvoiceEmail refuses to send until the tenant can get paid. */
+  needsPaymentSetup: boolean;
+  endFieldId: string;
+}
+
+const KINDS: Record<DocumentKind, KindConfig> = {
+  invoice: {
+    title: "New invoice",
+    noun: "invoice",
+    nounCapitalized: "Invoice",
+    listHref: "/invoices",
+    listLabel: "Invoices",
+    feature: "invoices",
+    planName: "Invoicing isn't",
+    endLabel: "Due date",
+    endHint: "New invoices default to 30 days after today.",
+    endOrderMessage: "The due date can't be before the issue date.",
+    createCallable: "createInvoice",
+    sendCallable: "sendInvoiceEmail",
+    idField: "invoiceId",
+    endPayloadField: "dueDate",
+    detailHref: invoiceHref,
+    needsPaymentSetup: true,
+    endFieldId: "invoice-due-date",
+  },
+  quote: {
+    title: "New quote",
+    noun: "quote",
+    nounCapitalized: "Quote",
+    listHref: "/quotes",
+    listLabel: "Quotes",
+    feature: "quotes",
+    planName: "Quotes aren't",
+    endLabel: "Valid until",
+    endHint: "New quotes stay valid for 30 days by default.",
+    endOrderMessage: "The valid-until date can't be before the issue date.",
+    createCallable: "createQuote",
+    sendCallable: "sendQuoteEmail",
+    idField: "quoteId",
+    endPayloadField: "validUntil",
+    detailHref: quoteHref,
+    needsPaymentSetup: false,
+    endFieldId: "quote-valid-until",
+  },
+};
 
 type CustomerWithId = Customer & { id: string };
 
@@ -75,51 +144,45 @@ const lineSchema = z.object({
   taxable: z.boolean(),
 });
 
-const schema = z
-  .object({
-    customerId: z.string(),
-    customerName: z
-      .string()
-      .trim()
-      .min(1, "Enter the customer's name.")
-      .max(200, "Keep the name under 200 characters."),
-    customerEmail: z
-      .string()
-      .trim()
-      .refine(isValidEmail, "Enter a valid email address."),
-    customerPhone: z
-      .string()
-      .trim()
-      .max(50, "Keep the phone number under 50 characters."),
-    saveCustomer: z.boolean(),
-    issueDate: z.string().refine(isIsoCalendarDate, "Enter a valid date."),
-    dueDate: z.string().refine(isIsoCalendarDate, "Enter a valid date."),
-    applyTax: z.boolean(),
-    lineItems: z
-      .array(lineSchema)
-      .min(1, "Add at least one line.")
-      .max(MAX_LINES, `An invoice can have up to ${MAX_LINES} lines.`),
-    notes: z.string().trim().max(2000, "Keep notes under 2,000 characters."),
-  })
-  .refine(
-    (v) =>
-      !isIsoCalendarDate(v.issueDate) ||
-      !isIsoCalendarDate(v.dueDate) ||
-      v.dueDate >= v.issueDate,
-    { path: ["dueDate"], message: "The due date can't be before the issue date." },
-  );
-
-type FormInput = z.input<typeof schema>;
-type FormValues = z.output<typeof schema>;
-
-interface CreateInvoiceRequest {
-  customer: { name: string; email: string; phone: string | null };
-  lineItems: { description: string; quantity: number; rate: number; taxable: boolean }[];
-  applyTax: boolean;
-  issueDate: string;
-  dueDate: string;
-  notes: string | null;
+function schemaFor(kind: DocumentKind) {
+  return z
+    .object({
+      customerId: z.string(),
+      customerName: z
+        .string()
+        .trim()
+        .min(1, "Enter the customer's name.")
+        .max(200, "Keep the name under 200 characters."),
+      customerEmail: z
+        .string()
+        .trim()
+        .refine(isValidEmail, "Enter a valid email address."),
+      customerPhone: z
+        .string()
+        .trim()
+        .max(50, "Keep the phone number under 50 characters."),
+      saveCustomer: z.boolean(),
+      issueDate: z.string().refine(isIsoCalendarDate, "Enter a valid date."),
+      endDate: z.string().refine(isIsoCalendarDate, "Enter a valid date."),
+      applyTax: z.boolean(),
+      lineItems: z
+        .array(lineSchema)
+        .min(1, "Add at least one line.")
+        .max(MAX_LINES, `A document can have up to ${MAX_LINES} lines.`),
+      notes: z.string().trim().max(2000, "Keep notes under 2,000 characters."),
+    })
+    .refine(
+      (v) =>
+        !isIsoCalendarDate(v.issueDate) ||
+        !isIsoCalendarDate(v.endDate) ||
+        v.endDate >= v.issueDate,
+      { path: ["endDate"], message: KINDS[kind].endOrderMessage },
+    );
 }
+
+type FormSchema = ReturnType<typeof schemaFor>;
+type FormInput = z.input<FormSchema>;
+type FormValues = z.output<FormSchema>;
 
 function errorMessage(err: unknown, fallback: string): string {
   const code = (err as { code?: unknown } | null)?.code;
@@ -127,18 +190,19 @@ function errorMessage(err: unknown, fallback: string): string {
   return err instanceof Error && err.message ? err.message : fallback;
 }
 
-export function NewInvoiceForm() {
+export function NewDocumentForm({ kind }: { kind: DocumentKind }) {
+  const config = KINDS[kind];
   const { meta, hasFeature, loading } = useTenantContext();
 
   let body: React.ReactNode;
   if (loading) {
     body = <Skeleton className="h-[32rem] rounded-xl" />;
-  } else if (!hasFeature("invoices")) {
+  } else if (!hasFeature(config.feature)) {
     body = (
       <Alert>
-        <AlertTitle>Invoicing isn&apos;t included in your plan</AlertTitle>
+        <AlertTitle>{config.planName} included in your plan</AlertTitle>
         <AlertDescription>
-          Contact TechFlow support to add invoicing to your account.
+          Contact TechFlow support to add them to your account.
         </AlertDescription>
       </Alert>
     );
@@ -150,31 +214,33 @@ export function NewInvoiceForm() {
       </Alert>
     );
   } else {
-    body = <InvoiceFormBody meta={meta} />;
+    body = <DocumentFormBody kind={kind} meta={meta} />;
   }
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 p-4 md:p-8">
       <div className="flex flex-col gap-1">
         <Link
-          href="/invoices"
+          href={config.listHref}
           className="w-fit text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
         >
-          Invoices
+          {config.listLabel}
         </Link>
-        <h1 className="text-2xl font-semibold">New invoice</h1>
+        <h1 className="text-2xl font-semibold">{config.title}</h1>
       </div>
       {body}
     </div>
   );
 }
 
-function InvoiceFormBody({ meta }: { meta: TenantMeta }) {
+function DocumentFormBody({ kind, meta }: { kind: DocumentKind; meta: TenantMeta }) {
+  const config = KINDS[kind];
   const router = useRouter();
   const [today] = useState(() => localIsoDate(new Date()));
   const customers = useTenantCollection<CustomerWithId>("customers", CUSTOMERS_QUERY);
   const [submitting, setSubmitting] = useState<"draft" | "send" | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [schema] = useState(() => schemaFor(kind));
 
   const hasTax = Number.isFinite(meta.taxRate) && meta.taxRate > 0;
   const taxName = meta.taxName || "Tax";
@@ -182,6 +248,7 @@ function InvoiceFormBody({ meta }: { meta: TenantMeta }) {
   const currency = meta.currency;
   const canCollect =
     Boolean(meta.etransferEmail) || meta.stripeStatus?.chargesEnabled === true;
+  const canSend = !config.needsPaymentSetup || canCollect;
 
   const form = useForm<FormInput, unknown, FormValues>({
     resolver: zodResolver(schema),
@@ -192,7 +259,7 @@ function InvoiceFormBody({ meta }: { meta: TenantMeta }) {
       customerPhone: "",
       saveCustomer: true,
       issueDate: today,
-      dueDate: addDaysIso(today, DEFAULT_TERMS_DAYS),
+      endDate: addDaysIso(today, DEFAULT_TERMS_DAYS),
       applyTax: hasTax,
       lineItems: [{ description: "", quantity: "1", rate: "", taxable: hasTax }],
       notes: "",
@@ -261,11 +328,11 @@ function InvoiceFormBody({ meta }: { meta: TenantMeta }) {
     const functions = getClientFunctions();
     const email = values.customerEmail;
 
-    let invoiceId: string;
+    let documentId: string;
     try {
-      const create = httpsCallable<CreateInvoiceRequest, { invoiceId: string }>(
+      const create = httpsCallable<Record<string, unknown>, Record<string, string>>(
         functions,
-        "createInvoice",
+        config.createCallable,
       );
       const { data } = await create({
         customer: {
@@ -281,18 +348,18 @@ function InvoiceFormBody({ meta }: { meta: TenantMeta }) {
         })),
         applyTax: hasTax && values.applyTax,
         issueDate: values.issueDate,
-        dueDate: values.dueDate,
+        [config.endPayloadField]: values.endDate,
         notes: values.notes || null,
       });
-      invoiceId = data.invoiceId;
+      documentId = data[config.idField];
     } catch (err) {
       Sentry.captureException(err);
-      setSubmitError(errorMessage(err, "Couldn't save the invoice. Try again."));
+      setSubmitError(errorMessage(err, `Couldn't save the ${config.noun}. Try again.`));
       setSubmitting(null);
       return;
     }
 
-    // The invoice is saved; what follows can't undo it.
+    // The document is saved; what follows can't undo it.
     if (values.customerId === "" && values.saveCustomer) {
       try {
         await httpsCallable(functions, "upsertCustomer")({
@@ -303,25 +370,25 @@ function InvoiceFormBody({ meta }: { meta: TenantMeta }) {
       } catch (err) {
         Sentry.captureException(err);
         toast.warning(
-          `Invoice ${invoiceId} was saved, but the customer wasn't added to your list: ${errorMessage(err, "try again from Customers.")}`,
+          `${config.nounCapitalized} ${documentId} was saved, but the customer wasn't added to your list: ${errorMessage(err, "try again from Customers.")}`,
         );
       }
     }
 
     if (send) {
       try {
-        await httpsCallable(functions, "sendInvoiceEmail")({ invoiceId });
-        toast.success(`Invoice ${invoiceId} sent to ${email}.`);
+        await httpsCallable(functions, config.sendCallable)({ [config.idField]: documentId });
+        toast.success(`${config.nounCapitalized} ${documentId} sent to ${email}.`);
       } catch (err) {
         Sentry.captureException(err);
         toast.error(
-          `Invoice ${invoiceId} was saved as a draft but not sent: ${errorMessage(err, "try sending it again.")}`,
+          `${config.nounCapitalized} ${documentId} was saved as a draft but not sent: ${errorMessage(err, "try sending it again.")}`,
         );
       }
     } else {
-      toast.success(`Draft ${invoiceId} saved.`);
+      toast.success(`Draft ${documentId} saved.`);
     }
-    router.push(invoiceHref(invoiceId));
+    router.push(config.detailHref(documentId));
   }
 
   const busy = submitting !== null;
@@ -336,7 +403,7 @@ function InvoiceFormBody({ meta }: { meta: TenantMeta }) {
       <div className="flex flex-col gap-6 lg:col-span-2">
         {submitError ? (
           <Alert variant="destructive">
-            <AlertTitle>The invoice wasn&apos;t saved</AlertTitle>
+            <AlertTitle>The {config.noun} wasn&apos;t saved</AlertTitle>
             <AlertDescription>{submitError}</AlertDescription>
           </Alert>
         ) : null}
@@ -345,14 +412,14 @@ function InvoiceFormBody({ meta }: { meta: TenantMeta }) {
           <CardHeader>
             <CardTitle>Customer</CardTitle>
             <CardDescription>
-              The invoice keeps its own copy — editing a saved customer later
-              won&apos;t change it.
+              The {config.noun} keeps its own copy — editing a saved customer
+              later won&apos;t change it.
             </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-4">
             {customers.data.length > 0 ? (
               <div className="grid gap-2">
-                <Label htmlFor="invoice-customer-pick">Saved customer</Label>
+                <Label htmlFor={`${kind}-customer-pick`}>Saved customer</Label>
                 <Select
                   items={customerItems}
                   value={customerId || NEW_CUSTOMER}
@@ -360,7 +427,7 @@ function InvoiceFormBody({ meta }: { meta: TenantMeta }) {
                     pickCustomer(typeof value === "string" ? value : NEW_CUSTOMER)
                   }
                 >
-                  <SelectTrigger id="invoice-customer-pick" className="w-full">
+                  <SelectTrigger id={`${kind}-customer-pick`} className="w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -376,20 +443,20 @@ function InvoiceFormBody({ meta }: { meta: TenantMeta }) {
 
             <div className="grid gap-4 sm:grid-cols-2">
               <TextField
-                id="invoice-customer-name"
+                id={`${kind}-customer-name`}
                 label="Name"
                 error={errors.customerName?.message}
                 inputProps={{ autoComplete: "off", ...form.register("customerName") }}
               />
               <TextField
-                id="invoice-customer-email"
+                id={`${kind}-customer-email`}
                 label="Email"
-                hint="The invoice and receipts go to this address."
+                hint={`The ${config.noun}${kind === "invoice" ? " and receipts go" : " goes"} to this address.`}
                 error={errors.customerEmail?.message}
                 inputProps={{ type: "email", autoComplete: "off", ...form.register("customerEmail") }}
               />
               <TextField
-                id="invoice-customer-phone"
+                id={`${kind}-customer-phone`}
                 label="Phone (optional)"
                 error={errors.customerPhone?.message}
                 inputProps={{ type: "tel", autoComplete: "off", ...form.register("customerPhone") }}
@@ -538,21 +605,21 @@ function InvoiceFormBody({ meta }: { meta: TenantMeta }) {
         <Card>
           <CardHeader>
             <CardTitle>
-              <Label htmlFor="invoice-notes" className="text-base">
+              <Label htmlFor={`${kind}-notes`} className="text-base">
                 Notes (optional)
               </Label>
             </CardTitle>
-            <CardDescription>Shown to your customer on the invoice.</CardDescription>
+            <CardDescription>Shown to your customer on the {config.noun}.</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-2">
             <Textarea
-              id="invoice-notes"
+              id={`${kind}-notes`}
               rows={3}
               aria-invalid={errors.notes ? true : undefined}
-              aria-describedby={errors.notes ? "invoice-notes-error" : undefined}
+              aria-describedby={errors.notes ? `${kind}-notes-error` : undefined}
               {...form.register("notes")}
             />
-            <FieldError id="invoice-notes-error" message={errors.notes?.message} />
+            <FieldError id={`${kind}-notes-error`} message={errors.notes?.message} />
           </CardContent>
         </Card>
       </div>
@@ -564,17 +631,17 @@ function InvoiceFormBody({ meta }: { meta: TenantMeta }) {
           </CardHeader>
           <CardContent className="grid gap-4">
             <TextField
-              id="invoice-issue-date"
+              id={`${kind}-issue-date`}
               label="Issue date"
               error={errors.issueDate?.message}
               inputProps={{ type: "date", ...form.register("issueDate") }}
             />
             <TextField
-              id="invoice-due-date"
-              label="Due date"
-              hint={`New invoices default to ${DEFAULT_TERMS_DAYS} days after today.`}
-              error={errors.dueDate?.message}
-              inputProps={{ type: "date", ...form.register("dueDate") }}
+              id={config.endFieldId}
+              label={config.endLabel}
+              hint={config.endHint}
+              error={errors.endDate?.message}
+              inputProps={{ type: "date", ...form.register("endDate") }}
             />
           </CardContent>
         </Card>
@@ -608,7 +675,7 @@ function InvoiceFormBody({ meta }: { meta: TenantMeta }) {
               </div>
             </dl>
 
-            {!canCollect ? (
+            {!canSend ? (
               <Alert>
                 <AlertTitle>Set up a way to get paid first</AlertTitle>
                 <AlertDescription>
@@ -625,7 +692,7 @@ function InvoiceFormBody({ meta }: { meta: TenantMeta }) {
               <Button
                 type="button"
                 size="lg"
-                disabled={busy || !canCollect}
+                disabled={busy || !canSend}
                 onClick={form.handleSubmit((values) => save(values, true))}
               >
                 {submitting === "send" ? "Sending…" : "Save and send"}
@@ -644,54 +711,6 @@ function InvoiceFormBody({ meta }: { meta: TenantMeta }) {
   );
 }
 
-type InputProps = React.ComponentProps<"input">;
-
-function FieldError({ id, message }: { id: string; message?: string }) {
-  if (!message) return null;
-  return (
-    <p id={id} className="text-sm text-destructive">
-      {message}
-    </p>
-  );
-}
-
-function TextField({
-  id,
-  label,
-  hint,
-  error,
-  inputProps,
-}: {
-  id: string;
-  label: string;
-  hint?: string;
-  error?: string;
-  inputProps: InputProps;
-}) {
-  const describedBy = [hint ? `${id}-hint` : null, error ? `${id}-error` : null]
-    .filter(Boolean)
-    .join(" ");
-  // content-start: a taller neighbour in the same grid row mustn't spread this
-  // field's label and input apart.
-  return (
-    <div className="grid content-start gap-2">
-      <Label htmlFor={id}>{label}</Label>
-      <Input
-        id={id}
-        aria-invalid={error ? true : undefined}
-        aria-describedby={describedBy || undefined}
-        {...inputProps}
-      />
-      {hint ? (
-        <p id={`${id}-hint`} className="text-xs text-muted-foreground">
-          {hint}
-        </p>
-      ) : null}
-      <FieldError id={`${id}-error`} message={error} />
-    </div>
-  );
-}
-
 // A line-item input: its label shows on phones, where the column headings are
 // hidden, and stays available to screen readers everywhere.
 function LineField({
@@ -703,7 +722,7 @@ function LineField({
   id: string;
   label: string;
   error?: string;
-  inputProps: InputProps;
+  inputProps: React.ComponentProps<"input">;
 }) {
   return (
     <div className="grid content-start gap-1.5">

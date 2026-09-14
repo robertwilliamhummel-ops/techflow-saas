@@ -1,6 +1,5 @@
 // Dashboard menu (blueprint Phase 3, "Navigation gating"). Items are filtered
-// by feature and role; Cloud Functions still enforce both. Quotes joins the
-// menu with its list page (S-06).
+// by feature and role; Cloud Functions still enforce both.
 
 import type { FeatureKey } from "@/lib/features";
 import type { MembershipRole } from "@/lib/schema/tenant";
@@ -8,6 +7,7 @@ import type { MembershipRole } from "@/lib/schema/tenant";
 export type DashboardNavIcon =
   | "dashboard"
   | "invoices"
+  | "quotes"
   | "customers"
   | "billing"
   | "settings";
@@ -23,6 +23,7 @@ export interface DashboardNavItem {
 export const DASHBOARD_NAV: readonly DashboardNavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: "dashboard" },
   { href: "/invoices", label: "Invoices", icon: "invoices", feature: "invoices" },
+  { href: "/quotes", label: "Quotes", icon: "quotes", feature: "quotes" },
   { href: "/customers", label: "Customers", icon: "customers" },
   // Stripe onboarding is owner/admin only (startConnectOnboarding).
   { href: "/billing", label: "Billing", icon: "billing", roles: ["owner", "admin"] },

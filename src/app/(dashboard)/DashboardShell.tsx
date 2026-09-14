@@ -6,6 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect } from "react";
 import {
   ChevronsUpDown,
+  ClipboardList,
   CreditCard,
   FileText,
   LayoutDashboard,
@@ -44,6 +45,7 @@ const FALLBACK_SECONDARY = "#F5F5F5";
 const NAV_ICONS: Record<DashboardNavIcon, typeof LayoutDashboard> = {
   dashboard: LayoutDashboard,
   invoices: FileText,
+  quotes: ClipboardList,
   customers: Users,
   billing: CreditCard,
   settings: Settings,

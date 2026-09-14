@@ -126,6 +126,20 @@ const COMPOSITE_INDEXES: Array<{
     ],
   },
   {
+    query: "Quotes list — a status filter, newest first (S-06)",
+    file: "src/app/(dashboard)/quotes/QuotesList.tsx",
+    mustContain: [
+      /where\("status", "in", \[\.\.\.filter\.statuses\]\)/,
+      /orderBy\("createdAt", "desc"\)/,
+    ],
+    collectionGroup: "quotes",
+    queryScope: "COLLECTION",
+    fields: [
+      { fieldPath: "status", order: "ASCENDING" },
+      { fieldPath: "createdAt", order: "DESCENDING" },
+    ],
+  },
+  {
     query: "Dashboard home — a tenant's drafts, newest first (S-01)",
     file: "src/app/(dashboard)/dashboard/page.tsx",
     mustContain: [
