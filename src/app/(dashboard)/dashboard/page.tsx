@@ -40,6 +40,7 @@ import {
 import type { CurrencyCode, Invoice } from "@/lib/schema/tenant";
 import { useTenantContext } from "@/lib/tenant/TenantContext";
 import { useTenantCollection } from "@/lib/tenant/useTenantCollection";
+import { cn } from "@/lib/utils";
 
 type InvoiceRow = Invoice & { id: string };
 
@@ -211,7 +212,7 @@ function DashboardHome({ currency }: { currency: CurrencyCode }) {
         </p>
       ) : null}
 
-      <div className="grid gap-6 lg:grid-cols-5">
+      <div className="grid items-start gap-6 lg:grid-cols-5">
         <Card className="lg:col-span-2">
           <CardHeader>
             <CardTitle>Overdue</CardTitle>
@@ -294,41 +295,48 @@ function DashboardHome({ currency }: { currency: CurrencyCode }) {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Invoice</TableHead>
                     <TableHead>Customer</TableHead>
-                    <TableHead>Due</TableHead>
+                    <TableHead className="hidden sm:table-cell">Due</TableHead>
                     <TableHead className="text-right">Amount</TableHead>
-                    <TableHead>Status</TableHead>
+                    <TableHead className="hidden sm:table-cell">Status</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {recent.data.map((invoice) => (
-                    <TableRow key={invoice.id}>
-                      <TableCell>
-                        <Link
-                          href={invoiceHref(invoice.id)}
-                          className="font-medium underline-offset-4 hover:underline"
-                        >
-                          {invoice.id}
-                        </Link>
-                      </TableCell>
-                      <TableCell className="max-w-48 truncate">
-                        {invoice.customer.name}
-                      </TableCell>
-                      <TableCell>{formatIsoDate(invoice.dueDate)}</TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {formatMoneyCents(
-                          dollarsToCents(invoice.totals.total),
-                          invoice.tenantSnapshot.currency,
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <InvoiceStatusBadge
-                          status={displayInvoiceStatus(invoice, today)}
-                        />
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                  {recent.data.map((invoice) => {
+                    const status = displayInvoiceStatus(invoice, today);
+                    return (
+                      <TableRow key={invoice.id}>
+                        <TableCell>
+                          {/* On a phone the number sits under the name and the
+                              status under the amount, so no column runs off screen. */}
+                          <Link
+                            href={invoiceHref(invoice.id)}
+                            className="block max-w-40 truncate font-medium underline-offset-4 hover:underline sm:max-w-64"
+                          >
+                            {invoice.customer.name}
+                          </Link>
+                          <span className="block text-xs text-muted-foreground">
+                            {invoice.id}
+                          </span>
+                        </TableCell>
+                        <TableCell className="hidden sm:table-cell">
+                          {formatIsoDate(invoice.dueDate)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {formatMoneyCents(
+                            dollarsToCents(invoice.totals.total),
+                            invoice.tenantSnapshot.currency,
+                          )}
+                          <span className="mt-1 flex justify-end sm:hidden">
+                            <InvoiceStatusBadge status={status} />
+                          </span>
+                        </TableCell>
+                        <TableCell className="hidden sm:table-cell">
+                          <InvoiceStatusBadge status={status} />
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             )}
@@ -380,15 +388,15 @@ function SummaryCard({
         {loading ? (
           <Skeleton className="h-8 w-32" />
         ) : (
-          <CardTitle
-            className={
-              tone === "destructive"
-                ? "text-2xl font-semibold tabular-nums text-destructive"
-                : "text-2xl font-semibold tabular-nums"
-            }
+          // A plain element: a small card's CardTitle size overrides text-2xl.
+          <p
+            className={cn(
+              "text-2xl font-semibold tabular-nums",
+              tone === "destructive" && "text-destructive",
+            )}
           >
             {primary?.text}
-          </CardTitle>
+          </p>
         )}
       </CardHeader>
       <CardContent className="flex flex-col gap-1 text-xs text-muted-foreground">
