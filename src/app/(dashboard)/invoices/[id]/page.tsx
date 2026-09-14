@@ -1,4 +1,4 @@
-import { PagePlaceholder } from "@/components/scaffold/PagePlaceholder";
+import { InvoiceDetail } from "@/components/invoices/InvoiceDetail";
 
 export default async function InvoiceDetailPage({
   params,
@@ -6,5 +6,5 @@ export default async function InvoiceDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  return <PagePlaceholder title="Invoice detail" phase="Phase 5" meta={{ id }} />;
+  return <InvoiceDetail invoiceId={id} />;
 }

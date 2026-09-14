@@ -1,5 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { dollarsToCents, formatIsoDate, formatMoneyCents } from "@/lib/format";
+import {
+  dollarsToCents,
+  formatIsoDate,
+  formatMoneyCents,
+  formatTimestamp,
+} from "@/lib/format";
+
+describe("formatTimestamp", () => {
+  it("formats a Firestore Timestamp's date and time", () => {
+    const text = formatTimestamp({ toDate: () => new Date(Date.UTC(2026, 8, 14, 12, 0)) });
+    expect(text).toMatch(/Sep/);
+    expect(text).toMatch(/2026/);
+  });
+
+  it("is null when the field isn't set", () => {
+    expect(formatTimestamp(null)).toBeNull();
+    expect(formatTimestamp(undefined)).toBeNull();
+  });
+});
 
 describe("dollarsToCents", () => {
   it("rounds away float error", () => {

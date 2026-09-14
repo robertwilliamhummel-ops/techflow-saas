@@ -15,6 +15,17 @@ export function formatMoneyCents(cents: number, currency: string): string {
   }).format(cents / 100);
 }
 
+/** A Firestore Timestamp as a date and time in the viewer's time zone. */
+export function formatTimestamp(
+  value: { toDate(): Date } | null | undefined,
+): string | null {
+  if (!value || typeof value.toDate !== "function") return null;
+  return new Intl.DateTimeFormat("en-CA", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(value.toDate());
+}
+
 /**
  * A YYYY-MM-DD calendar date as a short readable date. Formatted in UTC so the
  * viewer's time zone can't move it a day; anything else is returned unchanged.
