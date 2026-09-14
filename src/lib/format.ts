@@ -26,6 +26,12 @@ export function formatTimestamp(
   }).format(value.toDate());
 }
 
+/** Epoch milliseconds (as the portal detail callables send times) as a date in the viewer's time zone. */
+export function formatDateMillis(ms: number | null | undefined): string | null {
+  if (typeof ms !== "number" || !Number.isFinite(ms)) return null;
+  return new Intl.DateTimeFormat("en-CA", { dateStyle: "medium" }).format(ms);
+}
+
 /**
  * A YYYY-MM-DD calendar date as a short readable date. Formatted in UTC so the
  * viewer's time zone can't move it a day; anything else is returned unchanged.
