@@ -5,6 +5,8 @@
 
 import { HttpsError } from "firebase-functions/v2/https";
 import type { Timestamp, FieldValue } from "firebase-admin/firestore";
+import { isIsoCalendarDate } from "./dates";
+import { isValidEmail } from "./email";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -167,6 +169,12 @@ export function validateInvoiceInput(data: unknown): InvoiceInput {
   if (!custEmail) {
     throw new HttpsError("invalid-argument", "customer.email required.");
   }
+  if (!isValidEmail(custEmail)) {
+    throw new HttpsError(
+      "invalid-argument",
+      "customer.email must be a valid email address.",
+    );
+  }
   const custPhone =
     cust.phone != null ? String(cust.phone).trim() || null : null;
 
@@ -174,20 +182,32 @@ export function validateInvoiceInput(data: unknown): InvoiceInput {
   const applyTax = d.applyTax === true;
   const lineItems = validateLineItems(d.lineItems, applyTax, "invoice");
 
-  // Dates
+  // Dates — real calendar dates, and never due before issued.
   const dueDate = String(d.dueDate ?? "").trim();
-  if (!dueDate || !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) {
+  if (!dueDate) {
     throw new HttpsError(
       "invalid-argument",
       "dueDate required (YYYY-MM-DD).",
     );
   }
-  const issueDate =
-    d.issueDate != null ? String(d.issueDate).trim() || null : null;
-  if (issueDate && !/^\d{4}-\d{2}-\d{2}$/.test(issueDate)) {
+  if (!isIsoCalendarDate(dueDate)) {
     throw new HttpsError(
       "invalid-argument",
-      "issueDate must be YYYY-MM-DD if provided.",
+      "dueDate must be a real date (YYYY-MM-DD).",
+    );
+  }
+  const issueDate =
+    d.issueDate != null ? String(d.issueDate).trim() || null : null;
+  if (issueDate && !isIsoCalendarDate(issueDate)) {
+    throw new HttpsError(
+      "invalid-argument",
+      "issueDate must be a real date (YYYY-MM-DD) if provided.",
+    );
+  }
+  if (issueDate && dueDate < issueDate) {
+    throw new HttpsError(
+      "invalid-argument",
+      "dueDate can't be before issueDate.",
     );
   }
 

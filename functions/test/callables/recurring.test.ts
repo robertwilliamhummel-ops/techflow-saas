@@ -382,6 +382,33 @@ describe("createRecurringInvoice", () => {
     ).rejects.toThrow(/internalDescription/i);
   });
 
+  it("rejects a malformed email, an impossible start date, and an end date before the start", async () => {
+    await seedTenant();
+    await expect(
+      createRecurringInvoiceHandler(
+        fakeRequest(
+          { ...validInput, customer: { ...validInput.customer, email: "jane@" } },
+          ownerAuth,
+        ),
+      ),
+    ).rejects.toThrow(/customer\.email must be a valid email/);
+
+    await expect(
+      createRecurringInvoiceHandler(
+        fakeRequest({ ...validInput, startDate: "2026-13-01" }, ownerAuth),
+      ),
+    ).rejects.toThrow(/startDate must be a real date/);
+
+    await expect(
+      createRecurringInvoiceHandler(
+        fakeRequest(
+          { ...validInput, endAfterCount: null, endDate: "2026-05-14" },
+          ownerAuth,
+        ),
+      ),
+    ).rejects.toThrow(/endDate can't be before startDate/);
+  });
+
   it("creates a recurring invoice template with correct fields", async () => {
     await seedTenant();
     const { recurringInvoiceId } = await createRecurringInvoiceHandler(

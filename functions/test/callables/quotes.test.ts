@@ -251,6 +251,36 @@ describe("createQuote", () => {
     ).rejects.toThrow(/validUntil required/);
   });
 
+  it("rejects a malformed customer email", async () => {
+    await expect(
+      createQuoteHandler(
+        fakeRequest(
+          validQuoteData({ customer: { name: "Bob Builder", email: "bob@" } }),
+          ownerAuth,
+        ),
+      ),
+    ).rejects.toThrow(/customer\.email must be a valid email/);
+  });
+
+  it("rejects a validUntil that isn't a real calendar date", async () => {
+    await expect(
+      createQuoteHandler(
+        fakeRequest(validQuoteData({ validUntil: "2026-06-31" }), ownerAuth),
+      ),
+    ).rejects.toThrow(/validUntil must be a real date/);
+  });
+
+  it("rejects a validUntil before the issue date", async () => {
+    await expect(
+      createQuoteHandler(
+        fakeRequest(
+          validQuoteData({ issueDate: "2026-07-01", validUntil: "2026-06-30" }),
+          ownerAuth,
+        ),
+      ),
+    ).rejects.toThrow(/validUntil can't be before issueDate/);
+  });
+
   it("rejects when quotes feature is disabled", async () => {
     await testDb.doc(`tenants/${TENANT}/entitlements/current`).update({
       features: { quotes: false },

@@ -378,6 +378,44 @@ describe("createInvoice", () => {
       ),
     ).rejects.toThrow(/dueDate required/);
   });
+
+  it("rejects a malformed customer email", async () => {
+    await expect(
+      createInvoiceHandler(
+        fakeRequest(
+          validInvoiceData({ customer: { name: "Jane Doe", email: "jane.example.com" } }),
+          ownerAuth,
+        ),
+      ),
+    ).rejects.toThrow(/customer\.email must be a valid email/);
+  });
+
+  it("rejects a due date that isn't a real calendar date", async () => {
+    await expect(
+      createInvoiceHandler(
+        fakeRequest(validInvoiceData({ dueDate: "2026-02-30" }), ownerAuth),
+      ),
+    ).rejects.toThrow(/dueDate must be a real date/);
+  });
+
+  it("rejects a due date before the issue date, and accepts one on it", async () => {
+    await expect(
+      createInvoiceHandler(
+        fakeRequest(
+          validInvoiceData({ issueDate: "2026-05-20", dueDate: "2026-05-15" }),
+          ownerAuth,
+        ),
+      ),
+    ).rejects.toThrow(/dueDate can't be before issueDate/);
+
+    const { invoiceId } = await createInvoiceHandler(
+      fakeRequest(
+        validInvoiceData({ issueDate: "2026-05-15", dueDate: "2026-05-15" }),
+        ownerAuth,
+      ),
+    );
+    expect(invoiceId).toBe("INV-0001");
+  });
 });
 
 describe("updateInvoice", () => {

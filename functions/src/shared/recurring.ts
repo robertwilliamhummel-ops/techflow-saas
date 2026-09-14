@@ -6,6 +6,8 @@
 // leap years.
 
 import { HttpsError } from "firebase-functions/v2/https";
+import { isIsoCalendarDate } from "./dates";
+import { isValidEmail } from "./email";
 import {
   validateLineItems,
   type LineItemInput,
@@ -73,6 +75,12 @@ export function validateRecurringInvoiceInput(
   if (!custEmail) {
     throw new HttpsError("invalid-argument", "customer.email required.");
   }
+  if (!isValidEmail(custEmail)) {
+    throw new HttpsError(
+      "invalid-argument",
+      "customer.email must be a valid email address.",
+    );
+  }
   const custPhone =
     cust.phone != null ? String(cust.phone).trim() || null : null;
 
@@ -128,12 +136,18 @@ export function validateRecurringInvoiceInput(
     );
   }
 
-  // Start date
+  // Start date — a real calendar date.
   const startDate = String(d.startDate ?? "").trim();
-  if (!startDate || !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) {
+  if (!startDate) {
     throw new HttpsError(
       "invalid-argument",
       "startDate required (YYYY-MM-DD).",
+    );
+  }
+  if (!isIsoCalendarDate(startDate)) {
+    throw new HttpsError(
+      "invalid-argument",
+      "startDate must be a real date (YYYY-MM-DD).",
     );
   }
 
@@ -153,14 +167,20 @@ export function validateRecurringInvoiceInput(
     }
   }
 
-  // End date
+  // End date — a real calendar date, never before the start.
   let endDate: string | null = null;
   if (d.endDate != null) {
     endDate = String(d.endDate).trim();
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
+    if (!isIsoCalendarDate(endDate)) {
       throw new HttpsError(
         "invalid-argument",
-        "endDate must be YYYY-MM-DD if provided.",
+        "endDate must be a real date (YYYY-MM-DD) if provided.",
+      );
+    }
+    if (endDate < startDate) {
+      throw new HttpsError(
+        "invalid-argument",
+        "endDate can't be before startDate.",
       );
     }
   }
