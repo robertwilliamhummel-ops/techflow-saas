@@ -120,6 +120,20 @@ describe("signups/{uid} (A-12)", () => {
   });
 });
 
+describe("signInLinkLimits/{emailHash} (E-01)", () => {
+  it("clients can't read or write sign-in link counters", async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "signInLinkLimits/abc"), { count: 1 });
+    });
+    await assertFails(getDoc(doc(unauthed(), "signInLinkLimits/abc")));
+    await assertFails(
+      setDoc(doc(authed("cust1", { email: "c@x.test", email_verified: true }), "signInLinkLimits/abc"), {
+        count: 0,
+      }),
+    );
+  });
+});
+
 describe("tenants/{tenantId}/meta", () => {
   it("member reads meta", async () => {
     await env.withSecurityRulesDisabled(async (ctx) => {

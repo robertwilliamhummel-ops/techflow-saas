@@ -60,7 +60,8 @@ export type EmailCategory =
   | "recurring-invoice"
   | "staff-invite"
   | "payment-incident"
-  | "payment-receipt";
+  | "payment-receipt"
+  | "portal-sign-in";
 
 export interface SendEmailInput {
   to: string;

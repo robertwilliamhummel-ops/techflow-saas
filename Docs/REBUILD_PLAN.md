@@ -63,9 +63,9 @@
 
 | Phase | Status | Remaining |
 |---|---|---|
-| 1 Schema, rules, claims | Done — 60 Firestore + 18 Storage rules tests; indexes and TTL policies in `firestore.indexes.json`, pinned to their queries by tests; customer + recurring-management callables (A-10) | — |
+| 1 Schema, rules, claims | Done — 61 Firestore + 18 Storage rules tests; indexes and TTL policies in `firestore.indexes.json`, pinned to their queries by tests; customer + recurring-management callables (A-10) | — |
 | 1.5 Design system | Done | — |
-| 2 Cloud Functions | Mostly done — 364 callable, 55 email, 90 shared tests; PaymentReceipt emails via `onInvoicePaid` (E-01) | MagicLinkSignIn template, App Check + send rate limits (R4), Sentry in functions |
+| 2 Cloud Functions | Mostly done — 391 callable, 69 email, 93 shared tests; PaymentReceipt and MagicLinkSignIn emails (E-01) | App Check + send rate limits (R4), Sentry in functions |
 | 3 Frontend architecture | Contexts, guards, auth recovery done | 12 placeholder pages: `/dashboard`, `/invoices`, `/invoices/new`, `/invoices/[id]`, `/customers`, `/quotes/[id]`, `/portal`, `/portal/invoices/[id]`, `/portal/quotes/[id]`, `/pay/[token]`, `/pay/[token]/success`, `/pay/[token]/cancelled`; dashboard navigation |
 | 4 Stripe Connect | Backend done (D1 applied); webhook money bugs A-02, A-03, A-08 fixed | Public pay page UI |
 | 5 Onboarding & domains | Signup, login, settings, team, domain, billing UI done; host-routing proxy loads | Customer magic-link sign-in (portal login is password-only today) |
@@ -384,6 +384,9 @@ userTenantMemberships/{uid}_{tenantId}     ← one per (user, tenant); MVP allow
 signups/{uid}                              ← one per self-signup; created with the tenant in
   { uid, tenantId, createdAt }               onSignup's transaction (A-12); admin-SDK only
 
+signInLinkLimits/{sha256(email)}           ← per-address limit on portal sign-in link emails
+  { windowStartedAt, count, lastAt, expireAt } (E-01); admin-SDK only; TTL on expireAt
+
 customDomains/{domain}        { tenantId, createdAt }                 ← middleware fallback lookup
 stripeAccounts/{accountId}    { tenantId, linkedAt }                  ← Connect webhook routing;
                                                                         written at account creation
@@ -505,7 +508,7 @@ Platform admins have no `tenantId` claim. No rule lets any client — platform a
 
 ### Security rules (as built)
 
-`firestore.rules` is authoritative, verified by 60 emulator tests in `functions/test/rules/firestore.test.ts`. The April sketch that used to live here allowed client writes to `meta`, `customers`, `recurringInvoices`, and `invitations`; the build tightened every one of them to callable-only writes.
+`firestore.rules` is authoritative, verified by 61 emulator tests in `functions/test/rules/firestore.test.ts`. The April sketch that used to live here allowed client writes to `meta`, `customers`, `recurringInvoices`, and `invitations`; the build tightened every one of them to callable-only writes.
 
 Two identity patterns are enforced:
 
@@ -520,7 +523,7 @@ Two identity patterns are enforced:
 | `tenants/{t}/invoices/{id}`, `tenants/{t}/quotes/{id}` | members of `t`, **or** an `email_verified` user whose lowercased email equals `customer.email` and the document is in a customer-visible status (never `draft`, A-05) | none |
 | `tenants/{t}/invoices/{id}/paymentIncidents/*` | members of `t` | none |
 | `tenants/{t}/invoices/{id}/payAttempts/*` | none | none |
-| `customDomains/*`, `stripeAccounts/*`, `stripeEvents/*`, `emailSends/*`, `signups/*` | none | none |
+| `customDomains/*`, `stripeAccounts/*`, `stripeEvents/*`, `emailSends/*`, `signups/*`, `signInLinkLimits/*` | none | none |
 | `platformAdmins/*` | `platformAdmin` claim | none |
 | anything else | none | none |
 
@@ -587,7 +590,7 @@ No migration needed. Existing Firestore data is 73 test invoices — discarded. 
   - Collection group `quotes`: `customer.email` (ASC) + `createdAt` (DESC) (same pattern for customer quote access)
   - Collection group `recurringInvoices`: `status` (ASC) + `nextRunAt` (ASC) — the daily recurring processor (A-04)
   - Field override, collection group `meta`: `customDomainStatus.stage` (collection-group single-field indexes aren't maintained by default) — `recheckPendingDomains`
-  - TTL field overrides (`ttl: true`, indexing disabled): `stripeEvents.expireAt`, `payAttempts.expireAt`, `emailSends.expireAt`
+  - TTL field overrides (`ttl: true`, indexing disabled): `stripeEvents.expireAt`, `payAttempts.expireAt`, `emailSends.expireAt`, `signInLinkLimits.expireAt` (E-01)
   - The `firestore.indexes.json` file lives in the repo and is deployed alongside rules via `firebase deploy --only firestore`. `functions/test/shared/firestoreIndexes.test.ts` pins each query to its index — add an entry there with every new index-requiring query.
   - **Note:** the Stripe webhook does NOT require a `collectionGroup('meta')` index because we use the `stripeAccounts/{stripeAccountId}` reverse lookup collection instead. Direct doc read, no composite index needed.
 - **Firebase Storage rules deployed (`storage.rules`)** — separate from Firestore rules. Firebase Storage has its own rules file. Required rules:
@@ -876,6 +879,8 @@ Caller-supplied document ids go through `requireDocId` (`functions/src/shared/do
 | `getCustomerQuotes` | the quote companion (P6): same paging, visibility, and logo-URL rules over the `(customer.email, createdAt desc)` quotes index, max 100 |
 | `getCustomerQuoteDetail` | `{ tenantId, quoteId }`; email must match `customer.email`; drafts answer not-found (P6) |
 
+**Public callable (no sign-in):** `sendPortalSignInLink` — `{ email, continueUrl }`; emails a MagicLinkSignIn link generated with the Admin SDK. Always answers `{ ok: true }`; sends only to an address with a customer-visible invoice or quote; 5 requests an hour and one a minute per address (`signInLinkLimits/{sha256(email)}`, TTL-cleaned); `continueUrl` must be a `/portal` page on the shared portal host or a verified custom domain (E-01).
+
 Customer PDF download is the Next.js route `GET /api/pdf/invoice` (and `/api/pdf/quote`) with a Firebase ID token and dual auth — tenant claim or verified matching email — replacing the planned `downloadInvoicePDF` callable.
 
 **Token-authenticated callables** (no Firebase auth — the signed pay token is the auth)
@@ -1058,7 +1063,7 @@ functions/src/emails/
     RecurringInvoiceSent.tsx
     StaffInvite.tsx
     PaymentReceipt.tsx       ← "Payment received"; sent by the onInvoicePaid trigger (E-01)
-                             ← not built yet: MagicLinkSignIn.tsx
+    MagicLinkSignIn.tsx      ← portal sign-in link; sent by sendPortalSignInLink (E-01)
   send.ts                    ← SES transport: sendEmail, sendInvitationEmail, pickReplyTo, formatFromHeader
   sanitize.ts                ← sanitizeEmailField / sanitizeHeaderValue (R4)
   format.ts                  ← formatCurrency
@@ -1070,7 +1075,7 @@ functions/src/emails/
 
 - **From** `"{Tenant name}" <EMAIL_FROM_ADDRESS>` (default `notifications@techflowsolutions.ca`). Sending from the verified platform identity keeps SPF/DKIM/DMARC aligned. Printable-ASCII names are quoted; others use RFC 2047 encoding. Owner incident alerts send as `"TechFlow"`.
 - **Reply-To** `pickReplyTo(meta.contactEmail, meta.etransferEmail)` — customer replies reach the contractor, not TechFlow. Non-negotiable for the bundled-website offering.
-- **Tags** `category` (`invoice` | `quote` | `recurring-invoice` | `staff-invite` | `payment-incident` | `payment-receipt`), `tenantId`, `documentId` — SES events use them to find the invoice or quote. Only `invoice`, `recurring-invoice`, and `quote` events are recorded, so a bounced receipt never overwrites the invoice email's status.
+- **Tags** `category` (`invoice` | `quote` | `recurring-invoice` | `staff-invite` | `payment-incident` | `payment-receipt` | `portal-sign-in`), `tenantId`, `documentId` — SES events use them to find the invoice or quote. Only `invoice`, `recurring-invoice`, and `quote` events are recorded, so a bounced receipt never overwrites the invoice email's status.
 - **Configuration set** `SES_CONFIGURATION_SET` (required for bounce/complaint events). **SES tenants**: `SES_TENANTS_ENABLED=true` passes `TenantName = tenantId` once tenants are provisioned in SES — each TechFlow tenant then gets isolated reputation metrics and automatic pausing.
 - **Idempotency** — an `idempotencyKey` claims `emailSends/{sha256(key)}` in a transaction before sending (`sending` → `sent`, released on failure, stale claims taken over after 10 minutes, 30-day TTL). Automated senders use it: recurring invoices per generated invoice, invitations per invite, incident alerts per incident and owner. Manual "Send" clicks don't — resending an invoice is a legitimate action.
 - Recipient addresses are never logged; category, tenant, document id, and SES message id are.
@@ -1173,8 +1178,8 @@ https://invoices.smithplumbing.ca/portal/invoices/{id}?tenantId={tenantId}
 1. Customer clicks the link in their email.
 2. The `/portal/invoices/[id]` page checks if the user is already authenticated with a verified email matching the invoice's `customer.email`. If yes, show the invoice immediately.
 3. If not authenticated, the page shows a branded login screen (tenant branding resolved from the domain or `tenantId` param) with one option: "Sign in with email." Customer enters their email.
-4. **⚠️ BEFORE calling sendSignInLinkToEmail:** store the customer's email in `localStorage` (e.g. `localStorage.setItem('emailForSignIn', email)`). This is **mandatory** — Firebase's `signInWithEmailLink()` requires the email as a parameter on return, and if the customer opens the magic link on a different browser/device or their tab state is lost, the email won't be available from memory. Without this step, the first login attempt fails silently.
-5. App calls `sendSignInLinkToEmail(email, { url: <the original /portal/invoices/[id] URL>, handleCodeInApp: true })`. Firebase sends a magic link to the customer's inbox.
+4. **⚠️ BEFORE requesting the link:** store the customer's email in `localStorage` (e.g. `localStorage.setItem('emailForSignIn', email)`). This is **mandatory** — Firebase's `signInWithEmailLink()` requires the email as a parameter on return, and if the customer opens the magic link on a different browser/device or their tab state is lost, the email won't be available from memory. Without this step, the first login attempt fails silently.
+5. App calls the `sendPortalSignInLink` callable with `{ email, continueUrl: <the original /portal/invoices/[id] URL> }` (E-01). The function generates the link with the Admin SDK (`generateSignInWithEmailLink`, `handleCodeInApp: true`; Firebase sends nothing) and emails it through SES with the MagicLinkSignIn template — branded with the business on its verified custom domain, platform-named on the shared host. Firebase's built-in email-link template is project-wide with limited customization, so the client no longer calls `sendSignInLinkToEmail`. The callable always answers `{ ok: true }`, sends only to an address with a customer-visible invoice or quote, allows 5 links an hour and one a minute per address, and accepts only `/portal` URLs on the shared portal host or a verified custom domain.
 6. Customer clicks the magic link in the second email. The return page detects it's a sign-in link via `isSignInWithEmailLink(auth, window.location.href)`, retrieves the email from `localStorage.getItem('emailForSignIn')`, and calls `signInWithEmailLink(auth, email, window.location.href)`. If `localStorage` is empty (different device/browser), prompt the customer to re-enter their email before completing sign-in. On success, clear the stored email from `localStorage`.
 7. Firebase Auth completes sign-in, sets `email_verified: true`. The page redirects to the original `/portal/invoices/[id]?invoiceId=...` URL (carried in the `actionCodeSettings.url`).
 8. The page now has an authenticated user with a verified email. It calls `getCustomerInvoiceDetail` (or reads Firestore directly if rules permit) and renders the invoice with the embedded `tenantSnapshot` branding.
@@ -1182,7 +1187,7 @@ https://invoices.smithplumbing.ca/portal/invoices/{id}?tenantId={tenantId}
 
 **Key implementation details:**
 - `sendInvoiceEmail` Cloud Function must construct the portal URL with the correct domain (custom if set, generic if not) and include `tenantId` + `invoiceId` as query params.
-- The `actionCodeSettings.url` passed to `sendSignInLinkToEmail` must point back to the exact invoice view URL so the customer lands on the right page after auth.
+- The `continueUrl` passed to `sendPortalSignInLink` must point back to the exact invoice view URL so the customer lands on the right page after auth; the function refuses anything that isn't a `/portal` page on the shared host or a verified custom domain (E-01).
 - Firebase Auth authorized domains must include the tenant's custom domain (if any) for the magic link redirect to work. See Phase 5 custom domain automation.
 - First-time customers are auto-created in Firebase Auth by the magic link flow — no pre-registration needed.
 - Returning customers who are already signed in skip steps 3–5 entirely.
@@ -2496,7 +2501,7 @@ Vercel env vars and Cloud Functions secrets are parallel systems — both must b
 - Enable APIs: Cloud Functions, Cloud Run, Cloud Build, Artifact Registry, Eventarc, Cloud Scheduler, Secret Manager, Identity Toolkit.
 - Prod: enable Firestore PITR and delete protection.
 - Backups: create `{projectId}-firestore-backups` in the same region with a 30-day lifecycle rule; grant the functions service account `datastore.databases.export` and object create on the bucket.
-- Firestore TTL policies (`payAttempts`, `stripeEvents`, `emailSends` on `expireAt`) are declared in `firestore.indexes.json` and created by the indexes deploy below — nothing to set by hand. Expired documents are typically deleted within 24 hours.
+- Firestore TTL policies (`payAttempts`, `stripeEvents`, `emailSends`, `signInLinkLimits` on `expireAt`) are declared in `firestore.indexes.json` and created by the indexes deploy below — nothing to set by hand. Expired documents are typically deleted within 24 hours.
 - Run the emulator suites, take a manual export, then `firebase deploy --only firestore:rules,firestore:indexes,storage --project <projectId>`. New composite indexes take a few minutes to build; check they show "Enabled" in the Firebase Console before relying on the queries.
 - Set the functions secrets and `functions/.env.<projectId>`, then `firebase deploy --only functions --project <projectId>`.
 - Firebase Auth: authorized domains include the portal domain (custom domains are added by `setupCustomDomain`); password-reset and verification email action URL → `https://<portal-domain>/auth/action`; **SMTP settings → SES SMTP credentials**, so auth emails send from the platform domain instead of `*.firebaseapp.com`.

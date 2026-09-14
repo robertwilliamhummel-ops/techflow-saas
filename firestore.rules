@@ -52,6 +52,14 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // ---------- signInLinkLimits/{emailHash} ----------
+    // Per-address limit on portal sign-in link emails (E-01). Cloud Functions
+    // only; removed by the TTL policy on `expireAt`.
+    match /signInLinkLimits/{emailHash} {
+      allow read: if false;
+      allow write: if false;
+    }
+
     // ---------- customDomains/{domain} ----------
     match /customDomains/{domain} {
       allow read: if false;
