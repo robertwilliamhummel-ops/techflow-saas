@@ -16,6 +16,7 @@ import {
 import { defineSecret } from "firebase-functions/params";
 import { db } from "../shared/admin";
 import { readClaims, requireTenant } from "../shared/auth";
+import { pdfLogoDataUrl } from "../shared/logo";
 import { requireFeature } from "../shared/requireFeature";
 import { RATE_LIMITS, enforceRateLimit } from "../shared/rateLimit";
 import { withSentryCallable } from "../shared/withSentry";
@@ -62,9 +63,11 @@ export async function previewInvoicePDFHandler(
       "Invoice is missing tenantSnapshot.",
     );
   }
-  // D3 kill switch — the PDF never discloses a surcharge the platform won't charge.
   const snapshot = {
     ...frozenSnapshot,
+    // D7 — the snapshot keeps only the logo copy's URL; the PDF needs the bytes.
+    logo: await pdfLogoDataUrl(frozenSnapshot, tenantId),
+    // D3 kill switch — the PDF never discloses a surcharge the platform won't charge.
     chargeCustomerCardFees: effectiveCardSurcharge(
       frozenSnapshot,
       features.cardSurcharge,

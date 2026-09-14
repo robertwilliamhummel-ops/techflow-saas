@@ -9,6 +9,7 @@ import {
   verifyIdToken,
 } from "@/lib/pdf/auth";
 import { PdfLoadError, loadQuoteForPdf } from "@/lib/pdf/loadDoc";
+import { withPdfLogo } from "@/lib/pdf/logo";
 import { PdfServiceError, proxyToPdfService } from "@/lib/pdf/proxy";
 
 export const runtime = "nodejs";
@@ -38,7 +39,8 @@ export async function GET(req: Request): Promise<Response> {
 
     return await proxyToPdfService({
       path: "/render/quote",
-      body: loaded.body,
+      // D7 — fetch the logo copy only for a caller allowed to see the quote.
+      body: await withPdfLogo(loaded.body, tenantId),
       filename: `${quoteId}.pdf`,
     });
   } catch (err) {

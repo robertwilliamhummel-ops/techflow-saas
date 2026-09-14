@@ -61,9 +61,9 @@ export interface InvoiceTotals {
 export interface TenantSnapshot {
   version: number;
   name: string;
-  logo: string | null; // base64 data URL (inlined at creation) or null — PDFs
-  // A-06: https URL of the immutable Storage copy of the same logo (emails,
-  // portal) and its MIME type; null when there is no logo.
+  // A-06/D7: token URL of the immutable Storage copy of the logo and its MIME
+  // type; null when there is no logo. Emails and the portal use the URL; PDF
+  // renders inline it (pdfLogoDataUrl). No base64 copy is stored.
   logoUrl: string | null;
   logoContentType: string | null;
   address: string | null;
@@ -355,8 +355,7 @@ export function buildTenantSnapshot(
   return {
     version: 1,
     name: String(meta.name ?? ""),
-    // Caller fills all three via applyLogoToSnapshot when meta.logoUrl is set.
-    logo: null,
+    // Caller fills both via applyLogoToSnapshot when meta.logoUrl is set.
     logoUrl: null,
     logoContentType: null,
     address: meta.address != null ? String(meta.address) : null,

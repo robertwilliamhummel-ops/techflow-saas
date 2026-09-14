@@ -1,5 +1,6 @@
-// A-06 — logo snapshots: base64 for PDFs, an immutable https copy for emails.
-// Runs against the Firestore and Storage emulators.
+// A-06 / D7 — logo snapshots: one immutable https copy, linked from emails and
+// the portal and inlined into PDFs at render time. Runs against the Firestore
+// and Storage emulators.
 
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -29,6 +30,7 @@ import { getStorage } from "firebase-admin/storage";
 import {
   applyLogoToSnapshot,
   emailLogoUrl,
+  pdfLogoDataUrl,
   snapshotLogoOrThrow,
 } from "../../src/shared/logo";
 import { createInvoiceHandler } from "../../src/invoices/createInvoice";
@@ -66,13 +68,13 @@ afterEach(() => {
   globalThis.fetch = realFetch;
 });
 
-describe("snapshotLogoOrThrow (A-06)", () => {
-  it("returns the base64 logo for PDFs and a working URL to an immutable copy", async () => {
+describe("snapshotLogoOrThrow (A-06, D7)", () => {
+  it("returns a working URL to an immutable copy and no base64 logo", async () => {
     serveLogo(PNG, "image/png");
 
     const fields = await snapshotLogoOrThrow(TENANT, SOURCE);
 
-    expect(fields.logo).toBe(`data:image/png;base64,${PNG.toString("base64")}`);
+    expect(fields).not.toHaveProperty("logo");
     expect(fields.logoContentType).toBe("image/png");
     expect(decodeURIComponent(fields.logoUrl ?? "")).toContain(
       `tenants/${TENANT}/snapshots/logos/`,
@@ -118,7 +120,7 @@ describe("snapshotLogoOrThrow (A-06)", () => {
     });
   });
 
-  it("clears all three fields when the tenant has no logo", async () => {
+  it("clears the logo fields, and drops any base64 copy, when the tenant has no logo", async () => {
     const snapshot = {
       logo: "stale",
       logoUrl: "stale",
@@ -127,7 +129,36 @@ describe("snapshotLogoOrThrow (A-06)", () => {
 
     await applyLogoToSnapshot(snapshot, TENANT, null);
 
-    expect(snapshot).toEqual({ logo: null, logoUrl: null, logoContentType: null });
+    expect(snapshot).toEqual({ logoUrl: null, logoContentType: null });
+  });
+});
+
+describe("pdfLogoDataUrl (D7)", () => {
+  it("inlines the stored copy for the PDF service", async () => {
+    serveLogo(PNG, "image/png");
+    const fields = await snapshotLogoOrThrow(TENANT, SOURCE);
+
+    await expect(pdfLogoDataUrl(fields, TENANT)).resolves.toBe(
+      `data:image/png;base64,${PNG.toString("base64")}`,
+    );
+  });
+
+  it("is null for a document without a logo", async () => {
+    await expect(
+      pdfLogoDataUrl({ logoUrl: null, logoContentType: null }, TENANT),
+    ).resolves.toBeNull();
+  });
+
+  it("refuses another tenant's copy and any URL outside the snapshot copies", async () => {
+    serveLogo(PNG, "image/png");
+    const fields = await snapshotLogoOrThrow(TENANT, SOURCE);
+
+    await expect(pdfLogoDataUrl(fields, "other-tenant")).rejects.toMatchObject({
+      code: "failed-precondition",
+    });
+    await expect(pdfLogoDataUrl({ logoUrl: SOURCE }, TENANT)).rejects.toMatchObject({
+      code: "failed-precondition",
+    });
   });
 });
 
@@ -150,14 +181,14 @@ describe("emailLogoUrl (A-06)", () => {
     ).toBeNull();
   });
 
-  it("never returns the base64 logo", () => {
+  it("is null without a hosted copy", () => {
     expect(
       emailLogoUrl({ logoUrl: null, logoContentType: null }),
     ).toBeNull();
   });
 });
 
-describe("createInvoice freezes both logo forms (A-06)", () => {
+describe("createInvoice freezes the logo copy (A-06, D7)", () => {
   beforeEach(async () => {
     await clearFirestore();
     await testDb.doc(`tenants/${TENANT}/meta/settings`).set({
@@ -180,7 +211,7 @@ describe("createInvoice freezes both logo forms (A-06)", () => {
     });
   });
 
-  it("stores the base64 logo, the hosted copy URL, and its type on the snapshot", async () => {
+  it("stores the hosted copy URL and its type on the snapshot, and no base64 logo", async () => {
     serveLogo(PNG, "image/png");
 
     const { invoiceId } = await createInvoiceHandler(
@@ -201,11 +232,13 @@ describe("createInvoice freezes both logo forms (A-06)", () => {
     const invoice = (
       await testDb.doc(`tenants/${TENANT}/invoices/${invoiceId}`).get()
     ).data()!;
-    expect(invoice.tenantSnapshot.logo).toBe(
-      `data:image/png;base64,${PNG.toString("base64")}`,
-    );
+    expect(invoice.tenantSnapshot).not.toHaveProperty("logo");
     expect(invoice.tenantSnapshot.logoContentType).toBe("image/png");
     expect(invoice.tenantSnapshot.logoUrl).toMatch(/[?&]token=/);
+    // The PDF path can inline exactly the logo this invoice was issued with.
+    await expect(pdfLogoDataUrl(invoice.tenantSnapshot, TENANT)).resolves.toBe(
+      `data:image/png;base64,${PNG.toString("base64")}`,
+    );
   });
 });
 
@@ -246,7 +279,9 @@ describe("invoice emails use the hosted logo (A-06)", () => {
       .Data as string;
   }
 
-  it("puts the hosted logo URL in the email and never the base64 logo", async () => {
+  // The snapshots below still carry a legacy base64 `logo`, to prove an email
+  // never embeds image data even if one is present.
+  it("puts the hosted logo URL in the email and never image data", async () => {
     const html = await sendWithSnapshot({
       logo: "data:image/png;base64,iVBORw0KGgo=",
       logoUrl:

@@ -41,12 +41,27 @@ const ORIGINAL_FETCH = globalThis.fetch;
 const fetchMock = vi.fn();
 
 const PDF_BYTES = Buffer.from("%PDF-1.4 fake-pdf-bytes");
+const LOGO_PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+// A snapshot copy as snapshotLogoOrThrow writes it (D7).
+const LOGO_URL =
+  "https://firebasestorage.googleapis.com/v0/b/techflow-saas-dev.appspot.com/o/" +
+  encodeURIComponent(`tenants/${TENANT}/snapshots/logos/${"a".repeat(64)}.png`) +
+  "?alt=media&token=t";
 
 function pdfReply(): void {
   fetchMock.mockResolvedValueOnce(
     new Response(PDF_BYTES, {
       status: 200,
       headers: { "content-type": "application/pdf" },
+    }),
+  );
+}
+
+function logoReply(): void {
+  fetchMock.mockResolvedValueOnce(
+    new Response(LOGO_PNG, {
+      status: 200,
+      headers: { "content-type": "image/png" },
     }),
   );
 }
@@ -76,7 +91,8 @@ afterEach(() => {
 const SNAPSHOT = {
   version: 1,
   name: "Acme",
-  logo: null,
+  logoUrl: null,
+  logoContentType: null,
   address: null,
   primaryColor: "#667eea",
   secondaryColor: "#764ba2",
@@ -123,6 +139,10 @@ async function seedQuote(
     notes: null,
     ...overrides,
   });
+}
+
+function postedBody(callIndex: number): { snapshot: Record<string, unknown>; data: Record<string, unknown> } {
+  return JSON.parse((fetchMock.mock.calls[callIndex]![1] as RequestInit).body as string);
 }
 
 describe("previewInvoicePDF", () => {
@@ -181,10 +201,50 @@ describe("previewInvoicePDF", () => {
     expect(url).toBe("https://pdf.example.test/render/invoice");
     const headers = new Headers((init as RequestInit).headers);
     expect(headers.get("x-api-key")).toBe(TEST_API_KEY);
-    const body = JSON.parse((init as RequestInit).body as string);
+    const body = postedBody(0);
     expect(body.snapshot.name).toBe("Acme");
+    expect(body.snapshot.logo).toBeNull();
     expect(body.data.invoiceId).toBe("INV-1");
     expect(body.data.payUrl).toBe("https://portal.example.test/pay/pay-tok-1");
+  });
+
+  it("D7: inlines the snapshot's logo copy for the PDF service", async () => {
+    await seedInvoice({
+      tenantSnapshot: { ...SNAPSHOT, logoUrl: LOGO_URL, logoContentType: "image/png" },
+    });
+    logoReply();
+    pdfReply();
+
+    await previewInvoicePDFHandler(fakeRequest({ invoiceId: "INV-1" }, ownerAuth));
+
+    expect(fetchMock.mock.calls[0]![0]).toBe(LOGO_URL);
+    expect(fetchMock.mock.calls[1]![0]).toBe("https://pdf.example.test/render/invoice");
+    expect(postedBody(1).snapshot.logo).toBe(
+      `data:image/png;base64,${LOGO_PNG.toString("base64")}`,
+    );
+  });
+
+  it("D7: refuses a logo URL that isn't one of the tenant's snapshot copies", async () => {
+    await seedInvoice({
+      tenantSnapshot: { ...SNAPSHOT, logoUrl: "https://evil.example/logo.png" },
+    });
+
+    await expect(
+      previewInvoicePDFHandler(fakeRequest({ invoiceId: "INV-1" }, ownerAuth)),
+    ).rejects.toMatchObject({ code: "failed-precondition" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("D7: 'unavailable' when the logo copy can't be loaded, without rendering", async () => {
+    await seedInvoice({
+      tenantSnapshot: { ...SNAPSHOT, logoUrl: LOGO_URL, logoContentType: "image/png" },
+    });
+    fetchMock.mockResolvedValueOnce(new Response("", { status: 503 }));
+
+    await expect(
+      previewInvoicePDFHandler(fakeRequest({ invoiceId: "INV-1" }, ownerAuth)),
+    ).rejects.toMatchObject({ code: "unavailable" });
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("payUrl is null when invoice has no payToken", async () => {
@@ -193,10 +253,7 @@ describe("previewInvoicePDF", () => {
     await previewInvoicePDFHandler(
       fakeRequest({ invoiceId: "INV-1" }, ownerAuth),
     );
-    const body = JSON.parse(
-      (fetchMock.mock.calls[0]![1] as RequestInit).body as string,
-    );
-    expect(body.data.payUrl).toBeNull();
+    expect(postedBody(0).data.payUrl).toBeNull();
   });
 
   it("maps Cloud Run unreachable to 'unavailable'", async () => {
@@ -259,6 +316,21 @@ describe("previewQuotePDF", () => {
     expect(result.filename).toBe("QT-1.pdf");
     const [url] = fetchMock.mock.calls[0]!;
     expect(url).toBe("https://pdf.example.test/render/quote");
+  });
+
+  it("D7: inlines the snapshot's logo copy for the PDF service", async () => {
+    await seedQuote({
+      tenantSnapshot: { ...SNAPSHOT, logoUrl: LOGO_URL, logoContentType: "image/png" },
+    });
+    logoReply();
+    pdfReply();
+
+    await previewQuotePDFHandler(fakeRequest({ quoteId: "QT-1" }, ownerAuth));
+
+    expect(fetchMock.mock.calls[0]![0]).toBe(LOGO_URL);
+    expect(postedBody(1).snapshot.logo).toBe(
+      `data:image/png;base64,${LOGO_PNG.toString("base64")}`,
+    );
   });
 
   it("404 when quote does not exist", async () => {

@@ -8,8 +8,8 @@
 // applied while paging through the (customer.email, createdAt) collection-group
 // index, so no further composite index is needed and the list still fills to
 // its limit when a customer also has drafts. Rows carry the snapshot's logo
-// URL, never the inlined base64 logo: a callable response is capped at 10 MB,
-// which a couple of dozen inlined logos would reach.
+// URL, never inlined image data: a callable response is capped at 10 MB. (D7
+// later removed the base64 logo from stored snapshots altogether.)
 
 import { onCall, type CallableRequest } from "firebase-functions/v2/https";
 import { db } from "../shared/admin";

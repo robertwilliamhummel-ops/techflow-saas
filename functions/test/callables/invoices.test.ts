@@ -168,8 +168,9 @@ describe("createInvoice", () => {
     expect(data.tenantSnapshot.etransferEmail).toBe("pay@acme.test");
     expect(data.tenantSnapshot.chargeCustomerCardFees).toBe(false);
     expect(data.tenantSnapshot.cardFeePercent).toBe(2.4);
-    // Logo is null because meta.logoUrl is null
-    expect(data.tenantSnapshot.logo).toBeNull();
+    // No logo because meta.logoUrl is null; no base64 copy is ever stored (D7).
+    expect(data.tenantSnapshot.logoUrl).toBeNull();
+    expect(data.tenantSnapshot).not.toHaveProperty("logo");
 
     // Pay token is a valid JWT
     expect(data.payToken).toBeTruthy();

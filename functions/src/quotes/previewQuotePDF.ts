@@ -12,6 +12,7 @@ import {
 import { defineSecret } from "firebase-functions/params";
 import { db } from "../shared/admin";
 import { readClaims, requireTenant } from "../shared/auth";
+import { pdfLogoDataUrl } from "../shared/logo";
 import { requireFeature } from "../shared/requireFeature";
 import { RATE_LIMITS, enforceRateLimit } from "../shared/rateLimit";
 import { withSentryCallable } from "../shared/withSentry";
@@ -48,13 +49,20 @@ export async function previewQuotePDFHandler(
   }
   const quote = snap.data() as Record<string, unknown>;
 
-  const snapshot = quote.tenantSnapshot as Record<string, unknown> | undefined;
-  if (!snapshot) {
+  const frozenSnapshot = quote.tenantSnapshot as
+    | Record<string, unknown>
+    | undefined;
+  if (!frozenSnapshot) {
     throw new HttpsError(
       "failed-precondition",
       "Quote is missing tenantSnapshot.",
     );
   }
+  // D7 — the snapshot keeps only the logo copy's URL; the PDF needs the bytes.
+  const snapshot = {
+    ...frozenSnapshot,
+    logo: await pdfLogoDataUrl(frozenSnapshot, tenantId),
+  };
 
   const customer = (quote.customer as Record<string, unknown> | undefined) ?? {};
 

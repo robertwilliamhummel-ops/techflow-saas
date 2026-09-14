@@ -39,6 +39,7 @@
 | D4 | **Per-line tax.** Every line item stores `taxable` (defaults to the document's `applyTax`); totals carry `taxableSubtotal` and `taxes[]` (one entry per tax) alongside aggregate `taxRate`/`taxAmount`. PDFs render one row per tax and mark exempt lines when an invoice mixes both. | Mixed taxable/exempt supplies are common (e.g. HST-exempt dental services). Invoices are frozen legal documents, so the shape had to be right before real data. `taxes[]` makes GST+PST/QST provinces an additive change; rates stay single-tax (GTA HST) for MVP. | `functions/src/shared/invoice.ts` (`validateLineItems`, `resolveLineItems`, `computeInvoiceTotals`), `pdf-service/src/templates/*.hbs` |
 | D5 | **Amazon SES replaces Resend** (supersedes Decision #3 below). React Email templates unchanged; transport, idempotency, bounce feedback, and owner incident alerts rebuilt on SES. | Production SES access with `techflowsolutions.ca` verified; SES tenant isolation gives per-tenant reputation protection; one email credential location (Cloud Functions only). | `functions/src/emails/send.ts`, `sesEvents.ts`, `functions/src/stripe/onPaymentIncidentCreated.ts` — see Phase 2 "React Email + Amazon SES" |
 | D6 | **Node.js 24 everywhere** (replaces the planned Node 22): Cloud Functions runtime `nodejs24`, `pdf-service` image `node:24-slim`, Vercel `engines.node: 24.x`, local dev on 24. | Node 22 is deprecated for Cloud Functions on 2027-04-30 — a second forced migration within ~7 months. Node 24 is GA in Cloud Run functions and firebase-tools 15 (deprecation 2028-04-30), is Vercel's default, and firebase-admin 14 and Puppeteer support it. | `firebase.json`, `functions/package.json`, `pdf-service/Dockerfile`, `package.json` engines |
+| D7 | **Invoices and quotes store no base64 logo** (2026-09-14, supersedes A-06's `logo` field). `tenantSnapshot` keeps only `logoUrl` — the immutable Storage copy from A-06 — and `logoContentType`. The PDF paths fetch that copy and inline it as a data URL for the pdf-service: `previewInvoicePDF` and `previewQuotePDF`, and the `/api/pdf` routes once the caller is authorized. Only a Storage download URL for the same tenant's `snapshots/logos/` object is fetched. | The Firestore web SDK can't select fields (firebase-js-sdk issue #212), so every dashboard and list listener downloaded each invoice's whole logo — up to 500 KB, about 670 KB as base64 — and one logo alone put a document most of the way to Firestore's 1 MiB limit. The Storage copy is content-addressed, never overwritten, and clients can't write or delete it, so a PDF still shows the logo its document was issued with. | `functions/src/shared/logo.ts` (`pdfLogoDataUrl`), `src/lib/pdf/logo.ts` (`withPdfLogo`), `previewInvoicePDF.ts`, `previewQuotePDF.ts`, `src/app/api/pdf/*/route.ts` |
 
 ### As-built conventions (override older code samples in this plan)
 
@@ -93,7 +94,7 @@ Fixed: A-04 (2026-09-13) — `processRecurringInvoices` queries `collectionGroup
 
 Fixed: A-05 (2026-09-13) — customers could see draft invoices through `getCustomerInvoices`, `getCustomerInvoiceDetail`, and the Firestore customer branch, and list rows carried each invoice's full base64 logo (a callable response is capped at 10 MB). Customer-visible statuses now live in `functions/src/shared/customerVisibility.ts` as allow-lists (drafts and any future status stay hidden until listed); `firestore.rules` mirrors them for invoices and quotes. The list pages through the existing `(customer.email, createdAt)` index and filters while paging — no new composite index, still fills to 100 rows, at most 10 pages scanned — and returns `tenantBranding.logoUrl` instead of the base64 logo. The detail callable answers not-found for drafts. Covered by the rules tests (every visible status, drafts denied, members still read drafts) and `customerFacing.test.ts`.
 
-Fixed: A-06 (2026-09-13) — invoice, quote, and recurring emails embedded the snapshot's base64 logo (up to 500 KB). Gmail clips any email over 102 KB and embedded base64 images are the most common cause, and support for `data:` images varies by client. `functions/src/shared/logo.ts` now freezes the logo two ways at creation (`createInvoice`, `createQuote`, `convertQuoteToInvoice`, `processRecurringInvoices`): the base64 `logo` for PDFs, plus an immutable copy at `tenants/{t}/snapshots/logos/{sha256}.{ext}` whose token URL is stored as `logoUrl` with `logoContentType`. The path comes from the bytes and the download token from the tenant and hash, so a copy is never overwritten and concurrent creates can't rotate a token another document stored. Emails use `emailLogoUrl()`: the hosted copy for PNG, JPEG, GIF, and WebP; the business name for SVG (Gmail's apps don't show SVG for Google accounts). Logo URLs that don't return an image are now rejected. Covered by `functions/test/callables/logoSnapshot.test.ts` (the URL serves the bytes without auth, stable across documents, email HTML never contains `data:image`) and `inlineLogo.test.ts`.
+Fixed: A-06 (2026-09-13) — invoice, quote, and recurring emails embedded the snapshot's base64 logo (up to 500 KB). Gmail clips any email over 102 KB and embedded base64 images are the most common cause, and support for `data:` images varies by client. `functions/src/shared/logo.ts` now freezes the logo two ways at creation (`createInvoice`, `createQuote`, `convertQuoteToInvoice`, `processRecurringInvoices`): the base64 `logo` for PDFs, plus an immutable copy at `tenants/{t}/snapshots/logos/{sha256}.{ext}` whose token URL is stored as `logoUrl` with `logoContentType`. The path comes from the bytes and the download token from the tenant and hash, so a copy is never overwritten and concurrent creates can't rotate a token another document stored. Emails use `emailLogoUrl()`: the hosted copy for PNG, JPEG, GIF, and WebP; the business name for SVG (Gmail's apps don't show SVG for Google accounts). Logo URLs that don't return an image are now rejected. Covered by `functions/test/callables/logoSnapshot.test.ts` (the URL serves the bytes without auth, stable across documents, email HTML never contains `data:image`) and `inlineLogo.test.ts`. D7 (2026-09-14) later dropped the base64 copy: snapshots keep only the hosted copy, which PDF renders inline.
 
 Fixed: A-07 (2026-09-13) — the custom-domain cache keys `domain:{host}` contained `:` and `.`, but Vercel only accepts keys matching `^[\w-]+$` (≤ 256 chars), so every write was rejected and every portal request on a custom domain hit Firestore. `domainCacheKey()` (identical in `src/lib` and `functions/src/shared`, pinned by a test that imports both) encodes the host as `domain_` + host with `.` → `_` — hostnames can't contain `_`, so keys can't collide — and returns null for anything that isn't a plain hostname or would exceed 256 chars, which then skips the cache. Same pass: Vercel renamed Edge Config to **Global Config** (same store; old names keep working, but connecting a store now creates `GLOBAL_CONFIG`), so the proxy reads through the `@vercel/global-config` SDK with `GLOBAL_CONFIG` falling back to `EDGE_CONFIG`, writes use `/v1/global-config`, and the proxy's self-heal write is limited to once per host per instance per 10 minutes (writes are billed and capped at 100/hour on Pro). Covered by `functions/test/shared/domainCacheKey.test.ts`, `src/lib/__tests__/edgeConfig.test.ts`, `src/__tests__/proxySelfHeal.test.ts`, and the updated proxy and `setupCustomDomain` tests.
 
@@ -420,12 +421,12 @@ platformAdmins/{uid}          { uid, email, grantedAt, grantedBy }
   tenantSnapshot: {
     logoUrl, logoContentType,              // ← A-06: token URL of the immutable Storage copy
                                            //   (tenants/{t}/snapshots/logos/{sha256}.{ext})
-                                           //   and its MIME type — emails and the portal
-    name, logo, address,                   // ← `logo` is an inlined base64 data URL frozen at
-                                           //   snapshot time. See "Immutable logo snapshot" in
-                                           //   Phase 6 — storing the current mutable Storage
-                                           //   URL breaks historical PDFs when the tenant
-                                           //   rotates or deletes their logo file.
+                                           //   and its MIME type — emails and the portal link
+                                           //   to it; PDF renders inline it (D7). Never the
+                                           //   tenant's current, mutable logo file: that
+                                           //   breaks historical documents when the tenant
+                                           //   replaces or deletes it. No base64 copy (D7).
+    name, address,
     primaryColor, secondaryColor,
     fontFamily, faviconUrl,                // ← new: full branding
     taxRate, taxName, businessNumber,
@@ -523,7 +524,7 @@ Customer-visible statuses (A-05): invoices `sent`, `unpaid`, `overdue`, `partial
 | `tenants/{t}/**` (snapshots, anything nested) | members of `t` | none (Admin SDK only) |
 | anything else | none | none |
 
-Customers, email clients, and the PDF service never read Storage through the rules — they use token-bearing download URLs (`meta.logoUrl`, and the immutable `tenantSnapshot.logoUrl` copies under `tenants/{t}/snapshots/logos/`, A-06) or the base64 logo in the snapshot. `src/lib/storage/uploadBrandingAsset.ts` maps content type to extension with the same allowlist and refuses anything else before uploading.
+Customers, email clients, and the PDF service never read Storage through the rules — they use token-bearing download URLs (`meta.logoUrl`, and the immutable `tenantSnapshot.logoUrl` copies under `tenants/{t}/snapshots/logos/`, A-06). The PDF paths fetch that copy server-side and hand the pdf-service a data URL (D7). `src/lib/storage/uploadBrandingAsset.ts` maps content type to extension with the same allowlist and refuses anything else before uploading.
 
 ### Critical rule properties
 1. **Customer access is read-only.** The `|| email_verified` branch only appears in `allow read`, never in `allow write`.
@@ -563,7 +564,7 @@ A simpler fallback if the `request.query` pattern proves fragile: have a Cloud F
 
 **Decision deferred to Phase 1 implementation:** start with the Cloud Function approach (`getCustomerInvoices`), migrate to `collectionGroup` + rules if the function hits latency issues.
 
-**As built:** the Cloud Function approach. `getCustomerInvoices` pages through the `(customer.email, createdAt desc)` collection-group index, keeps only customer-visible statuses (drafts are never listed, A-05), stops at 100 rows with at most 10 pages scanned, and returns each row's `tenantSnapshot.logoUrl`, never the inlined base64 logo. `getCustomerInvoiceDetail` answers not-found for drafts. `getCustomerQuotes` and `getCustomerQuoteDetail` apply the same rules to quotes over the `(customer.email, createdAt desc)` quotes index (P6), and `CustomerPortalContext` loads both lists together. No client-side collection-group rule exists.
+**As built:** the Cloud Function approach. `getCustomerInvoices` pages through the `(customer.email, createdAt desc)` collection-group index, keeps only customer-visible statuses (drafts are never listed, A-05), stops at 100 rows with at most 10 pages scanned, and returns each row's `tenantSnapshot.logoUrl`, never inlined image data. `getCustomerInvoiceDetail` answers not-found for drafts. `getCustomerQuotes` and `getCustomerQuoteDetail` apply the same rules to quotes over the `(customer.email, createdAt desc)` quotes index (P6), and `CustomerPortalContext` loads both lists together. No client-side collection-group rule exists.
 
 ### Data migration
 No migration needed. Existing Firestore data is 73 test invoices — discarded. Fresh start in the new Firebase project.
@@ -581,7 +582,7 @@ No migration needed. Existing Firestore data is 73 test invoices — discarded. 
   - **Note:** the Stripe webhook does NOT require a `collectionGroup('meta')` index because we use the `stripeAccounts/{stripeAccountId}` reverse lookup collection instead. Direct doc read, no composite index needed.
 - **Firebase Storage rules deployed (`storage.rules`)** — separate from Firestore rules. Firebase Storage has its own rules file. Required rules:
   - Tenant users can read files under `tenants/{tenantId}/` where their token's `tenantId` matches. As built, client writes are limited to owner/admin logo and favicon uploads; everything else is Admin SDK only (see "Security Rules (as built)" → Storage)
-  - Customers cannot access Storage directly. Logos and favicons are served via **Firebase Storage public download URLs** (generated by `getDownloadURL()` at upload time). The download URL includes an access token in the query string and is publicly fetchable without Storage rules, which is why the URL itself (not the Storage path) must be what's stored in `meta.logoUrl` / `meta.faviconUrl` and fetched when `createInvoice` inlines it into `tenantSnapshot.logo`. If the Storage path is stored instead, customers' PDFs and portal pages will silently 403 on the logo.
+  - Customers cannot access Storage directly. Logos and favicons are served via **Firebase Storage public download URLs** (generated by `getDownloadURL()` at upload time). The download URL includes an access token in the query string and is publicly fetchable without Storage rules, which is why the URL itself (not the Storage path) must be what's stored in `meta.logoUrl` / `meta.faviconUrl` and fetched when `createInvoice` copies it to the immutable `tenantSnapshot.logoUrl` copy (A-06, D7). If the Storage path is stored instead, customers' PDFs and portal pages will silently 403 on the logo.
   - No unauthenticated access to the Storage bucket itself
 - Custom-claim helpers in Cloud Functions for signup + role changes
 - Platform admin user created (Reggie) with the `platformAdmin: true` claim (`functions/src/scripts/setPlatformAdmin.ts`)
@@ -899,7 +900,7 @@ All invoice and quote mutations go through dedicated callables; direct client wr
 
 1. `readClaims` → `requireTenant`; `requireFeature(tenantId, "invoices")` returns the resolved feature map.
 2. `validateInvoiceInput` — customer name/email (email lowercased at the write boundary, C2); 1–100 line items through the shared `validateLineItems`, where each line's `taxable` defaults to `applyTax` (D4); `dueDate` and optional `issueDate` as `YYYY-MM-DD`; notes ≤ 2000 characters.
-3. Read `meta/settings`. `buildTenantSnapshot(meta, features)` freezes branding, tax, currency, e-Transfer email, and the effective surcharge flag (D3); `applyLogoToSnapshot` (A-06) embeds the logo as a ≤ 500 KB base64 data URL for the PDF, stores the same bytes as an immutable Storage copy for emails and the portal (`logoUrl`, `logoContentType`), and fails the whole create if the logo can't be fetched, isn't an image, or can't be stored.
+3. Read `meta/settings`. `buildTenantSnapshot(meta, features)` freezes branding, tax, currency, e-Transfer email, and the effective surcharge flag (D3); `applyLogoToSnapshot` (A-06) stores the logo (≤ 500 KB) as an immutable Storage copy and freezes its URL and type on the snapshot (`logoUrl`, `logoContentType`) — no base64 copy (D7) — and fails the whole create if the logo can't be fetched, isn't an image, or can't be stored.
 4. `computeLineItems` and `computeInvoiceTotals(lineItems, { rate: meta.taxRate, name: meta.taxName })` — server math only; client totals are never accepted.
 5. One transaction: increment `counters/invoice.value`, create `invoices/{prefix}-{0001}` with `status: 'draft'`, and sign the pay-token JWT (`PAY_TOKEN_SECRET`, 60 days, `payTokenVersion: 1`).
 
@@ -1071,7 +1072,7 @@ functions/src/emails/
 
 **Payment incident alerts:** the Stripe Connect webhook writes `paymentIncidents/{kind}_{stripeObjectId}` (`auto-refund-version-mismatch`, `auto-refund-amount-mismatch`, `auto-refund-duplicate-payment`, `auto-refund-not-payable`, `dispute-created`, `dispute-lost`, `tenant-mismatch`). The `onPaymentIncidentCreated` trigger emails every active owner when the document is created; `tenant-mismatch` is logged, not emailed. Auto-refund emails say "Refund needed" and ask for a manual refund when the automatic refund failed. Deterministic ids mean a webhook redelivery updates the doc rather than re-triggering.
 
-**`<TenantEmailLayout>` contract:** props `tenant` (name, address, logoUrl, emailFooter, primaryColor), `preview`, `children`. The header shows the logo (max 200×60px) or the tenant name; the footer shows name, address, `emailFooter`, and "Questions? Reply to this email." `color-scheme: light` meta tags prevent Apple Mail and Outlook dark-mode inversion. Senders pass `emailLogoUrl(snapshot)` (A-06): the hosted immutable copy for PNG, JPEG, GIF, or WebP logos, otherwise null so the header shows the name. Never the base64 logo — it can push an email past Gmail's 102 KB clipping limit on its own.
+**`<TenantEmailLayout>` contract:** props `tenant` (name, address, logoUrl, emailFooter, primaryColor), `preview`, `children`. The header shows the logo (max 200×60px) or the tenant name; the footer shows name, address, `emailFooter`, and "Questions? Reply to this email." `color-scheme: light` meta tags prevent Apple Mail and Outlook dark-mode inversion. Senders pass `emailLogoUrl(snapshot)` (A-06): the hosted immutable copy for PNG, JPEG, GIF, or WebP logos, otherwise null so the header shows the name. Never inline image data — a base64 logo can push an email past Gmail's 102 KB clipping limit on its own.
 
 **Email design principles (enforced by convention and code review):**
 
@@ -1531,7 +1532,7 @@ Rationale: the pay-token is bearer-auth in the URL path. Standard URLs leak via 
 
 **Render order (top to bottom):**
 
-1. **Branded header** — tenant logo (from `tenantSnapshot.logo`), tenant name. Background uses `tenantSnapshot.primaryColor` with `computeForeground()` for the text. Height ~80px.
+1. **Branded header** — tenant logo (from `tenantSnapshot.logoUrl`, the immutable hosted copy — D7), tenant name. Background uses `tenantSnapshot.primaryColor` with `computeForeground()` for the text. Height ~80px.
 
 2. **Invoice summary card** — invoice number, issue date, due date, total in large type. Line items collapsed by default with an "Itemized view" toggle that expands the full table. Customer name shown as "Billed to: {name}".
 
@@ -2000,7 +2001,7 @@ Streamed back through Next.js to the caller
 
 ### Cloud Run `pdf-service` (ported from old repo)
 
-- **Reads branding from the `tenantSnapshot` passed in by the proxy — NOT from Firestore.** This is critical: the Phase 0 decision locks invoices as frozen legal documents. A contractor who rebranded after sending this invoice must not have the PDF retroactively change. The snapshot contains: name, logo (base64), address, primaryColor, secondaryColor, fontFamily, faviconUrl, taxRate, taxName, businessNumber, emailFooter, currency. Cloud Run also never reads Firestore — it's a pure render service.
+- **Reads branding from the `tenantSnapshot` passed in by the proxy — NOT from Firestore.** This is critical: the Phase 0 decision locks invoices as frozen legal documents. A contractor who rebranded after sending this invoice must not have the PDF retroactively change. The snapshot contains: name, logo (a data URL the caller inlines from the snapshot's hosted copy, D7), address, primaryColor, secondaryColor, fontFamily, faviconUrl, taxRate, taxName, businessNumber, emailFooter, currency. Cloud Run also never reads Firestore — it's a pure render service.
 - Renders an HTML template with Tailwind-compiled CSS inline, using snapshot values
 - Returns PDF bytes
 
@@ -2064,18 +2065,20 @@ Either way, the `tenantSnapshot.logoUrl` stored *must not* be a mutable Firebase
 
 **As built (A-06): both options, each for what it's good at.** `applyLogoToSnapshot` in `functions/src/shared/logo.ts` stores Option A's base64 `logo` (PDFs render with no network fetch) and a variant of Option B for everything else: one content-addressed copy per distinct logo at `tenants/{tenantId}/snapshots/logos/{sha256}.{ext}` rather than per invoice, so Storage grows with logo changes, not invoice count. The object carries `cacheControl: public, max-age=31536000, immutable` and a download token derived from the tenant and hash, so re-saving the same logo never rotates a token an earlier document stored; the URL uses the same format as firebase-admin's `getDownloadURL`. Clients cannot write or delete under `snapshots/` (`storage.rules`). Emails and the portal list read `logoUrl`; PDFs read `logo`.
 
+**D7 (2026-09-14): the base64 `logo` is no longer stored.** Browsers read whole documents — the Firestore web SDK can't select fields — so every dashboard and list listener was downloading each invoice's logo. Snapshots now keep only `logoUrl` and `logoContentType`, and the PDF paths inline the copy as a data URL at render time: `pdfLogoDataUrl` in `functions/src/shared/logo.ts` for `previewInvoicePDF` / `previewQuotePDF`, and `withPdfLogo` in `src/lib/pdf/logo.ts` for the `/api/pdf` routes, which fetch it only after the caller is authorized. Both fetch only a Storage download URL for the same tenant's `snapshots/logos/{sha256}.{ext}` object, with the 500 KB and image-type checks. If the copy can't be loaded the render fails with a retryable error instead of producing a PDF without the logo. The pdf-service contract is unchanged: it still receives `snapshot.logo` as a data URL.
+
 ### Porting checklist (from old Vite repo's Cloud Run service)
 
 1. Copy the existing `pdf-service/` directory into the new monorepo (or keep it in a separate repo — either works for Cloud Run).
 2. Update the HTML template to read from `tenantSnapshot` fields (new: `primaryColor`, `secondaryColor`, `fontFamily`, `faviconUrl`, `currency`, `emailFooter`). Old template only knew about `name`, `logo`, `address`, `taxRate`.
-3. ~~Rename `logo` → `logoUrl` in the template~~ — superseded by the immutable logo snapshot: templates read the base64 `tenantSnapshot.logo`.
+3. ~~Rename `logo` → `logoUrl` in the template~~ — superseded by the immutable logo snapshot: templates read `snapshot.logo`, a data URL the caller inlines from `tenantSnapshot.logoUrl` at render time (D7).
 4. Add `X-Api-Key` header check at the Express middleware level. Reject missing/wrong key with 401.
 5. Remove any Firebase Admin SDK or Firestore code from Cloud Run (it's not needed — proxy sends all data).
 6. Redeploy under three new service names: `pdf-service-dev`, `pdf-service-staging`, `pdf-service-prod`.
 
 ### Per-tenant branding in PDFs
 HTML template reads from the **invoice's `tenantSnapshot`** (frozen at creation time):
-- Logo (from `tenantSnapshot.logo`, the base64 data URL inlined at creation)
+- Logo (`snapshot.logo`: the caller inlines the immutable copy at `tenantSnapshot.logoUrl` as a data URL at render time, D7)
 - Business name in header
 - Address in footer
 - primaryColor, secondaryColor for accent styling (used sparingly — see design rules below)

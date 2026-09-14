@@ -49,6 +49,13 @@ afterEach(() => {
 import { GET as invoiceGET } from "../invoice/route";
 import { GET as quoteGET } from "../quote/route";
 
+// A snapshot logo copy as Cloud Functions writes it (D7).
+const LOGO_URL =
+  "https://firebasestorage.googleapis.com/v0/b/techflow-saas-prod.appspot.com/o/" +
+  encodeURIComponent(`tenants/acme/snapshots/logos/${"b".repeat(64)}.png`) +
+  "?alt=media&token=tok";
+const LOGO_PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
 function makeRequest(
   url: string,
   headers: Record<string, string> = {},
@@ -60,6 +67,29 @@ function seedTenantEntitlements(tenantId: string, features: Record<string, boole
   store.set(`tenants/${tenantId}/entitlements/current`, { features });
 }
 
+function snapshot(extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    version: 1,
+    name: "Acme",
+    logoUrl: null,
+    logoContentType: null,
+    address: null,
+    primaryColor: "#667eea",
+    secondaryColor: "#764ba2",
+    fontFamily: "Inter",
+    faviconUrl: null,
+    taxRate: 0,
+    taxName: "",
+    businessNumber: null,
+    emailFooter: null,
+    currency: "CAD",
+    chargeCustomerCardFees: false,
+    cardFeePercent: 0,
+    etransferEmail: null,
+    ...extra,
+  };
+}
+
 function seedInvoice(
   tenantId: string,
   invoiceId: string,
@@ -69,24 +99,7 @@ function seedInvoice(
     customer: { name: "Jane", email: "jane@example.com", phone: null },
     lineItems: [{ description: "x", quantity: 1, rate: 1, amount: 1 }],
     totals: { subtotal: 1, taxRate: 0, taxAmount: 0, total: 1 },
-    tenantSnapshot: {
-      version: 1,
-      name: "Acme",
-      logo: null,
-      address: null,
-      primaryColor: "#667eea",
-      secondaryColor: "#764ba2",
-      fontFamily: "Inter",
-      faviconUrl: null,
-      taxRate: 0,
-      taxName: "",
-      businessNumber: null,
-      emailFooter: null,
-      currency: "CAD",
-      chargeCustomerCardFees: false,
-      cardFeePercent: 0,
-      etransferEmail: null,
-    },
+    tenantSnapshot: snapshot(),
     status: "sent",
     issueDate: "2026-04-26",
     dueDate: "2026-05-26",
@@ -105,24 +118,7 @@ function seedQuote(
     customer: { name: "Jane", email: "jane@example.com", phone: null },
     lineItems: [{ description: "x", quantity: 1, rate: 1, amount: 1 }],
     totals: { subtotal: 1, taxRate: 0, taxAmount: 0, total: 1 },
-    tenantSnapshot: {
-      version: 1,
-      name: "Acme",
-      logo: null,
-      address: null,
-      primaryColor: "#667eea",
-      secondaryColor: "#764ba2",
-      fontFamily: "Inter",
-      faviconUrl: null,
-      taxRate: 0,
-      taxName: "",
-      businessNumber: null,
-      emailFooter: null,
-      currency: "CAD",
-      chargeCustomerCardFees: false,
-      cardFeePercent: 0,
-      etransferEmail: null,
-    },
+    tenantSnapshot: snapshot(),
     status: "sent",
     issueDate: "2026-04-26",
     validUntil: "2026-05-26",
@@ -138,6 +134,19 @@ function pdfReply(): void {
       headers: { "content-type": "application/pdf" },
     }),
   );
+}
+
+function logoReply(): void {
+  fetchMock.mockResolvedValueOnce(
+    new Response(LOGO_PNG, {
+      status: 200,
+      headers: { "content-type": "image/png" },
+    }),
+  );
+}
+
+function postedBody(callIndex: number): { snapshot: Record<string, unknown>; data: Record<string, unknown> } {
+  return JSON.parse((fetchMock.mock.calls[callIndex][1] as RequestInit).body as string);
 }
 
 describe("GET /api/pdf/invoice", () => {
@@ -223,11 +232,87 @@ describe("GET /api/pdf/invoice", () => {
     expect(url).toBe("https://pdf.example.test/render/invoice");
     const headers = new Headers((init as RequestInit).headers);
     expect(headers.get("x-api-key")).toBe("secret-key");
-    const body = JSON.parse((init as RequestInit).body as string);
+    const body = postedBody(0);
     expect(body.snapshot.name).toBe("Acme");
+    expect(body.snapshot.logo).toBeNull();
     expect(body.data.invoiceId).toBe("INV-1");
     // payUrl is built from NEXT_PUBLIC_APP_URL + payToken.
     expect(body.data.payUrl).toBe("https://app.example.test/pay/pay-tok-1");
+  });
+
+  it("D7: inlines the snapshot's logo copy for the PDF service", async () => {
+    seedTenantEntitlements("acme");
+    seedInvoice("acme", "INV-1", {
+      tenantSnapshot: snapshot({ logoUrl: LOGO_URL, logoContentType: "image/png" }),
+    });
+    verifyIdToken.mockResolvedValueOnce({ uid: "u1", tenantId: "acme" });
+    logoReply();
+    pdfReply();
+
+    const res = await invoiceGET(
+      makeRequest("https://app.example.test/api/pdf/invoice?tenantId=acme&invoiceId=INV-1", {
+        authorization: "Bearer good",
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(fetchMock.mock.calls[0][0]).toBe(LOGO_URL);
+    expect(fetchMock.mock.calls[1][0]).toBe("https://pdf.example.test/render/invoice");
+    expect(postedBody(1).snapshot.logo).toBe(
+      `data:image/png;base64,${LOGO_PNG.toString("base64")}`,
+    );
+  });
+
+  it("D7: never fetches the logo for a caller who may not see the invoice", async () => {
+    seedTenantEntitlements("acme");
+    seedInvoice("acme", "INV-1", {
+      tenantSnapshot: snapshot({ logoUrl: LOGO_URL, logoContentType: "image/png" }),
+    });
+    verifyIdToken.mockResolvedValueOnce({ uid: "u1", tenantId: "other" });
+
+    const res = await invoiceGET(
+      makeRequest("https://app.example.test/api/pdf/invoice?tenantId=acme&invoiceId=INV-1", {
+        authorization: "Bearer good",
+      }),
+    );
+
+    expect(res.status).toBe(403);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("D7: 502 when the logo copy can't be loaded, without calling the PDF service", async () => {
+    seedTenantEntitlements("acme");
+    seedInvoice("acme", "INV-1", {
+      tenantSnapshot: snapshot({ logoUrl: LOGO_URL, logoContentType: "image/png" }),
+    });
+    verifyIdToken.mockResolvedValueOnce({ uid: "u1", tenantId: "acme" });
+    fetchMock.mockResolvedValueOnce(new Response("", { status: 503 }));
+
+    const res = await invoiceGET(
+      makeRequest("https://app.example.test/api/pdf/invoice?tenantId=acme&invoiceId=INV-1", {
+        authorization: "Bearer good",
+      }),
+    );
+
+    expect(res.status).toBe(502);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("D7: 409 for a logo URL outside the tenant's snapshot copies, without fetching it", async () => {
+    seedTenantEntitlements("acme");
+    seedInvoice("acme", "INV-1", {
+      tenantSnapshot: snapshot({ logoUrl: "https://evil.example/logo.png" }),
+    });
+    verifyIdToken.mockResolvedValueOnce({ uid: "u1", tenantId: "acme" });
+
+    const res = await invoiceGET(
+      makeRequest("https://app.example.test/api/pdf/invoice?tenantId=acme&invoiceId=INV-1", {
+        authorization: "Bearer good",
+      }),
+    );
+
+    expect(res.status).toBe(409);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("A-12: a void invoice's PDF gets no pay link", async () => {
@@ -242,7 +327,7 @@ describe("GET /api/pdf/invoice", () => {
       }),
     );
     expect(res.status).toBe(200);
-    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    const body = postedBody(0);
     expect(body.data.status).toBe("void");
     expect(body.data.payUrl).toBeNull();
   });
@@ -320,6 +405,28 @@ describe("GET /api/pdf/quote", () => {
     expect(res.status).toBe(200);
     const [url] = fetchMock.mock.calls[0];
     expect(url).toBe("https://pdf.example.test/render/quote");
+  });
+
+  it("D7: inlines the snapshot's logo copy for the PDF service", async () => {
+    seedTenantEntitlements("acme");
+    seedQuote("acme", "QT-1", {
+      tenantSnapshot: snapshot({ logoUrl: LOGO_URL, logoContentType: "image/png" }),
+    });
+    verifyIdToken.mockResolvedValueOnce({ uid: "u1", tenantId: "acme" });
+    logoReply();
+    pdfReply();
+
+    const res = await quoteGET(
+      makeRequest("https://app.example.test/api/pdf/quote?tenantId=acme&quoteId=QT-1", {
+        authorization: "Bearer good",
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(fetchMock.mock.calls[0][0]).toBe(LOGO_URL);
+    expect(postedBody(1).snapshot.logo).toBe(
+      `data:image/png;base64,${LOGO_PNG.toString("base64")}`,
+    );
   });
 
   it("404 when quote does not exist", async () => {

@@ -12,6 +12,7 @@ import {
   verifyIdToken,
 } from "@/lib/pdf/auth";
 import { PdfLoadError, loadInvoiceForPdf } from "@/lib/pdf/loadDoc";
+import { withPdfLogo } from "@/lib/pdf/logo";
 import { PdfServiceError, proxyToPdfService } from "@/lib/pdf/proxy";
 
 export const runtime = "nodejs";
@@ -43,7 +44,8 @@ export async function GET(req: Request): Promise<Response> {
 
     return await proxyToPdfService({
       path: "/render/invoice",
-      body: loaded.body,
+      // D7 — fetch the logo copy only for a caller allowed to see the invoice.
+      body: await withPdfLogo(loaded.body, tenantId),
       filename: `${invoiceId}.pdf`,
     });
   } catch (err) {

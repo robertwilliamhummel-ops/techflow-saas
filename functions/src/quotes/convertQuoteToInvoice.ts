@@ -67,7 +67,7 @@ export async function convertQuoteToInvoiceHandler(
     throw new Error("Tenant meta not found — corrupt tenant state.");
   }
   const meta = metaSnap.data()!;
-  // Freeze the logo: base64 for the PDF, immutable https copy for emails (A-06).
+  // Freeze the logo as an immutable Storage copy (A-06); PDFs inline it (D7).
   const snapshot = buildTenantSnapshot(meta, features);
   await applyLogoToSnapshot(
     snapshot,

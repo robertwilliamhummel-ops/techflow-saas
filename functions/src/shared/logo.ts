@@ -1,25 +1,35 @@
-// Logo snapshots (Phase 6, A-06).
+// Logo snapshots (Phase 6, A-06, D7).
 //
-// When an invoice or quote is created, the tenant's current logo is frozen two
-// ways on its tenantSnapshot:
-//   - `logo`: a base64 data URL, so the PDF renders the logo the document was
-//     issued with even after the tenant replaces or deletes the file.
-//   - `logoUrl`: an https URL to an immutable copy in Storage, for emails and
-//     the portal. Emails can't carry the base64 logo: Gmail clips messages over
-//     102 KB and a base64 logo alone can exceed that.
+// When an invoice or quote is created, the tenant's current logo is copied to
+// an immutable object in Storage and frozen on the tenantSnapshot as:
+//   - `logoUrl`: a token URL to that copy. Emails and the portal link to it,
+//     and PDF renders inline it as a data URL (pdfLogoDataUrl), because the
+//     pdf-service fetches nothing over the network.
+//   - `logoContentType`: its MIME type.
+//
+// D7: the snapshot no longer carries a base64 copy of the logo. Browsers read
+// whole documents (the Firestore web SDK can't select fields), so a logo of up
+// to 500 KB on every invoice rode along on every dashboard and list read. PDFs
+// still render the logo a document was issued with, because the copy is never
+// overwritten or deleted.
 //
 // The copy lives at tenants/{tenantId}/snapshots/logos/{sha256}.{ext}. The path
 // comes from the bytes, so an object is never overwritten with other content,
 // and its download token comes from the tenant and hash, so two documents
 // created at once with the same logo can't rotate a token the other stored.
-// Clients can't write under snapshots/ (storage.rules); the token URL is public
-// by design, like any image in an email.
+// Clients can't write or delete under snapshots/ (storage.rules); the token URL
+// is public by design, like any image in an email.
 
 import { createHash } from "node:crypto";
 import { HttpsError } from "firebase-functions/v2/https";
 import { getStorage } from "firebase-admin/storage";
 
 export const LOGO_MAX_BYTES = 500 * 1024;
+
+const STORAGE_DOWNLOAD_ORIGIN = "https://firebasestorage.googleapis.com";
+
+const SNAPSHOT_LOGO_PATH =
+  /^tenants\/([^/]+)\/snapshots\/logos\/[a-f0-9]{64}\.[a-z]+$/;
 
 const EXTENSION_BY_TYPE: Record<string, string> = {
   "image/png": "png",
@@ -42,7 +52,6 @@ const EMAIL_SAFE_LOGO_TYPES = new Set([
 ]);
 
 export interface SnapshotLogoFields {
-  logo: string | null;
   logoUrl: string | null;
   logoContentType: string | null;
 }
@@ -52,8 +61,30 @@ interface FetchedLogo {
   contentType: string;
 }
 
+// The Storage emulator's origin in tests and local runs — the same
+// STORAGE_EMULATOR_HOST (scheme included) that downloadUrlFor builds URLs from.
+function storageEmulatorOrigin(): string | null {
+  const host = process.env.STORAGE_EMULATOR_HOST;
+  if (!host) return null;
+  try {
+    return new URL(host).origin;
+  } catch {
+    return null;
+  }
+}
+
+function isStorageEmulatorUrl(url: string): boolean {
+  const origin = storageEmulatorOrigin();
+  if (!origin) return false;
+  try {
+    return new URL(url).origin === origin;
+  } catch {
+    return false;
+  }
+}
+
 async function fetchLogoOrThrow(logoUrl: string): Promise<FetchedLogo> {
-  if (!/^https:\/\//i.test(logoUrl)) {
+  if (!/^https:\/\//i.test(logoUrl) && !isStorageEmulatorUrl(logoUrl)) {
     throw new HttpsError(
       "failed-precondition",
       "Logo URL must use https://. Re-upload the logo in settings.",
@@ -115,13 +146,11 @@ function downloadUrlFor(
   token: string,
 ): string {
   const endpoint =
-    (process.env.STORAGE_EMULATOR_HOST ||
-      "https://firebasestorage.googleapis.com") + "/v0";
+    (process.env.STORAGE_EMULATOR_HOST || STORAGE_DOWNLOAD_ORIGIN) + "/v0";
   return `${endpoint}/b/${bucketName}/o/${encodeURIComponent(objectPath)}?alt=media&token=${token}`;
 }
 
-// Fetches the logo and returns it as a base64 data URL. Throws on any failure
-// so callers fail atomically rather than persisting a half-snapshot.
+// Fetches the logo and returns it as a base64 data URL. Throws on any failure.
 export async function inlineLogoOrThrow(logoUrl: string): Promise<string> {
   return toDataUrl(await fetchLogoOrThrow(logoUrl));
 }
@@ -151,7 +180,6 @@ export async function snapshotLogoOrThrow(
       });
     }
     return {
-      logo: toDataUrl(fetched),
       logoUrl: downloadUrlFor(bucket.name, objectPath, token),
       logoContentType: fetched.contentType,
     };
@@ -163,8 +191,8 @@ export async function snapshotLogoOrThrow(
   }
 }
 
-// Freezes the tenant's current logo onto a snapshot (both forms), or clears
-// both when the tenant has no logo.
+// Freezes the tenant's current logo onto a snapshot, or clears it when the
+// tenant has no logo.
 export async function applyLogoToSnapshot(
   snapshot: SnapshotLogoFields,
   tenantId: string,
@@ -172,15 +200,68 @@ export async function applyLogoToSnapshot(
 ): Promise<void> {
   const fields: SnapshotLogoFields = sourceUrl
     ? await snapshotLogoOrThrow(tenantId, sourceUrl)
-    : { logo: null, logoUrl: null, logoContentType: null };
-  snapshot.logo = fields.logo;
+    : { logoUrl: null, logoContentType: null };
   snapshot.logoUrl = fields.logoUrl;
   snapshot.logoContentType = fields.logoContentType;
+  // D7: a base64 copy is never stored, whatever the snapshot was built from.
+  delete (snapshot as SnapshotLogoFields & { logo?: unknown }).logo;
+}
+
+/**
+ * Whether a URL is one of this tenant's snapshot copies: a Storage download URL
+ * (or the emulator's) for tenants/{tenantId}/snapshots/logos/{sha256}.{ext}.
+ */
+export function isSnapshotLogoUrl(url: string, tenantId: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  const origins = [STORAGE_DOWNLOAD_ORIGIN, storageEmulatorOrigin()];
+  if (!origins.includes(parsed.origin)) return false;
+  // /v0/b/{bucket}/o/{object path, URL-encoded}
+  const match = /^\/v0\/b\/[^/]+\/o\/([^/]+)$/.exec(parsed.pathname);
+  if (!match) return false;
+  let objectPath: string;
+  try {
+    objectPath = decodeURIComponent(match[1]);
+  } catch {
+    return false;
+  }
+  const path = SNAPSHOT_LOGO_PATH.exec(objectPath);
+  return path !== null && path[1] === tenantId;
+}
+
+/**
+ * The document's logo as a data URL for the pdf-service (D7), or null when the
+ * document has no logo. Only this tenant's snapshot copies are fetched.
+ */
+export async function pdfLogoDataUrl(
+  snapshot: { logoUrl?: unknown } | null | undefined,
+  tenantId: string,
+): Promise<string | null> {
+  const url = snapshot?.logoUrl;
+  if (typeof url !== "string" || url === "") return null;
+  if (!isSnapshotLogoUrl(url, tenantId)) {
+    throw new HttpsError(
+      "failed-precondition",
+      "This document's logo isn't one of its business's stored logo copies.",
+    );
+  }
+  try {
+    return await inlineLogoOrThrow(url);
+  } catch (err) {
+    throw new HttpsError(
+      "unavailable",
+      `Couldn't load this document's logo. Try again. (${err instanceof Error ? err.message : String(err)})`,
+    );
+  }
 }
 
 // The logo for an email header: the immutable https copy when its format is
-// email-safe, otherwise null (the layout shows the business name). Never the
-// base64 logo.
+// email-safe, otherwise null (the layout shows the business name). Emails only
+// ever link to the hosted copy; they never embed image data.
 export function emailLogoUrl(
   snapshot:
     | { logoUrl?: unknown; logoContentType?: unknown }
