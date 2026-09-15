@@ -1,15 +1,19 @@
 // Feature flag registry. Expanded as phases unlock capabilities.
 // Flags resolved from tenants/{tenantId}/entitlements.features with fall-through to defaults.
+//
+// Y-04 (2026-09-15): every plan includes every feature, so every default is on
+// except card surcharging (D3). A tenant's entitlements can still turn any
+// feature off. Mirrors functions/src/shared/features.ts (pinned by a test).
 
 export const FEATURE_DEFAULTS = {
   invoices: true,
-  recurringInvoices: false,
+  recurringInvoices: true,
   quotes: true,
-  customDomain: false,
-  stripeConnect: false,
-  stripePayments: false,
+  customDomain: true,
+  stripeConnect: true,
+  stripePayments: true,
   etransfer: true,
-  multiCurrency: false,
+  multiCurrency: true,
   // D3 — card surcharging ships disabled (see functions/src/shared/features.ts).
   cardSurcharge: false,
 } as const;

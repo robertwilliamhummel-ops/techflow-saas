@@ -41,6 +41,7 @@
 | D6 | **Node.js 24 everywhere** (replaces the planned Node 22): Cloud Functions runtime `nodejs24`, `pdf-service` image `node:24-slim`, Vercel `engines.node: 24.x`, local dev on 24. | Node 22 is deprecated for Cloud Functions on 2027-04-30 — a second forced migration within ~7 months. Node 24 is GA in Cloud Run functions and firebase-tools 15 (deprecation 2028-04-30), is Vercel's default, and firebase-admin 14 and Puppeteer support it. | `firebase.json`, `functions/package.json`, `pdf-service/Dockerfile`, `package.json` engines |
 | D7 | **Invoices and quotes store no base64 logo** (2026-09-14, supersedes A-06's `logo` field). `tenantSnapshot` keeps only `logoUrl` — the immutable Storage copy from A-06 — and `logoContentType`. The PDF paths fetch that copy and inline it as a data URL for the pdf-service: `previewInvoicePDF` and `previewQuotePDF`, and the `/api/pdf` routes once the caller is authorized. Only a Storage download URL for the same tenant's `snapshots/logos/` object is fetched. | The Firestore web SDK can't select fields (firebase-js-sdk issue #212), so every dashboard and list listener downloaded each invoice's whole logo — up to 500 KB, about 670 KB as base64 — and one logo alone put a document most of the way to Firestore's 1 MiB limit. The Storage copy is content-addressed, never overwritten, and clients can't write or delete it, so a PDF still shows the logo its document was issued with. | `functions/src/shared/logo.ts` (`pdfLogoDataUrl`), `src/lib/pdf/logo.ts` (`withPdfLogo`), `previewInvoicePDF.ts`, `previewQuotePDF.ts`, `src/app/api/pdf/*/route.ts` |
 | D8 | **The pay page checks its link from the browser** (2026-09-14, S-09). `/pay/[token]` still sets the business's tab title and favicon on the server, but the page calls `verifyInvoicePayToken` through the Firebase web SDK rather than from a server component as Phase 3 planned. | With App Check enforced (R-04), every callable rejects a request without an App Check token, and only the browser holds one attested by reCAPTCHA Enterprise. A server render would have to mint a token with the Admin SDK for every anonymous request to `/pay/…` — link unfurlers included — making the Next.js server an attested proxy for anyone and defeating the check. The cost is one callable round trip before the invoice shows. | `src/app/(pay)/pay/[token]/`, `functions/src/portal/verifyInvoicePayToken.ts` |
+| D9 | **Every plan includes every feature** (2026-09-15, Y-04). Every feature default is on except `cardSurcharge`, which stays off under D3. | TechFlow launches with its own business and a few clients, so tiering can wait for real demand. The per-feature switches stay, so one tenant can still have a feature turned off and plans can be tiered later without code changes. With `stripePayments` on, owners and admins without Stripe connected see the billing banner until they connect it. | `src/lib/features.ts`, `functions/src/shared/features.ts` (pinned together by `src/lib/__tests__/features.test.ts`) |
 
 ### As-built conventions (override older code samples in this plan)
 
@@ -1341,15 +1342,16 @@ Mirrors `TenantContext` but scoped to what a customer can see. Loads `getCustome
 Two identical copies must stay in sync: `src/lib/features.ts` (UI gating) and `functions/src/shared/features.ts` (enforcement) — the functions package compiles separately.
 
 ```typescript
+// Y-04 (D9): every plan includes every feature; only card surcharging is off.
 export const FEATURE_DEFAULTS = {
   invoices: true,
-  recurringInvoices: false,
+  recurringInvoices: true,
   quotes: true,
-  customDomain: false,
-  stripeConnect: false,
-  stripePayments: false,
+  customDomain: true,
+  stripeConnect: true,
+  stripePayments: true,
   etransfer: true,
-  multiCurrency: false,
+  multiCurrency: true,
   cardSurcharge: false,   // D3 — card surcharging ships disabled
 } as const;
 
@@ -2414,13 +2416,15 @@ Before launch, run the restore procedure at least once end-to-end:
 |---|---|---|
 | `invoices` | true | Invoice callables, invoice PDF, pay flow |
 | `quotes` | true | Quote callables, quote PDF, `convertQuoteToInvoice` (with `invoices`) |
-| `recurringInvoices` | false | `createRecurringInvoice`; per-tenant check in `processRecurringInvoices` |
-| `stripePayments` | false | Stripe Connect onboarding, `/billing`, billing banner, card checkout |
-| `customDomain` | false | `setupCustomDomain` and `/settings/domain` |
+| `recurringInvoices` | true | `createRecurringInvoice`; per-tenant check in `processRecurringInvoices` |
+| `stripePayments` | true | Stripe Connect onboarding, `/billing`, billing banner, card checkout |
+| `customDomain` | true | `setupCustomDomain` and `/settings/domain` |
 | `cardSurcharge` | false | Card surcharging (D3) — keep off until credit-only card detection exists |
 | `etransfer` | true | Reserved — not checked; e-Transfer display is driven by `meta.etransferEmail` |
-| `stripeConnect` | false | Reserved — not checked anywhere |
-| `multiCurrency` | false | Reserved — not checked; currency is `CAD` \| `USD` per tenant |
+| `stripeConnect` | true | Reserved — not checked anywhere |
+| `multiCurrency` | true | Reserved — not checked; currency is `CAD` \| `USD` per tenant |
+
+Defaults follow D9: every plan includes every feature except card surcharging. A tenant's `entitlements/current.features` can still set any key to `false`.
 
 The April list's `customers` (always on, never gated) and `bookingSystem` (future placeholder) are not in code.
 
