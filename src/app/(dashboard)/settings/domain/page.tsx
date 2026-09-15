@@ -104,8 +104,8 @@ export default function SettingsDomainPage() {
         <CardContent>
           <Alert>
             <AlertDescription>
-              Custom domains aren&rsquo;t included on your current plan. Reply
-              to your TechFlow welcome email to upgrade.
+              Custom domains are turned off for your account. Contact TechFlow
+              support to turn them on.
             </AlertDescription>
           </Alert>
         </CardContent>

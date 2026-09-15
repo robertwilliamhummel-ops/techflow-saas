@@ -97,7 +97,7 @@ export function QuoteDetail({ quoteId }: { quoteId: string }) {
   } else if (!hasFeature("quotes")) {
     body = (
       <Alert>
-        <AlertTitle>Quotes aren&apos;t included in your plan</AlertTitle>
+        <AlertTitle>Quotes are turned off for your account</AlertTitle>
         <AlertDescription>
           Contact TechFlow support to add quotes to your account.
         </AlertDescription>

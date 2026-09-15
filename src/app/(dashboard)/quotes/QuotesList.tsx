@@ -50,7 +50,7 @@ export function QuotesList() {
         <Skeleton className="h-96 rounded-xl" />
       ) : !hasFeature("quotes") ? (
         <Alert>
-          <AlertTitle>Quotes aren&apos;t included in your plan</AlertTitle>
+          <AlertTitle>Quotes are turned off for your account</AlertTitle>
           <AlertDescription>
             Contact TechFlow support to add quotes to your account.
           </AlertDescription>

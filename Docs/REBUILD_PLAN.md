@@ -1616,7 +1616,7 @@ Rationale: the pay-token is bearer-auth in the URL path. Standard URLs leak via 
 
 ### Flow
 
-1. **Tenant opens `/billing`** — gated by the `stripePayments` entitlement. "Your plan doesn't include card payments" (entitlement) and "your Stripe account isn't ready" (`stripeStatus`) are separate states.
+1. **Tenant opens `/billing`** — gated by the `stripePayments` entitlement. "Card payments are turned off for your account" (entitlement — only when switched off for that tenant, since D9 turns it on by default) and "your Stripe account isn't ready" (`stripeStatus`) are separate states.
 2. **`startConnectOnboarding`** (callable, owner/admin) creates the account once and reuses it on later attempts; an account deleted in Stripe (`resource_missing`) is recreated:
    ```typescript
    stripe.accounts.create({

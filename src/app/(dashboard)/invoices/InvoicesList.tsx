@@ -50,7 +50,7 @@ export function InvoicesList() {
         <Skeleton className="h-96 rounded-xl" />
       ) : !hasFeature("invoices") ? (
         <Alert>
-          <AlertTitle>Invoicing isn&apos;t included in your plan</AlertTitle>
+          <AlertTitle>Invoicing is turned off for your account</AlertTitle>
           <AlertDescription>
             Contact TechFlow support to add invoicing to your account.
           </AlertDescription>

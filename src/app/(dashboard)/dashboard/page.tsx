@@ -82,7 +82,7 @@ export default function DashboardPage() {
     return (
       <PageFrame businessName={meta?.name ?? null} showNewInvoice={false}>
         <Alert>
-          <AlertTitle>Invoicing isn&apos;t included in your plan</AlertTitle>
+          <AlertTitle>Invoicing is turned off for your account</AlertTitle>
           <AlertDescription>
             Contact TechFlow support to add invoicing to your account.
           </AlertDescription>

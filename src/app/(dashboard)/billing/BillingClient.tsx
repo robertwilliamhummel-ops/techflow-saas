@@ -62,10 +62,10 @@ export function BillingClient() {
       <div className="p-8 max-w-2xl">
         <h1 className="text-2xl font-semibold">Billing</h1>
         <Alert className="mt-4">
-          <AlertTitle>Card payments aren&apos;t included in your plan</AlertTitle>
+          <AlertTitle>Card payments are turned off for your account</AlertTitle>
           <AlertDescription>
-            Your customers can still pay by e-transfer. Upgrade your plan to
-            accept credit cards through Stripe.
+            Your customers can still pay by e-Transfer. Contact TechFlow support
+            to turn card payments on.
           </AlertDescription>
         </Alert>
       </div>

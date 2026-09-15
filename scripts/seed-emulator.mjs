@@ -112,8 +112,9 @@ async function seedTenantDocs() {
     createdAt: FieldValue.serverTimestamp(),
   });
 
-  // Pro plan = stripePayments enabled. The /billing page checks this feature
-  // before showing the Connect CTA.
+  // Every feature is on by default (decision D9). The seed still sets these
+  // explicitly, so the demo business keeps card payments, recurring invoices
+  // and custom domains even if the defaults change.
   batch.set(db.doc(`tenants/${TENANT_ID}/entitlements/current`), {
     plan: "pro",
     maxInvoicesPerMonth: null,

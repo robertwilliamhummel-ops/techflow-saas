@@ -200,9 +200,9 @@ export function NewDocumentForm({ kind }: { kind: DocumentKind }) {
   } else if (!hasFeature(config.feature)) {
     body = (
       <Alert>
-        <AlertTitle>{config.planName} included in your plan</AlertTitle>
+        <AlertTitle>{config.planName} turned on for your account</AlertTitle>
         <AlertDescription>
-          Contact TechFlow support to add them to your account.
+          Contact TechFlow support to turn them on.
         </AlertDescription>
       </Alert>
     );
