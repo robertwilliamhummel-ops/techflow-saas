@@ -2430,13 +2430,14 @@ The April list's `customers` (always on, never gated) and `bookingSystem` (futur
 
 ### Plan → feature bundles (sketch, not wired yet)
 ```typescript
+// D9: every plan gets the core features from FEATURE_DEFAULTS. A paid plan only
+// turns on advanced features that default to false — for example, a future:
 const PLAN_FEATURES = {
-  free:    { invoices: true, customers: true },
-  starter: { ...PLAN_FEATURES.free, quotes: true },
-  pro:     { ...PLAN_FEATURES.starter, recurringInvoices: true, stripePayments: true },
+  starter: {},                               // core features, no limits
+  pro:     { aiInvoiceFromPhotos: true },    // hypothetical premium key
 };
 ```
-This mapping is consumed by the Stripe subscription webhook (future phase), not at runtime in the app. The app just reads `entitlements.features` and doesn't care how they got there.
+This mapping is consumed by the Stripe subscription webhook (future phase), not at runtime in the app. The app just reads `entitlements.features` and doesn't care how they got there. It never turns a core feature off; turning one off for a single tenant stays a manual override.
 
 ### Platform admin workflow (MVP)
 Until an admin UI exists:
@@ -2582,6 +2583,26 @@ Vercel env vars and Cloud Functions secrets are parallel systems — both must b
 - Never commit `.env*` or `.secret.local` (both gitignored). Secrets live only in Vercel env and Google Secret Manager.
 - Before any `firebase deploy`, run the emulator test suites and verify against a fake tenant (CLAUDE.md).
 - Vercel deploys on git push; Firebase does not — deploy functions, rules, and indexes explicitly per project.
+
+### Ongoing maintenance
+
+A quarterly audit keeps the stack current: research what changed, compare it to the code, fix one thing per commit, and keep this plan in sync.
+
+Quarterly:
+- **Platform deadlines** — the Cloud Functions Node.js runtime (Node 24 is deprecated 2028-04-30, D6), Next.js and Firebase SDK major versions, and the Vercel and Firebase changelogs.
+- **Dependencies** — `npm audit` in the app, `functions`, and `pdf-service`. Next.js and Firebase security advisories get patched when they land, not held for the audit.
+- **Stripe** — new API versions. The SDK pins one on purpose (U-01); upgrade deliberately, and move both webhook endpoints to the same version.
+- **PDF service** — rebuild and redeploy the image for a current Chrome for Testing build (U-02) and base-image patches.
+- **Rules that change outside the code** — Visa and Mastercard surcharge rules (D3), the Interac e-Transfer limit the pay page mentions, and SES sending policies.
+- **Secrets** — rotate the shared secrets on the 90-day cadence above.
+- **Backups** — confirm the scheduled Firestore exports ran, and run a restore drill once a year.
+- **Cost** — review each platform's bill against usage.
+
+Monthly (a few minutes):
+- **Sentry** — new or rising errors, and quota use.
+- **Billing** — Google Cloud budget alerts set once per project; check Vercel, AWS, and Stripe usage.
+- **SES reputation** — AWS puts an account under review at a 5% bounce rate or 0.1% complaint rate and can pause sending at about 10% or 0.5%; keep CloudWatch alarms well below those.
+- **Domains** — registrar auto-renew on, and tenant custom domains still verified.
 
 ---
 
