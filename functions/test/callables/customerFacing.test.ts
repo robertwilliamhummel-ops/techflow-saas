@@ -539,30 +539,99 @@ describe("verifyInvoicePayToken", () => {
     validToken = await seedTenantAndInvoice();
   });
 
-  it("returns ok for a valid payable token", async () => {
+  it("S-09: returns what the pay page shows — dates, lines, business, and the ways to pay", async () => {
+    await testDb.doc(`tenants/${TENANT}/meta/settings`).update({
+      stripeStatus: { chargesEnabled: true },
+    });
+
     // No auth required for this callable
     const result = await verifyInvoicePayTokenHandler(
       fakeRequest({ token: validToken }, null),
     );
-    expect(result.outcome).toBe("ok");
-    if (result.outcome === "ok") {
-      expect(result.invoice.invoiceId).toBe("INV-0001");
-      expect(result.invoice.totals.total).toBe(113);
-    }
+
+    expect(result).toEqual({
+      outcome: "ok",
+      invoice: {
+        invoiceId: "INV-0001",
+        tenantId: TENANT,
+        invoiceNumber: "INV-0001",
+        status: "sent",
+        issueDate: "2026-04-15",
+        dueDate: "2026-05-15",
+        customerName: "Jane Doe",
+        lineItems: [
+          { description: "Service call", quantity: 1, rate: 100, taxable: true, amount: 100 },
+        ],
+        totals: { subtotal: 100, taxAmount: 13, total: 113, taxes: [] },
+        business: {
+          name: "Acme Plumbing",
+          logoUrl: null,
+          address: "123 Main St",
+          primaryColor: "#667eea",
+          businessNumber: "123456789",
+          currency: "CAD",
+          emailFooter: null,
+        },
+        amountDueCents: 11_300,
+        etransfer: { email: "pay@acme.test" },
+        card: { feePercent: 0, feeCents: 0, totalCents: 11_300 },
+      },
+    });
+  });
+
+  it("S-09: offers card only once the business's Stripe account can take charges", async () => {
+    const pending = await verifyInvoicePayTokenHandler(fakeRequest({ token: validToken }, null));
+    expect(pending.outcome === "ok" && pending.invoice.card).toBeNull();
+
+    await testDb.doc(`tenants/${TENANT}/meta/settings`).update({
+      stripeStatus: { chargesEnabled: false },
+    });
+    const restricted = await verifyInvoicePayTokenHandler(fakeRequest({ token: validToken }, null));
+    expect(restricted.outcome === "ok" && restricted.invoice.card).toBeNull();
+  });
+
+  it("S-09: offers e-Transfer only when the invoice snapshot has an e-Transfer email", async () => {
+    await testDb.doc(`tenants/${TENANT}/invoices/INV-0001`).update({
+      "tenantSnapshot.etransferEmail": null,
+    });
+    const result = await verifyInvoicePayTokenHandler(fakeRequest({ token: validToken }, null));
+    expect(result.outcome === "ok" && result.invoice.etransfer).toBeNull();
+  });
+
+  it("S-09: offers no e-Transfer on an invoice in another currency — Interac moves CAD only", async () => {
+    await testDb.doc(`tenants/${TENANT}/invoices/INV-0001`).update({
+      "tenantSnapshot.currency": "USD",
+    });
+    const result = await verifyInvoicePayTokenHandler(fakeRequest({ token: validToken }, null));
+    expect(result.outcome === "ok" && result.invoice.etransfer).toBeNull();
+  });
+
+  it("S-09: offers no card without the stripePayments entitlement", async () => {
+    await testDb.doc(`tenants/${TENANT}/meta/settings`).update({
+      stripeStatus: { chargesEnabled: true },
+    });
+    await testDb.doc(`tenants/${TENANT}/entitlements/current`).update({
+      features: { stripePayments: false },
+    });
+    const result = await verifyInvoicePayTokenHandler(fakeRequest({ token: validToken }, null));
+    expect(result.outcome === "ok" && result.invoice.card).toBeNull();
   });
 
   it("reports no surcharge while the cardSurcharge feature is off, even if the snapshot says so (D3)", async () => {
+    await testDb.doc(`tenants/${TENANT}/meta/settings`).update({
+      stripeStatus: { chargesEnabled: true },
+    });
     await testDb.doc(`tenants/${TENANT}/invoices/INV-0001`).update({
       "tenantSnapshot.chargeCustomerCardFees": true,
     });
     const off = await verifyInvoicePayTokenHandler(
       fakeRequest({ token: validToken }, null),
     );
-    expect(off.outcome).toBe("ok");
-    if (off.outcome === "ok") {
-      expect(off.invoice.chargeCustomerCardFees).toBe(false);
-      expect(off.invoice.cardFeePercent).toBe(0);
-    }
+    expect(off.outcome === "ok" && off.invoice.card).toEqual({
+      feePercent: 0,
+      feeCents: 0,
+      totalCents: 11_300,
+    });
 
     await testDb.doc(`tenants/${TENANT}/entitlements/current`).update({
       features: { stripePayments: true, cardSurcharge: true },
@@ -570,13 +639,15 @@ describe("verifyInvoicePayToken", () => {
     const on = await verifyInvoicePayTokenHandler(
       fakeRequest({ token: validToken }, null),
     );
-    if (on.outcome === "ok") {
-      expect(on.invoice.chargeCustomerCardFees).toBe(true);
-      expect(on.invoice.cardFeePercent).toBe(2.4);
-    }
+    // The fee shown is the one checkout charges: 2.4% of $113.00.
+    expect(on.outcome === "ok" && on.invoice.card).toEqual({
+      feePercent: 2.4,
+      feeCents: 271,
+      totalCents: 11_571,
+    });
   });
 
-  it("returns paid for already-paid invoices", async () => {
+  it("returns paid for already-paid invoices, with the business for the page", async () => {
     await testDb.doc(`tenants/${TENANT}/invoices/INV-0001`).update({
       status: "paid",
       paidAt: FieldValue.serverTimestamp(),
@@ -584,7 +655,11 @@ describe("verifyInvoicePayToken", () => {
     const result = await verifyInvoicePayTokenHandler(
       fakeRequest({ token: validToken }, null),
     );
-    expect(result.outcome).toBe("paid");
+    expect(result).toMatchObject({
+      outcome: "paid",
+      invoiceNumber: "INV-0001",
+      business: { name: "Acme Plumbing", primaryColor: "#667eea" },
+    });
   });
 
   it("returns regenerated when payTokenVersion mismatches", async () => {
@@ -626,7 +701,11 @@ describe("verifyInvoicePayToken", () => {
     const result = await verifyInvoicePayTokenHandler(
       fakeRequest({ token: validToken }, null),
     );
-    expect(result).toEqual({ outcome: "void", invoiceNumber: "INV-0001" });
+    expect(result).toEqual({
+      outcome: "void",
+      invoiceNumber: "INV-0001",
+      business: expect.objectContaining({ name: "Acme Plumbing" }),
+    });
   });
 
   it("throws on invalid token", async () => {
@@ -738,6 +817,20 @@ describe("createPayTokenCheckoutSession", () => {
       ),
     ).rejects.toThrow(/cannot accept card payments/);
     expect(mockStripeCreate).not.toHaveBeenCalled();
+  });
+
+  it("S-09: refuses a tenant without the stripePayments entitlement, before calling Stripe", async () => {
+    await testDb.doc(`tenants/${TENANT}/entitlements/current`).update({
+      features: { stripePayments: false },
+    });
+    await expect(
+      createPayTokenCheckoutSessionHandler(fakeRequest({ token: validToken }, null)),
+    ).rejects.toThrow(/can't take card payments online/);
+    expect(mockStripeCreate).not.toHaveBeenCalled();
+    const attempts = await testDb
+      .collection(`tenants/${TENANT}/invoices/INV-0001/payAttempts`)
+      .get();
+    expect(attempts.empty).toBe(true);
   });
 
   it("adds the surcharge line item from the invoice snapshot when cardSurcharge is enabled", async () => {

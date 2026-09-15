@@ -1,4 +1,5 @@
-// Customer-facing views of one invoice or quote, for the portal pages (S-08).
+// Customer-facing views of one invoice or quote, for the portal pages (S-08)
+// and the public pay page (S-09).
 //
 // The detail callables return this projection rather than the stored document:
 // internal fields — who created or voided it, Stripe ids, email delivery
@@ -92,7 +93,7 @@ function str(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value : fallback;
 }
 
-function strOrNull(value: unknown): string | null {
+export function strOrNull(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
@@ -104,7 +105,7 @@ function numOrNull(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-function lineItems(value: unknown): CustomerLineItemView[] {
+export function toCustomerLineItems(value: unknown): CustomerLineItemView[] {
   if (!Array.isArray(value)) return [];
   return value.map((line: Data) => ({
     description: str(line?.description),
@@ -116,7 +117,7 @@ function lineItems(value: unknown): CustomerLineItemView[] {
   }));
 }
 
-function totals(value: unknown): CustomerTotalsView {
+export function toCustomerTotals(value: unknown): CustomerTotalsView {
   const t = (value ?? {}) as Data;
   return {
     subtotal: num(t.subtotal),
@@ -133,7 +134,7 @@ function totals(value: unknown): CustomerTotalsView {
   };
 }
 
-function business(value: unknown): CustomerBusinessView {
+export function toCustomerBusinessView(value: unknown): CustomerBusinessView {
   const s = (value ?? {}) as Data;
   return {
     name: str(s.name),
@@ -154,9 +155,9 @@ function base(id: string, tenantId: string, d: Data): CustomerDocViewBase {
       email: str(d.customer?.email),
       phone: strOrNull(d.customer?.phone),
     },
-    lineItems: lineItems(d.lineItems),
-    totals: totals(d.totals),
-    tenantSnapshot: business(d.tenantSnapshot),
+    lineItems: toCustomerLineItems(d.lineItems),
+    totals: toCustomerTotals(d.totals),
+    tenantSnapshot: toCustomerBusinessView(d.tenantSnapshot),
     status: str(d.status),
     issueDate: str(d.issueDate),
     notes: strOrNull(d.notes),

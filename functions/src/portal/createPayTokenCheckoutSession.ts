@@ -17,10 +17,7 @@ import { db, FieldValue, Timestamp } from "../shared/admin";
 import { verifyPayToken } from "../shared/payToken";
 import { withSentryCallable } from "../shared/withSentry";
 import { loadFeatures } from "../shared/requireFeature";
-import {
-  computeSurchargeCents,
-  effectiveCardSurcharge,
-} from "../shared/surcharge";
+import { cardChargeFor } from "../shared/payAmounts";
 
 const PAY_TOKEN_SECRET = defineSecret("PAY_TOKEN_SECRET");
 const STRIPE_SECRET_KEY = defineSecret("STRIPE_SECRET_KEY");
@@ -124,24 +121,26 @@ export async function createPayTokenCheckoutSessionHandler(
   }
 
   // 5. Build Checkout session with surcharge logic.
-  const totalCents = Math.round((invoice.totals?.total ?? 0) * 100);
   const currency = String(
     invoice.tenantSnapshot?.currency ?? meta.currency ?? "CAD",
   ).toLowerCase();
 
   // Surcharge comes from the invoice's frozen snapshot — the same values the
   // PDF and pay page disclosed — never from current settings (A-09). The
-  // platform `cardSurcharge` flag (D3) is a kill switch on top.
+  // platform `cardSurcharge` flag (D3) is a kill switch on top. cardChargeFor
+  // is also what verifyInvoicePayToken shows on the pay page (S-09).
   const features = await loadFeatures(payload.tenantId);
-  const surcharge = effectiveCardSurcharge(
-    invoice.tenantSnapshot,
-    features.cardSurcharge,
-  );
-  const surchargeCents = computeSurchargeCents(
-    totalCents,
-    surcharge.enabled,
-    surcharge.percent,
-  );
+  // S-09: card payments are part of the tenant's plan (stripePayments), not
+  // only its Stripe setup — the pay page offers card on the same terms.
+  if (!features.stripePayments) {
+    throw new HttpsError(
+      "failed-precondition",
+      "This business can't take card payments online right now.",
+    );
+  }
+  const charge = cardChargeFor(invoice, features.cardSurcharge);
+  const totalCents = charge.baseCents;
+  const { surcharge, surchargeCents } = charge;
 
   const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [
     {
