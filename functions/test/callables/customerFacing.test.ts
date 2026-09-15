@@ -833,6 +833,33 @@ describe("createPayTokenCheckoutSession", () => {
     expect(attempts.empty).toBe(true);
   });
 
+  it("custom domains: Stripe returns the customer to the business's verified domain", async () => {
+    await testDb.doc(`tenants/${TENANT}/meta/settings`).update({
+      customDomain: "invoices.acme.test",
+      customDomainStatus: { stage: "verified", message: null, checkedAt: null },
+    });
+
+    await createPayTokenCheckoutSessionHandler(fakeRequest({ token: validToken }, null));
+
+    const args = mockStripeCreate.mock.calls[0][0];
+    expect(args.success_url).toBe(`https://invoices.acme.test/pay/${validToken}/success`);
+    expect(args.cancel_url).toBe(`https://invoices.acme.test/pay/${validToken}/cancelled`);
+  });
+
+  it("custom domains: until the domain is verified, Stripe returns to the shared portal host", async () => {
+    await testDb.doc(`tenants/${TENANT}/meta/settings`).update({
+      customDomain: "invoices.acme.test",
+      customDomainStatus: { stage: "ssl_pending", message: null, checkedAt: null },
+    });
+
+    await createPayTokenCheckoutSessionHandler(fakeRequest({ token: validToken }, null));
+
+    const shared = new URL(process.env.APP_URL || "https://portal.techflowsolutions.ca").origin;
+    expect(mockStripeCreate.mock.calls[0][0].success_url).toBe(
+      `${shared}/pay/${validToken}/success`,
+    );
+  });
+
   it("adds the surcharge line item from the invoice snapshot when cardSurcharge is enabled", async () => {
     await testDb.doc(`tenants/${TENANT}/entitlements/current`).update({
       features: { stripePayments: true, cardSurcharge: true },

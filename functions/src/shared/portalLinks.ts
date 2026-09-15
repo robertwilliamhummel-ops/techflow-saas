@@ -1,14 +1,18 @@
-// Links from emails into the customer portal (S-10). A business with a verified
-// custom domain gets its own host, so the customer signs in to that business's
-// branded portal; everyone else gets the shared portal host (APP_URL). Links go
-// to the document itself: signing in returns the customer to it (blueprint,
-// "Customer magic link flow").
+// Links from emails and pages to the customer-facing site: the portal (S-10)
+// and the pay page. A business with a verified custom domain gets its own host,
+// so its customer stays on the business's address from the email, through
+// Stripe Checkout, and back; everyone else gets the shared portal host
+// (APP_URL). Portal links go to the document itself, and signing in returns the
+// customer to it (blueprint, "Customer magic link flow").
+//
+// A link carries the host the business had when it was sent: if the business
+// later removes its custom domain, links in older emails stop working.
 
 type Data = FirebaseFirestore.DocumentData;
 
 const DEFAULT_APP_URL = "https://portal.techflowsolutions.ca";
 
-/** The portal's origin for this business. */
+/** The customer-facing origin for this business. */
 export function portalOrigin(meta: Data | null | undefined): string {
   const domain = meta?.customDomain;
   if (
@@ -33,4 +37,9 @@ export function portalDocumentUrl(
   const url = new URL(`/portal/${segment}/${encodeURIComponent(id)}`, portalOrigin(meta));
   url.searchParams.set("tenantId", tenantId);
   return url.toString();
+}
+
+/** The public pay page for an invoice's pay token. */
+export function payPageUrl(meta: Data | null | undefined, payToken: string): string {
+  return new URL(`/pay/${encodeURIComponent(payToken)}`, portalOrigin(meta)).toString();
 }

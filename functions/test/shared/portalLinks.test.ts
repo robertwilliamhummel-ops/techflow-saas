@@ -1,8 +1,8 @@
-// S-10 — email links into the portal go to the document, on the business's own
-// portal host when it has a verified custom domain.
+// S-10 and custom domains — links to the portal and the pay page use the
+// business's verified custom domain, else the shared portal host.
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { portalDocumentUrl, portalOrigin } from "../../src/shared/portalLinks";
+import { payPageUrl, portalDocumentUrl, portalOrigin } from "../../src/shared/portalLinks";
 
 const ORIGINAL_APP_URL = process.env.APP_URL;
 
@@ -51,5 +51,13 @@ describe("portalDocumentUrl", () => {
     expect(portalDocumentUrl(verified, "quote", "smith-plumbing", "QT-0007")).toBe(
       "https://invoices.smithplumbing.ca/portal/quotes/QT-0007?tenantId=smith-plumbing",
     );
+  });
+});
+
+describe("payPageUrl", () => {
+  it("links to the pay page on the business's host", () => {
+    const token = "eyJhbGciOiJIUzI1NiJ9.eyJ2IjoxfQ.sig-Part_2";
+    expect(payPageUrl({}, token)).toBe(`https://portal.example.test/pay/${token}`);
+    expect(payPageUrl(verified, token)).toBe(`https://invoices.smithplumbing.ca/pay/${token}`);
   });
 });

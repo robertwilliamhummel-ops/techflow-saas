@@ -6,6 +6,7 @@
 
 import { getAdminDb } from "@/lib/firebase/admin";
 import { resolveFeature, type FeatureKey } from "@/lib/features";
+import { portalOriginFor } from "@/lib/tenant/portalOrigin";
 
 export class PdfLoadError extends Error {
   readonly status: number;
@@ -26,15 +27,21 @@ export interface LoadedInvoice {
   };
 }
 
+/**
+ * `platformBaseUrl` is the shared portal host; a business's verified custom
+ * domain replaces it in the PDF's pay link, as in its emails.
+ */
 export async function loadInvoiceForPdf(
   tenantId: string,
   invoiceId: string,
   platformBaseUrl: string,
 ): Promise<LoadedInvoice> {
   const overrides = await requireFeatureEnabled(tenantId, "invoices");
-  const snap = await getAdminDb()
-    .doc(`tenants/${tenantId}/invoices/${invoiceId}`)
-    .get();
+  const db = getAdminDb();
+  const [snap, metaSnap] = await Promise.all([
+    db.doc(`tenants/${tenantId}/invoices/${invoiceId}`).get(),
+    db.doc(`tenants/${tenantId}/meta/settings`).get(),
+  ]);
   if (!snap.exists) {
     throw new PdfLoadError(404, "Invoice not found.");
   }
@@ -64,8 +71,12 @@ export async function loadInvoiceForPdf(
     typeof data.payToken === "string" && data.status !== "void"
       ? data.payToken
       : null;
+  const payOrigin = portalOriginFor(
+    metaSnap.exists ? (metaSnap.data() as Record<string, unknown>) : null,
+    platformBaseUrl,
+  );
   const payUrl = payToken
-    ? `${platformBaseUrl.replace(/\/+$/, "")}/pay/${payToken}`
+    ? `${payOrigin}/pay/${encodeURIComponent(payToken)}`
     : null;
 
   return {

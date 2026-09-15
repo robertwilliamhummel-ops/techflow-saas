@@ -79,6 +79,7 @@ import {
 } from "@/lib/invoices/labels";
 import type { Invoice, TenantMeta } from "@/lib/schema/tenant";
 import { useTenantContext } from "@/lib/tenant/TenantContext";
+import { portalOriginFor } from "@/lib/tenant/portalOrigin";
 import { useTenantDoc } from "@/lib/tenant/useTenantDoc";
 
 type InvoiceWithId = Invoice & { id: string };
@@ -201,7 +202,9 @@ function InvoiceDetailBody({
   const money = (dollars: number) => formatMoneyCents(dollarsToCents(dollars), currency);
   const canCollect =
     Boolean(meta?.etransferEmail) || meta?.stripeStatus?.chargesEnabled === true;
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
+  // The business's verified custom domain replaces the shared host, as in the
+  // invoice email, so the link the owner copies matches the one sent.
+  const appUrl = portalOriginFor(meta, process.env.NEXT_PUBLIC_APP_URL || window.location.origin);
   const payLink = invoice.payToken ? payLinkFor(invoice.payToken, appUrl) : null;
   const payLinkExpired = invoice.payTokenExpiresAt
     ? invoice.payTokenExpiresAt.toMillis() < now

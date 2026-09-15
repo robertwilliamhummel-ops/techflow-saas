@@ -26,7 +26,7 @@ import {
   resolveLineItems,
 } from "../shared/invoice";
 import { applyLogoToSnapshot, emailLogoUrl } from "../shared/logo";
-import { portalDocumentUrl } from "../shared/portalLinks";
+import { payPageUrl, portalDocumentUrl } from "../shared/portalLinks";
 import { computeNextRunAt, addDaysToISODate } from "../shared/recurring";
 import { SCHEDULER_REGION } from "../shared/globalOptions";
 import { reportError, withSentryEvent } from "../shared/withSentry";
@@ -334,11 +334,10 @@ async function sendRecurringEmail(
   if (!invoiceSnap.exists) return;
   const invoice = invoiceSnap.data()!;
 
-  const appUrl =
-    process.env.APP_URL || "https://portal.techflowsolutions.ca";
-  // S-10: without a pay link, the customer is sent to this invoice in the portal.
+  // On the business's own domain once verified. Without a pay link, the
+  // customer is sent to this invoice in the portal (S-10).
   const payUrl = invoice.payToken
-    ? `${appUrl}/pay/${invoice.payToken}`
+    ? payPageUrl(meta, invoice.payToken)
     : portalDocumentUrl(meta, "invoice", tenantId, invoiceId);
 
   const currency = tenantSnapshot.currency ?? "CAD";

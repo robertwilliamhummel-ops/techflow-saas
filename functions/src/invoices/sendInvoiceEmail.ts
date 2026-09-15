@@ -15,7 +15,7 @@ import { db, FieldValue } from "../shared/admin";
 import { readClaims, requireTenant } from "../shared/auth";
 import { requireDocId } from "../shared/docId";
 import { isPayableInvoiceStatus } from "../shared/invoiceStatus";
-import { portalDocumentUrl } from "../shared/portalLinks";
+import { payPageUrl, portalDocumentUrl } from "../shared/portalLinks";
 import { requireFeature } from "../shared/requireFeature";
 import { RATE_LIMITS, enforceRateLimit } from "../shared/rateLimit";
 import { withSentryCallable } from "../shared/withSentry";
@@ -103,14 +103,10 @@ export async function sendInvoiceEmailHandler(
     primaryColor: snapshot.primaryColor ?? null,
   };
 
-  const appUrl =
-    process.env.APP_URL || "https://portal.techflowsolutions.ca";
-  // S-10: the portal link opens this invoice — on the business's own domain
-  // once verified — and signing in returns the customer to it.
+  // S-10: both links use the business's own domain once it is verified. The
+  // portal link opens this invoice, and signing in returns the customer to it.
   const portalUrl = portalDocumentUrl(meta, "invoice", tenantId, invoiceSnap.id);
-  const payUrl = invoice.payToken
-    ? `${appUrl}/pay/${invoice.payToken}`
-    : portalUrl;
+  const payUrl = invoice.payToken ? payPageUrl(meta, invoice.payToken) : portalUrl;
 
   const totalFormatted = formatCurrency(
     invoice.totals?.total ?? 0,

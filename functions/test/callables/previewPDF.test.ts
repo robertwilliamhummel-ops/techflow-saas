@@ -256,6 +256,19 @@ describe("previewInvoicePDF", () => {
     expect(postedBody(0).data.payUrl).toBeNull();
   });
 
+  it("custom domains: the pay link uses the business's verified domain", async () => {
+    await seedInvoice();
+    await testDb.doc(`tenants/${TENANT}/meta/settings`).set({
+      customDomain: "invoices.acme.test",
+      customDomainStatus: { stage: "verified", message: null, checkedAt: null },
+    });
+    pdfReply();
+
+    await previewInvoicePDFHandler(fakeRequest({ invoiceId: "INV-1" }, ownerAuth));
+
+    expect(postedBody(0).data.payUrl).toBe("https://invoices.acme.test/pay/pay-tok-1");
+  });
+
   it("maps Cloud Run unreachable to 'unavailable'", async () => {
     await seedInvoice();
     fetchMock.mockRejectedValueOnce(new Error("ECONNREFUSED"));

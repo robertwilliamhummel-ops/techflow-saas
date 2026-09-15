@@ -441,6 +441,44 @@ describe("GET /api/pdf/quote", () => {
   });
 });
 
+describe("custom domains: the PDF's pay link", () => {
+  function requestPdf() {
+    return invoiceGET(
+      makeRequest("https://app.example.test/api/pdf/invoice?tenantId=acme&invoiceId=INV-1", {
+        authorization: "Bearer good",
+      }),
+    );
+  }
+
+  it("uses the business's verified custom domain", async () => {
+    seedTenantEntitlements("acme");
+    seedInvoice("acme", "INV-1");
+    store.set("tenants/acme/meta/settings", {
+      customDomain: "Invoices.Acme.test",
+      customDomainStatus: { stage: "verified", message: null, checkedAt: null },
+    });
+    verifyIdToken.mockResolvedValueOnce({ uid: "u1", tenantId: "acme" });
+    pdfReply();
+
+    expect((await requestPdf()).status).toBe(200);
+    expect(postedBody(0).data.payUrl).toBe("https://invoices.acme.test/pay/pay-tok-1");
+  });
+
+  it("keeps the shared portal host until the domain is verified", async () => {
+    seedTenantEntitlements("acme");
+    seedInvoice("acme", "INV-1");
+    store.set("tenants/acme/meta/settings", {
+      customDomain: "invoices.acme.test",
+      customDomainStatus: { stage: "ssl_pending", message: null, checkedAt: null },
+    });
+    verifyIdToken.mockResolvedValueOnce({ uid: "u1", tenantId: "acme" });
+    pdfReply();
+
+    expect((await requestPdf()).status).toBe(200);
+    expect(postedBody(0).data.payUrl).toBe("https://app.example.test/pay/pay-tok-1");
+  });
+});
+
 describe("S-08: customers never get a draft's PDF (A-05)", () => {
   const customer = { uid: "cust1", email: "jane@example.com", email_verified: true };
 

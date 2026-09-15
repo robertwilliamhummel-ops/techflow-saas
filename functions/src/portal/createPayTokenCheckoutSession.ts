@@ -18,6 +18,7 @@ import { verifyPayToken } from "../shared/payToken";
 import { withSentryCallable } from "../shared/withSentry";
 import { loadFeatures } from "../shared/requireFeature";
 import { cardChargeFor } from "../shared/payAmounts";
+import { payPageUrl } from "../shared/portalLinks";
 
 const PAY_TOKEN_SECRET = defineSecret("PAY_TOKEN_SECRET");
 const STRIPE_SECRET_KEY = defineSecret("STRIPE_SECRET_KEY");
@@ -166,9 +167,9 @@ export async function createPayTokenCheckoutSessionHandler(
     });
   }
 
-  // Determine base URL for success/cancel redirects.
-  const appUrl =
-    process.env.APP_URL || "https://portal.techflowsolutions.ca";
+  // Stripe returns the customer to the pay page on the business's host — its
+  // verified custom domain, else APP_URL — the same host the email linked to.
+  const payPage = payPageUrl(meta, token);
 
   const stripe = new Stripe(STRIPE_SECRET_KEY.value());
 
@@ -200,8 +201,8 @@ export async function createPayTokenCheckoutSessionHandler(
         basePaidCents: String(totalCents),
         payTokenVersion: String(invoice.payTokenVersion),
       },
-      success_url: `${appUrl}/pay/${token}/success`,
-      cancel_url: `${appUrl}/pay/${token}/cancelled`,
+      success_url: `${payPage}/success`,
+      cancel_url: `${payPage}/cancelled`,
     },
     { stripeAccount: meta.stripeAccountId as string },
   );

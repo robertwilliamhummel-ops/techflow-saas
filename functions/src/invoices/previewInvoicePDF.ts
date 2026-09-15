@@ -18,6 +18,7 @@ import { db } from "../shared/admin";
 import { readClaims, requireTenant } from "../shared/auth";
 import { requireDocId } from "../shared/docId";
 import { pdfLogoDataUrl } from "../shared/logo";
+import { payPageUrl } from "../shared/portalLinks";
 import { requireFeature } from "../shared/requireFeature";
 import { RATE_LIMITS, enforceRateLimit } from "../shared/rateLimit";
 import { withSentryCallable } from "../shared/withSentry";
@@ -73,16 +74,16 @@ export async function previewInvoicePDFHandler(
   };
 
   const customer = (invoice.customer as Record<string, unknown> | undefined) ?? {};
-  const appUrl =
-    process.env.APP_URL ?? "https://portal.techflowsolutions.ca";
   // A-12: a void invoice's PDF must not offer a way to pay it.
   const payToken =
     typeof invoice.payToken === "string" && invoice.status !== "void"
       ? invoice.payToken
       : null;
-  const payUrl = payToken
-    ? `${appUrl.replace(/\/+$/, "")}/pay/${payToken}`
-    : null;
+  // On the business's verified custom domain, as in its invoice emails.
+  const meta = payToken
+    ? (await db.doc(`tenants/${tenantId}/meta/settings`).get()).data()
+    : undefined;
+  const payUrl = payToken ? payPageUrl(meta, payToken) : null;
 
   const data: Record<string, unknown> = {
     invoiceId,
