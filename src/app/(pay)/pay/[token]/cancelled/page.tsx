@@ -1,4 +1,4 @@
-import { PagePlaceholder } from "@/components/scaffold/PagePlaceholder";
+import { PayCancelled } from "./PayCancelled";
 
 export default async function PayCancelledPage({
   params,
@@ -6,11 +6,5 @@ export default async function PayCancelledPage({
   params: Promise<{ token: string }>;
 }) {
   const { token } = await params;
-  return (
-    <PagePlaceholder
-      title="Payment cancelled"
-      phase="Phase 4"
-      meta={{ token }}
-    />
-  );
+  return <PayCancelled token={token} />;
 }
