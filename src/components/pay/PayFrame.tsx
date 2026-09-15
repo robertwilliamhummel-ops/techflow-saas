@@ -15,6 +15,7 @@ import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/u
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { computeForeground } from "@/lib/design/contrast";
+import { CUSTOMER_READ_TIMEOUT_MS } from "@/lib/firebase/callOptions";
 import { getClientFunctions } from "@/lib/firebase/client";
 import { formatDateMillis } from "@/lib/format";
 import { payLoadError, type PayLoadError, type VerifyResult } from "@/lib/pay/payPage";
@@ -46,9 +47,9 @@ export function usePayVerification(token: string): PayVerification {
     let active = true;
     Promise.resolve()
       .then(() =>
-        httpsCallable<{ token: string }, VerifyResult>(getClientFunctions(), "verifyInvoicePayToken")({
-          token,
-        }),
+        httpsCallable<{ token: string }, VerifyResult>(getClientFunctions(), "verifyInvoicePayToken", {
+          timeout: CUSTOMER_READ_TIMEOUT_MS,
+        })({ token }),
       )
       .then(({ data }) => {
         if (active) setChecked({ key, result: data, error: null });

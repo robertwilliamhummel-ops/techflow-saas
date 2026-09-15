@@ -11,6 +11,7 @@ import {
 } from "react";
 import { httpsCallable } from "firebase/functions";
 import * as Sentry from "@sentry/nextjs";
+import { CUSTOMER_READ_TIMEOUT_MS } from "@/lib/firebase/callOptions";
 import { getClientFunctions } from "@/lib/firebase/client";
 import { useAuth } from "@/lib/auth/useAuth";
 
@@ -88,10 +89,12 @@ async function fetchPortalLists(): Promise<Omit<LoadedPortal, "uid">> {
     httpsCallable<unknown, { invoices: CustomerInvoiceListItem[] }>(
       functions,
       "getCustomerInvoices",
+      { timeout: CUSTOMER_READ_TIMEOUT_MS },
     )(),
     httpsCallable<unknown, { quotes: CustomerQuoteListItem[] }>(
       functions,
       "getCustomerQuotes",
+      { timeout: CUSTOMER_READ_TIMEOUT_MS },
     )(),
   ]);
 

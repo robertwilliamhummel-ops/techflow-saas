@@ -184,7 +184,8 @@ describe("portalLoadError", () => {
   });
 
   it("treats anything else as a failure worth retrying", () => {
-    for (const err of [{ code: "functions/internal" }, { code: "functions/unavailable" }, new Error("offline"), null]) {
+    // deadline-exceeded: the call gave up after CUSTOMER_READ_TIMEOUT_MS.
+    for (const err of [{ code: "functions/deadline-exceeded" }, { code: "functions/internal" }, { code: "functions/unavailable" }, new Error("offline"), null]) {
       expect(portalLoadError(err)).toBe("failed");
     }
   });

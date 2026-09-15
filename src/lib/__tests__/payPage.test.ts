@@ -34,7 +34,8 @@ describe("payLoadError", () => {
   });
 
   it("treats anything else as worth retrying", () => {
-    for (const err of [{ code: "functions/unavailable" }, { code: "functions/internal" }, new Error("offline"), null]) {
+    // deadline-exceeded: the call gave up after CUSTOMER_READ_TIMEOUT_MS.
+    for (const err of [{ code: "functions/deadline-exceeded" }, { code: "functions/unavailable" }, { code: "functions/internal" }, new Error("offline"), null]) {
       expect(payLoadError(err)).toBe("failed");
     }
   });

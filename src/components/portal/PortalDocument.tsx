@@ -27,6 +27,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { CUSTOMER_READ_TIMEOUT_MS } from "@/lib/firebase/callOptions";
 import { getClientAuth, getClientFunctions } from "@/lib/firebase/client";
 import { dollarsToCents, formatMoneyCents } from "@/lib/format";
 import {
@@ -73,7 +74,9 @@ export function usePortalDocument<T>(
     let active = true;
     Promise.resolve()
       .then(() =>
-        httpsCallable<Record<string, string>, T>(getClientFunctions(), callable)({
+        httpsCallable<Record<string, string>, T>(getClientFunctions(), callable, {
+          timeout: CUSTOMER_READ_TIMEOUT_MS,
+        })({
           tenantId,
           [idField]: id,
         }),
