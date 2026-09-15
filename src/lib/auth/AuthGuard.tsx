@@ -41,8 +41,12 @@ export function PortalAuthGuard({ children }: { children: React.ReactNode }) {
   const redirect = loading ? null : portalGuardRedirect(user, claims);
 
   useEffect(() => {
-    if (redirect) router.replace(redirect);
-  }, [redirect, router]);
+    if (!redirect) return;
+    // S-10: the login gets the page that was asked for, so signing in (often
+    // from the invoice email's link) returns the customer to it.
+    const returnTo = `${window.location.pathname}${window.location.search}`;
+    router.replace(portalGuardRedirect(user, claims, returnTo) ?? redirect);
+  }, [redirect, router, user, claims]);
 
   if (loading) return <Spinner />;
   if (redirect) return null;

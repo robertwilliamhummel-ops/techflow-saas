@@ -1,77 +1,253 @@
 "use client";
 
-import Image from "next/image";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useState } from "react";
-import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { z } from "zod";
-import { signInWithEmailAndPassword } from "firebase/auth";
+// Customer portal sign-in (S-10). Customers have no password: they ask for a
+// sign-in link, which sendPortalSignInLink emails, and the link returns here,
+// where Firebase finishes signing in and the customer goes on to the page they
+// asked for (blueprint, "Customer magic link flow").
 
-import { getClientAuth } from "@/lib/firebase/client";
-import { authErrorMessage } from "@/lib/auth/authErrors";
+import Image from "next/image";
+import { useRouter } from "next/navigation";
+import {
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type FormEvent,
+  type ReactNode,
+} from "react";
+import { isSignInWithEmailLink, signInWithEmailLink } from "firebase/auth";
+import { httpsCallable } from "firebase/functions";
+import * as Sentry from "@sentry/nextjs";
+
+import { TextField } from "@/components/forms/fields";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
+  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
 import {
-  Form,
-  FormControl,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from "@/components/ui/form";
-import { Input } from "@/components/ui/input";
-
-const schema = z.object({
-  email: z.string().email("Enter a valid email address."),
-  password: z.string().min(1, "Password is required."),
-});
-
-type FormValues = z.infer<typeof schema>;
+  forgetSignInEmail,
+  recallSignInEmail,
+  rememberSignInEmail,
+} from "@/lib/auth/emailLinkStorage";
+import { useAuth } from "@/lib/auth/useAuth";
+import { computeForeground } from "@/lib/design/contrast";
+import { isValidEmail } from "@/lib/email";
+import { getClientAuth, getClientFunctions } from "@/lib/firebase/client";
+import { portalAccent } from "@/lib/portal/portalHome";
+import {
+  requestLinkErrorMessage,
+  signInContinueUrl,
+  signInLinkFailure,
+  type SignInLinkFailure,
+} from "@/lib/portal/portalSignIn";
 
 interface Props {
   tenantName: string | null;
   logoUrl: string | null;
   primaryColor: string | null;
+  /** The portal page to open after signing in, already checked by the page. */
+  next: string | null;
 }
 
-export function PortalLoginForm({ tenantName, logoUrl, primaryColor }: Props) {
+const noSubscribe = () => () => {};
+
+export function PortalLoginForm({ tenantName, logoUrl, primaryColor, next }: Props) {
   const router = useRouter();
-  const [submitError, setSubmitError] = useState<string | null>(null);
+  const { user, claims, loading } = useAuth();
+  const destination = next ?? "/portal";
 
-  const form = useForm<FormValues>({
-    resolver: zodResolver(schema),
-    defaultValues: { email: "", password: "" },
-  });
+  // Browser-only values, read during render rather than from an effect; both
+  // are null while the page renders on the server.
+  const href = useSyncExternalStore(noSubscribe, () => window.location.href, () => null);
+  const remembered = useSyncExternalStore(noSubscribe, recallSignInEmail, () => null);
+  const isLink = href !== null && isSignInWithEmailLink(getClientAuth(), href);
 
-  async function onSubmit(values: FormValues) {
-    setSubmitError(null);
+  const [email, setEmail] = useState("");
+  const [formError, setFormError] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
+  const [sentTo, setSentTo] = useState<string | null>(null);
+  const [typed, setTyped] = useState<{ address: string; attempt: number } | null>(null);
+  const [failure, setFailure] = useState<SignInLinkFailure | null>(null);
+  const attempted = useRef<string | null>(null);
+
+  // The address to finish with: what the customer typed, else the one stored
+  // when the link was requested on this browser (unless that one was wrong).
+  const linkEmail = typed?.address ?? (failure?.kind === "wrong-email" ? null : remembered);
+  const completing = isLink && linkEmail !== null && failure === null;
+  const signedInCustomer =
+    !loading && user !== null && !claims.tenantId && claims.email_verified === true;
+
+  useEffect(() => {
+    if (!completing || href === null || linkEmail === null) return;
+    // A link works once, and Strict Mode runs effects twice in development.
+    const key = `${href}|${linkEmail}|${typed?.attempt ?? 0}`;
+    if (attempted.current === key) return;
+    attempted.current = key;
+    signInWithEmailLink(getClientAuth(), linkEmail, href)
+      .then(() => {
+        forgetSignInEmail();
+        router.replace(destination);
+      })
+      .catch((err: unknown) => {
+        const reason = signInLinkFailure(err);
+        if (reason.kind === "other") Sentry.captureException(err);
+        if (reason.kind === "wrong-email") forgetSignInEmail();
+        setFailure(reason);
+      });
+  }, [completing, href, linkEmail, typed, destination, router]);
+
+  // A customer who is already signed in goes straight on — unless this is a
+  // sign-in link, which may be for someone else.
+  useEffect(() => {
+    if (signedInCustomer && href !== null && !isLink) router.replace(destination);
+  }, [signedInCustomer, href, isLink, destination, router]);
+
+  async function requestLink(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const address = email.trim().toLowerCase();
+    if (!isValidEmail(address)) {
+      setFormError("Enter a valid email address.");
+      return;
+    }
+    setFormError(null);
+    setSending(true);
     try {
-      await signInWithEmailAndPassword(
-        getClientAuth(),
-        values.email,
-        values.password,
-      );
-      router.replace("/portal");
+      // Stored before the request, so this browser can finish without asking again.
+      rememberSignInEmail(address);
+      await httpsCallable<{ email: string; continueUrl: string }, { ok: true }>(
+        getClientFunctions(),
+        "sendPortalSignInLink",
+      )({ email: address, continueUrl: signInContinueUrl(window.location.origin, next) });
+      setSentTo(address);
+      setFailure(null);
     } catch (err) {
-      setSubmitError(authErrorMessage(err));
+      Sentry.captureException(err);
+      setFormError(requestLinkErrorMessage(err));
+    } finally {
+      setSending(false);
     }
   }
 
-  const submitting = form.formState.isSubmitting;
+  function confirmEmail(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const address = email.trim().toLowerCase();
+    if (!isValidEmail(address)) {
+      setFormError("Enter a valid email address.");
+      return;
+    }
+    setFormError(null);
+    setFailure(null);
+    setTyped((previous) => ({ address, attempt: (previous?.attempt ?? 0) + 1 }));
+  }
+
   const accentStyle = primaryColor
-    ? ({ ["--portal-accent" as const]: primaryColor } as React.CSSProperties)
+    ? (() => {
+        const accent = portalAccent(primaryColor);
+        return { backgroundColor: accent, borderColor: accent, color: computeForeground(accent) };
+      })()
     : undefined;
 
+  let title = tenantName ? `Sign in to ${tenantName}` : "Sign in to see your invoices";
+  let description: string | null = "We'll email you a link to sign in. No password needed.";
+  let body: ReactNode;
+
+  if (href === null || completing || (signedInCustomer && !isLink)) {
+    description = null;
+    body = (
+      <p role="status" className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">
+        <span
+          aria-hidden
+          className="size-4 animate-spin rounded-full border-2 border-muted border-t-foreground motion-reduce:animate-none"
+        />
+        {completing ? "Signing you in…" : "Loading…"}
+      </p>
+    );
+  } else if (isLink && (failure === null || failure.kind === "wrong-email")) {
+    title = "Confirm your email";
+    description = "For your security, enter the email address this sign-in link was sent to.";
+    body = (
+      <form onSubmit={confirmEmail} className="grid gap-4" noValidate>
+        {failure ? (
+          <Alert variant="destructive">
+            <AlertDescription>{failure.message}</AlertDescription>
+          </Alert>
+        ) : null}
+        <TextField
+          id="portal-signin-confirm-email"
+          label="Email"
+          error={formError ?? undefined}
+          inputProps={{
+            type: "email",
+            autoComplete: "email",
+            inputMode: "email",
+            autoFocus: true,
+            value: email,
+            onChange: (event) => setEmail(event.target.value),
+          }}
+        />
+        <Button type="submit" style={accentStyle}>
+          Sign in
+        </Button>
+      </form>
+    );
+  } else if (sentTo) {
+    title = "Check your email";
+    description = null;
+    body = (
+      <div className="grid gap-3 text-sm">
+        <p>
+          If <span className="font-medium wrap-anywhere">{sentTo}</span> has invoices or quotes
+          from a business that uses this portal, a sign-in link is on its way.
+        </p>
+        <p className="text-muted-foreground">
+          Open it on this device to go straight in. Each link works once.
+        </p>
+        <Button
+          variant="outline"
+          onClick={() => {
+            setSentTo(null);
+            setEmail("");
+          }}
+        >
+          Use a different email
+        </Button>
+      </div>
+    );
+  } else {
+    body = (
+      <form onSubmit={requestLink} className="grid gap-4" noValidate>
+        {failure ? (
+          <Alert variant="destructive">
+            <AlertDescription>{failure.message}</AlertDescription>
+          </Alert>
+        ) : null}
+        <TextField
+          id="portal-signin-email"
+          label="Email"
+          error={formError ?? undefined}
+          inputProps={{
+            type: "email",
+            autoComplete: "email",
+            inputMode: "email",
+            autoFocus: true,
+            value: email,
+            onChange: (event) => setEmail(event.target.value),
+          }}
+        />
+        <Button type="submit" disabled={sending} style={accentStyle}>
+          {sending ? "Sending…" : "Email me a sign-in link"}
+        </Button>
+      </form>
+    );
+  }
+
   return (
-    <Card className="w-full max-w-sm" style={accentStyle}>
+    <Card className="w-full max-w-sm">
       <CardHeader className="items-center text-center">
         {logoUrl ? (
           <Image
@@ -79,77 +255,14 @@ export function PortalLoginForm({ tenantName, logoUrl, primaryColor }: Props) {
             alt={tenantName ?? "Logo"}
             width={64}
             height={64}
-            className="mb-2 rounded"
+            className="mx-auto mb-2 rounded"
             unoptimized
           />
         ) : null}
-        <CardTitle>{tenantName ? `Sign in to ${tenantName}` : "Sign in"}</CardTitle>
+        <CardTitle className="text-balance">{title}</CardTitle>
+        {description ? <CardDescription>{description}</CardDescription> : null}
       </CardHeader>
-      <CardContent>
-        <Form {...form}>
-          <form onSubmit={form.handleSubmit(onSubmit)} className="grid gap-4">
-            {submitError ? (
-              <Alert variant="destructive">
-                <AlertDescription>{submitError}</AlertDescription>
-              </Alert>
-            ) : null}
-            <FormField
-              control={form.control}
-              name="email"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Email</FormLabel>
-                  <FormControl>
-                    <Input
-                      type="email"
-                      autoComplete="email"
-                      autoFocus
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <FormField
-              control={form.control}
-              name="password"
-              render={({ field }) => (
-                <FormItem>
-                  <div className="flex items-center justify-between">
-                    <FormLabel>Password</FormLabel>
-                    <Link
-                      href="/forgot-password"
-                      className="text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
-                    >
-                      Forgot?
-                    </Link>
-                  </div>
-                  <FormControl>
-                    <Input
-                      type="password"
-                      autoComplete="current-password"
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <Button
-              type="submit"
-              disabled={submitting}
-              style={
-                primaryColor
-                  ? { backgroundColor: primaryColor, borderColor: primaryColor }
-                  : undefined
-              }
-            >
-              {submitting ? "Signing in…" : "Sign in"}
-            </Button>
-          </form>
-        </Form>
-      </CardContent>
+      <CardContent>{body}</CardContent>
     </Card>
   );
 }

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   dashboardGuardRedirect,
   portalGuardRedirect,
+  portalLoginHref,
+  safePortalReturnPath,
 } from "@/lib/auth/guardRedirects";
 
 const verified = { emailVerified: true };
@@ -49,6 +51,12 @@ describe("portalGuardRedirect", () => {
     expect(portalGuardRedirect(null, {})).toBe("/portal/login");
   });
 
+  it("S-10: remembers the page a signed-out visitor asked for", () => {
+    expect(
+      portalGuardRedirect(null, {}, "/portal/invoices/INV-0001?tenantId=acme"),
+    ).toBe("/portal/login?next=%2Fportal%2Finvoices%2FINV-0001%3FtenantId%3Dacme");
+  });
+
   it("sends tenant members to the dashboard", () => {
     expect(
       portalGuardRedirect(verified, { tenantId: "t1", email_verified: true }),
@@ -59,9 +67,58 @@ describe("portalGuardRedirect", () => {
     expect(portalGuardRedirect(unverified, { email_verified: false })).toBe(
       "/portal/login",
     );
+    expect(
+      portalGuardRedirect(unverified, { email_verified: false }, "/portal/quotes/QT-1?tenantId=a"),
+    ).toBe("/portal/login?next=%2Fportal%2Fquotes%2FQT-1%3FtenantId%3Da");
   });
 
   it("lets a verified customer in", () => {
     expect(portalGuardRedirect(verified, { email_verified: true })).toBeNull();
+  });
+});
+
+describe("safePortalReturnPath", () => {
+  it("keeps a portal page with its query", () => {
+    expect(safePortalReturnPath("/portal")).toBe("/portal");
+    expect(safePortalReturnPath("/portal/invoices/INV-0001?tenantId=acme")).toBe(
+      "/portal/invoices/INV-0001?tenantId=acme",
+    );
+  });
+
+  it("refuses anything that could leave the portal or loop back to the login", () => {
+    for (const bad of [
+      "https://evil.example/portal",
+      "//evil.example/portal",
+      "/\\evil.example",
+      "/portalx",
+      "/dashboard",
+      "/portal/../dashboard",
+      "/portal/login",
+      "/portal/login?next=/portal",
+      "portal/invoices/1",
+      "",
+      null,
+      undefined,
+      `/portal/${"x".repeat(1000)}`,
+    ]) {
+      expect(safePortalReturnPath(bad)).toBeNull();
+    }
+  });
+
+  it("drops a fragment", () => {
+    expect(safePortalReturnPath("/portal/invoices/INV-1?tenantId=a#top")).toBe(
+      "/portal/invoices/INV-1?tenantId=a",
+    );
+  });
+});
+
+describe("portalLoginHref", () => {
+  it("adds next only for a portal page other than the home", () => {
+    expect(portalLoginHref()).toBe("/portal/login");
+    expect(portalLoginHref("/portal")).toBe("/portal/login");
+    expect(portalLoginHref("https://evil.example")).toBe("/portal/login");
+    expect(portalLoginHref("/portal/invoices/INV-1?tenantId=a")).toBe(
+      "/portal/login?next=%2Fportal%2Finvoices%2FINV-1%3FtenantId%3Da",
+    );
   });
 });
