@@ -19,7 +19,7 @@ export interface InvoiceSentProps {
   totalFormatted: string;
   dueDateFormatted: string;
   payUrl: string;
-  portalLoginUrl?: string | null;
+  portalUrl?: string | null;
 }
 
 export function buildInvoiceSentPreviewText(props: InvoiceSentProps): string {
@@ -120,7 +120,7 @@ export function InvoiceSent(props: InvoiceSentProps) {
         </Text>
       </Section>
 
-      {props.portalLoginUrl ? (
+      {props.portalUrl ? (
         <Section>
           <Text
             style={{
@@ -132,7 +132,7 @@ export function InvoiceSent(props: InvoiceSentProps) {
           >
             Or{" "}
             <a
-              href={props.portalLoginUrl}
+              href={props.portalUrl}
               style={{ color: "#6b7280", textDecoration: "underline" }}
             >
               view in your customer portal

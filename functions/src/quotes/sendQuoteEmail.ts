@@ -20,6 +20,7 @@ import { sanitizeEmailField } from "../emails/sanitize";
 import { EMAIL_SECRETS, pickReplyTo, sendEmail } from "../emails/send";
 import { formatCurrency } from "../emails/format";
 import { emailLogoUrl } from "../shared/logo";
+import { portalDocumentUrl } from "../shared/portalLinks";
 import { QuoteSent } from "../emails/templates/QuoteSent";
 import type { TenantSnapshotForEmail } from "../emails/components/TenantEmailLayout";
 
@@ -69,8 +70,9 @@ export async function sendQuoteEmailHandler(
     primaryColor: snapshot.primaryColor ?? null,
   };
 
-  const appUrl =
-    process.env.APP_URL || "https://portal.techflowsolutions.ca";
+  const metaSnap = await db.doc(`tenants/${tenantId}/meta/settings`).get();
+  const meta = metaSnap.exists ? metaSnap.data()! : {};
+
   const totalFormatted = formatCurrency(
     quote.totals?.total ?? 0,
     snapshot.currency ?? "CAD",
@@ -82,7 +84,8 @@ export async function sendQuoteEmailHandler(
     quoteNumber: quoteSnap.id,
     totalFormatted,
     validUntilFormatted: quote.validUntil ?? "",
-    viewUrl: `${appUrl}/portal/quotes/${quoteSnap.id}?tenantId=${tenantId}`,
+    // S-10: on the business's own portal domain once it is verified.
+    viewUrl: portalDocumentUrl(meta, "quote", tenantId, quoteSnap.id),
   };
 
   const html = await render(createElement(QuoteSent, props));
@@ -92,9 +95,6 @@ export async function sendQuoteEmailHandler(
 
   const safeTenantName =
     sanitizeEmailField(snapshot.name, 100) || "TechFlow";
-
-  const metaSnap = await db.doc(`tenants/${tenantId}/meta/settings`).get();
-  const meta = metaSnap.exists ? metaSnap.data()! : {};
 
   await sendEmail({
     to: quote.customer.email,

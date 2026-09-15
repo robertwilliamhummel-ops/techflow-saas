@@ -15,6 +15,7 @@ import { db, FieldValue } from "../shared/admin";
 import { readClaims, requireTenant } from "../shared/auth";
 import { requireDocId } from "../shared/docId";
 import { isPayableInvoiceStatus } from "../shared/invoiceStatus";
+import { portalDocumentUrl } from "../shared/portalLinks";
 import { requireFeature } from "../shared/requireFeature";
 import { RATE_LIMITS, enforceRateLimit } from "../shared/rateLimit";
 import { withSentryCallable } from "../shared/withSentry";
@@ -104,9 +105,12 @@ export async function sendInvoiceEmailHandler(
 
   const appUrl =
     process.env.APP_URL || "https://portal.techflowsolutions.ca";
+  // S-10: the portal link opens this invoice — on the business's own domain
+  // once verified — and signing in returns the customer to it.
+  const portalUrl = portalDocumentUrl(meta, "invoice", tenantId, invoiceSnap.id);
   const payUrl = invoice.payToken
     ? `${appUrl}/pay/${invoice.payToken}`
-    : `${appUrl}/portal/login`;
+    : portalUrl;
 
   const totalFormatted = formatCurrency(
     invoice.totals?.total ?? 0,
@@ -120,7 +124,7 @@ export async function sendInvoiceEmailHandler(
     totalFormatted,
     dueDateFormatted: invoice.dueDate ?? "",
     payUrl,
-    portalLoginUrl: `${appUrl}/portal/login`,
+    portalUrl,
   };
 
   const html = await render(createElement(InvoiceSent, props));

@@ -18,6 +18,7 @@ import { render } from "@react-email/render";
 import { db } from "../shared/admin";
 import { isValidEmail } from "../shared/email";
 import { emailLogoUrl } from "../shared/logo";
+import { portalDocumentUrl } from "../shared/portalLinks";
 import { EMAIL_SECRETS, pickReplyTo, sendEmail } from "../emails/send";
 import { formatCurrency } from "../emails/format";
 import { sanitizeEmailField } from "../emails/sanitize";
@@ -85,7 +86,6 @@ export async function handleInvoicePaid(params: {
   const metaSnap = await db.doc(`tenants/${tenantId}/meta/settings`).get();
   const meta: FirebaseFirestore.DocumentData = metaSnap.data() ?? {};
 
-  const appUrl = process.env.APP_URL || "https://portal.techflowsolutions.ca";
   const props = {
     tenant: {
       name: String(snapshot.name ?? ""),
@@ -101,7 +101,8 @@ export async function handleInvoicePaid(params: {
     paidOnFormatted: PAID_ON_FORMAT.format(paidAtMs === null ? new Date() : new Date(paidAtMs)),
     paymentMethodLabel: METHOD_LABELS[method] ?? METHOD_LABELS.manual,
     cardFeeFormatted: cardFee === null ? null : formatCurrency(cardFee, currency),
-    portalUrl: `${appUrl}/portal/login`,
+    // S-10: opens this invoice in the portal, on the business's own domain once verified.
+    portalUrl: portalDocumentUrl(meta, "invoice", tenantId, invoiceId),
   };
 
   const html = await render(createElement(PaymentReceipt, props));
