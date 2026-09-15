@@ -60,6 +60,8 @@ describe("onSignup", () => {
       .doc(`tenants/${tenantId}/entitlements/current`)
       .get();
     expect(ent.data()?.plan).toBe("starter");
+    // D9: new businesses have no invoice limit.
+    expect(ent.data()?.maxInvoicesPerMonth).toBeNull();
 
     const invoiceCounter = await testDb
       .doc(`tenants/${tenantId}/counters/invoice`)

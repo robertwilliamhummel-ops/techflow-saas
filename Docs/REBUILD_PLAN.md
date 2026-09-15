@@ -41,7 +41,7 @@
 | D6 | **Node.js 24 everywhere** (replaces the planned Node 22): Cloud Functions runtime `nodejs24`, `pdf-service` image `node:24-slim`, Vercel `engines.node: 24.x`, local dev on 24. | Node 22 is deprecated for Cloud Functions on 2027-04-30 — a second forced migration within ~7 months. Node 24 is GA in Cloud Run functions and firebase-tools 15 (deprecation 2028-04-30), is Vercel's default, and firebase-admin 14 and Puppeteer support it. | `firebase.json`, `functions/package.json`, `pdf-service/Dockerfile`, `package.json` engines |
 | D7 | **Invoices and quotes store no base64 logo** (2026-09-14, supersedes A-06's `logo` field). `tenantSnapshot` keeps only `logoUrl` — the immutable Storage copy from A-06 — and `logoContentType`. The PDF paths fetch that copy and inline it as a data URL for the pdf-service: `previewInvoicePDF` and `previewQuotePDF`, and the `/api/pdf` routes once the caller is authorized. Only a Storage download URL for the same tenant's `snapshots/logos/` object is fetched. | The Firestore web SDK can't select fields (firebase-js-sdk issue #212), so every dashboard and list listener downloaded each invoice's whole logo — up to 500 KB, about 670 KB as base64 — and one logo alone put a document most of the way to Firestore's 1 MiB limit. The Storage copy is content-addressed, never overwritten, and clients can't write or delete it, so a PDF still shows the logo its document was issued with. | `functions/src/shared/logo.ts` (`pdfLogoDataUrl`), `src/lib/pdf/logo.ts` (`withPdfLogo`), `previewInvoicePDF.ts`, `previewQuotePDF.ts`, `src/app/api/pdf/*/route.ts` |
 | D8 | **The pay page checks its link from the browser** (2026-09-14, S-09). `/pay/[token]` still sets the business's tab title and favicon on the server, but the page calls `verifyInvoicePayToken` through the Firebase web SDK rather than from a server component as Phase 3 planned. | With App Check enforced (R-04), every callable rejects a request without an App Check token, and only the browser holds one attested by reCAPTCHA Enterprise. A server render would have to mint a token with the Admin SDK for every anonymous request to `/pay/…` — link unfurlers included — making the Next.js server an attested proxy for anyone and defeating the check. The cost is one callable round trip before the invoice shows. | `src/app/(pay)/pay/[token]/`, `functions/src/portal/verifyInvoicePayToken.ts` |
-| D9 | **Every plan includes every feature** (2026-09-15, Y-04). Every feature default is on except `cardSurcharge`, which stays off under D3. | TechFlow launches with its own business and a few clients, so tiering can wait for real demand. The per-feature switches stay, so one tenant can still have a feature turned off and plans can be tiered later without code changes. The core invoicing features above stay in every plan; future advanced features (for example AI invoicing from photos and voice, scheduling and dispatch, accounting sync) each get their own new key defaulting to `false`, for premium plans. With `stripePayments` on, owners and admins without Stripe connected see the billing banner until they connect it. | `src/lib/features.ts`, `functions/src/shared/features.ts` (pinned together by `src/lib/__tests__/features.test.ts`) |
+| D9 | **Every plan includes every feature, with no usage limits** (2026-09-15, Y-04). Every feature default is on except `cardSurcharge`, which stays off under D3, and new businesses get `maxInvoicesPerMonth: null` (no limit; the field is kept for paid plans). | TechFlow launches with its own business and a few clients, so tiering can wait for real demand. The per-feature switches stay, so one tenant can still have a feature turned off and plans can be tiered later without code changes. The core invoicing features above stay in every plan; future advanced features (for example AI invoicing from photos and voice, scheduling and dispatch, accounting sync) each get their own new key defaulting to `false`, for premium plans. With `stripePayments` on, owners and admins without Stripe connected see the billing banner until they connect it. | `src/lib/features.ts`, `functions/src/shared/features.ts` (pinned together by `src/lib/__tests__/features.test.ts`) |
 
 ### As-built conventions (override older code samples in this plan)
 
@@ -1801,7 +1801,7 @@ router.replace("/dashboard");
    - Pick the tenantId, then create:
      - `signups/{uid}` ← `{ uid, tenantId, createdAt }`
      - `tenants/{id}/meta/settings` ← `defaultTenantMeta(businessName, ownerEmail)` (`functions/src/shared/meta.ts`)
-     - `tenants/{id}/entitlements/current` ← `{ plan: "starter", maxInvoicesPerMonth: 10, features: {} }`
+     - `tenants/{id}/entitlements/current` ← `{ plan: "starter", maxInvoicesPerMonth: null, features: {} }` (no limit, D9)
      - `tenants/{id}/counters/invoice` and `counters/quote` ← `{ value: 0 }` (C5 — the first numbering transaction never reads a missing doc)
      - `userTenantMemberships/{uid}_{id}` ← `{ uid, tenantId, role: "owner", invitedBy: null, deletedAt: null }`
    - Merge `users/{uid}` ← `{ uid, email, displayName, defaultTenantId }`, keeping a display name saved before signup (`updateUserProfile` can create the doc first).
@@ -2446,11 +2446,7 @@ Until an admin UI exists:
 4. Tenant picks up change on next page load (real-time listener)
 
 ### Limits (non-feature entitlements)
-As built, `entitlements/current.maxInvoicesPerMonth` exists (`onSignup` writes 10) but nothing enforces it yet. Planned shape — enforced inside Cloud Functions alongside feature checks:
-```typescript
-{ maxInvoicesPerMonth: 10, maxCustomers: 50 }
-```
-Not MVP-critical. Shape is reserved so it can be added later without schema migration.
+No usage limits (D9). `entitlements/current.maxInvoicesPerMonth` exists and `onSignup` writes `null`, meaning no limit; nothing enforces it. The field is kept so a paid plan can set limits later without a schema migration — for example `{ maxInvoicesPerMonth, maxCustomers }`, enforced inside Cloud Functions alongside the feature checks. Limits, if they ever come, belong to plans; the core features stay unlimited in every plan.
 
 ---
 

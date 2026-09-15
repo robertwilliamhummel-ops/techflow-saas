@@ -155,7 +155,8 @@ async function claimTenant(
   );
   tx.create(db.doc(`tenants/${tenantId}/entitlements/current`), {
     plan: "starter",
-    maxInvoicesPerMonth: 10,
+    // D9: no usage limits. The field stays so paid plans can set one later.
+    maxInvoicesPerMonth: null,
     features: {}, // resolve via FEATURE_DEFAULTS until platform admin overrides
     updatedAt: FieldValue.serverTimestamp(),
   });
