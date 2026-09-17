@@ -1,9 +1,10 @@
 # TechFlow SaaS
 
 ## Docs map (source of truth — keep in sync)
-- `Docs/REBUILD_PLAN.md` is authoritative. Its "Build Status, Decisions & Conventions" section records what is built, open bugs, post-build decisions (D1–D5), and the path to launch; it overrides older text in the plan. If code diverges from the blueprint, the code is wrong — unless the user approves a new decision, which is then recorded in that section in the same change.
+- `Docs/REBUILD_PLAN.md` is authoritative. Its "Build Status, Decisions & Conventions" section records what is built, open bugs, post-build decisions (D1–D9), and the path to launch; it overrides older text in the plan. If code diverges from the blueprint, the code is wrong — unless the user approves a new decision, which is then recorded in that section in the same change.
 - `Docs/REBUILD_PLAN_DEFERRED.md` is a rationale/audit log (R/P items with status, planning history) — do not add new features there.
-- Do NOT modify REBUILD_PLAN.md without the user explicitly asking or approving a decision.
+- **The blueprint is binding, not beyond question.** It records decisions, and decisions can be wrong or go stale. When one looks wrong, say so — research it first and bring evidence and sources, not an opinion. Never defend a decision because it is written down; "it's in the blueprint" is not a reason.
+- Do NOT modify REBUILD_PLAN.md, or write code that diverges from it, without the user explicitly asking or approving. Challenge freely, change nothing unilaterally. An approved change is recorded as a new D-numbered decision in the same commit.
 - Environment variables, secrets, regions, and deploy steps live only in REBUILD_PLAN.md → "Environment Strategy & Deploy Runbook". Don't restate them here or in new docs.
 
 ## Stack
@@ -33,3 +34,13 @@ Zero-trust multi-tenancy. `tenantId` in Firebase Auth custom claims is the autho
 ## Git
 - Never force-push, reset --hard, or skip hooks without explicit approval.
 - Commit messages: short, imperative, reference the phase or decision (e.g. "phase 1: add stripeStatus meta schema", "decision D3: gate card surcharging").
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+# This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->
