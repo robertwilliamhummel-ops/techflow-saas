@@ -2565,6 +2565,7 @@ Vercel env vars and Cloud Functions secrets are parallel systems — both must b
 - Custom MAIL FROM subdomain (`mail.techflowsolutions.ca`: MX `feedback-smtp.us-east-1.amazonses.com` priority 10, and TXT `v=spf1 include:amazonses.com ~all`). This keeps SPF aligned without touching the root SPF record Zoho Mail relies on.
 - IAM user limited to `ses:SendEmail` on the identity (optionally conditioned on `ses:FromAddress`); its access keys become the two AWS secrets.
 - Configuration set (e.g. `techflow-transactional`) with an SNS event destination for Delivery, Bounce, Complaint, DeliveryDelay, and Reject → SNS topic → HTTPS subscription to the `sesEventsWebhook` URL (confirmed automatically). Set `SES_CONFIGURATION_SET` and `SES_EVENTS_TOPIC_ARN`.
+- **The SNS topic needs an explicit policy or events vanish silently.** A new topic's default policy allows only the account owner, so `ses.amazonaws.com` cannot publish — and SES still accepts the event destination without error. Add a statement granting `sns:Publish` to the `ses.amazonaws.com` service principal, conditioned on `AWS:SourceAccount` (the account id) and `AWS:SourceArn` (the configuration-set ARN), keeping the default statement alongside it.
 - SES SMTP credentials → Firebase Auth SMTP settings (step 1).
 - Later: one SES tenant per TechFlow tenant (identity and configuration set associated), then `SES_TENANTS_ENABLED=true`.
 
