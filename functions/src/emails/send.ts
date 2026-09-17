@@ -12,7 +12,7 @@
 //     can map bounces/complaints back to the document (see sesEvents.ts)
 //
 // Non-secret config (functions/.env.<project>):
-//   SES_REGION              default ca-central-1
+//   SES_REGION              default us-east-1 (D10)
 //   EMAIL_FROM_ADDRESS      default notifications@techflowsolutions.ca
 //   SES_CONFIGURATION_SET   optional; required for bounce/complaint events
 //   SES_TENANTS_ENABLED     "true" once SES tenants exist (TenantName = tenantId)
@@ -42,7 +42,9 @@ export const AWS_SES_SECRET_ACCESS_KEY = defineSecret(
 // Every function that sends email must declare these in its options.
 export const EMAIL_SECRETS = [AWS_SES_ACCESS_KEY_ID, AWS_SES_SECRET_ACCESS_KEY];
 
-const DEFAULT_REGION = "ca-central-1";
+// D10: production access lives in us-east-1. ca-central-1 is still sandboxed on
+// this account, so falling back to it would silently cap sending at 200/day.
+const DEFAULT_REGION = "us-east-1";
 const DEFAULT_FROM_ADDRESS = "notifications@techflowsolutions.ca";
 const IDEMPOTENCY_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const IN_FLIGHT_STALE_MS = 10 * 60 * 1000;
