@@ -17,10 +17,14 @@ vi.mock("firebase-functions/params", () => ({
   defineString: () => ({ value: () => "http://localhost:3000" }),
 }));
 
+// vi.hoisted: vi.mock factories are hoisted above module-level consts, so a
+// plain `const mockLoggerError = vi.fn()` here is still in the temporal dead
+// zone when the factory runs.
+const { mockLoggerError } = vi.hoisted(() => ({ mockLoggerError: vi.fn() }));
 vi.mock("firebase-functions/logger", () => ({
   info: vi.fn(),
   warn: vi.fn(),
-  error: vi.fn(),
+  error: mockLoggerError,
 }));
 
 import { clearFirestore, testDb } from "../callables/_setup";
@@ -59,6 +63,7 @@ beforeEach(async () => {
   await clearFirestore();
   mockSesSend.mockReset();
   mockSesSend.mockResolvedValue({ MessageId: "ses-msg-1" });
+  mockLoggerError.mockReset();
   delete process.env.SES_CONFIGURATION_SET;
   delete process.env.SES_TENANTS_ENABLED;
   delete process.env.EMAIL_FROM_ADDRESS;
@@ -124,6 +129,31 @@ describe("sendEmail", () => {
     await sendEmail(input());
     expect(lastRequest().ConfigurationSetName).toBe("techflow-transactional");
     expect(lastRequest().TenantName).toBe("acme-plumbing");
+  });
+
+  it("still sends without SES_CONFIGURATION_SET, but logs an error (bounce tracking is off)", async () => {
+    const result = await sendEmail(input());
+
+    // The invoice goes out — a missing telemetry setting must not stop billing.
+    expect(result).toEqual({ messageId: "ses-msg-1", deduplicated: false });
+    expect(mockSesSend).toHaveBeenCalledTimes(1);
+
+    // ...but it is loud, so it reaches Sentry rather than passing unnoticed.
+    expect(mockLoggerError).toHaveBeenCalledTimes(1);
+    expect(String(mockLoggerError.mock.calls[0][0])).toMatch(
+      /SES_CONFIGURATION_SET is not set/,
+    );
+
+    // No recipient address may appear in the log context (PII).
+    expect(JSON.stringify(mockLoggerError.mock.calls[0][1])).not.toContain(
+      "jane@example.com",
+    );
+  });
+
+  it("logs nothing when SES_CONFIGURATION_SET is present", async () => {
+    process.env.SES_CONFIGURATION_SET = "techflow-transactional";
+    await sendEmail(input());
+    expect(mockLoggerError).not.toHaveBeenCalled();
   });
 
   it("rejects an invalid recipient without calling SES", async () => {

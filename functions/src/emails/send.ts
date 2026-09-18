@@ -14,7 +14,11 @@
 // Non-secret config (functions/.env.<project>):
 //   SES_REGION              default us-east-1 (D10)
 //   EMAIL_FROM_ADDRESS      default notifications@techflowsolutions.ca
-//   SES_CONFIGURATION_SET   optional; required for bounce/complaint events
+//   SES_CONFIGURATION_SET   required in every deployed environment. Without it
+//                           SES still sends, but publishes no bounce/complaint
+//                           events, so sesEvents.ts records nothing and a dead
+//                           address looks like a successful send. Its absence
+//                           is logged as an error on every send.
 //   SES_TENANTS_ENABLED     "true" once SES tenants exist (TenantName = tenantId)
 // Secrets: AWS_SES_ACCESS_KEY_ID, AWS_SES_SECRET_ACCESS_KEY — an IAM user
 // limited to ses:SendEmail on the platform identity.
@@ -128,6 +132,20 @@ export async function sendEmail(
     tags.push({ Name: "documentId", Value: tagValue(input.documentId) });
   }
 
+  // A missing configuration set must never stop an invoice going out — refusing
+  // to invoice over a telemetry setting is worse than the telemetry gap. But it
+  // must not pass unnoticed either: with no configuration set SES publishes no
+  // bounce or complaint events, so a dead address is indistinguishable from a
+  // delivered one. Logged as an error on every send so it surfaces in Sentry
+  // (O-01) instead of being silently absent.
+  const configurationSet = process.env.SES_CONFIGURATION_SET || undefined;
+  if (!configurationSet) {
+    logger.error(
+      "SES_CONFIGURATION_SET is not set — sending anyway, but no bounce or complaint events will be recorded for this message",
+      logContext(input),
+    );
+  }
+
   const tenantName =
     process.env.SES_TENANTS_ENABLED === "true" && input.tenantId
       ? input.tenantId
@@ -148,7 +166,7 @@ export async function sendEmail(
             },
           },
         },
-        ConfigurationSetName: process.env.SES_CONFIGURATION_SET || undefined,
+        ConfigurationSetName: configurationSet,
         TenantName: tenantName,
         EmailTags: tags,
       }),
