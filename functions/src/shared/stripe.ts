@@ -9,13 +9,10 @@ import Stripe from "stripe";
 import { FieldValue } from "./admin";
 import type { StripeStatus } from "./schema";
 
+// The webhook signing secrets live only in Vercel (the webhook routes run
+// there). Don't declare them here: firebase deploy asks for a value for every
+// declared secret, used or not.
 export const STRIPE_SECRET_KEY = defineSecret("STRIPE_SECRET_KEY");
-export const STRIPE_PLATFORM_WEBHOOK_SECRET = defineSecret(
-  "STRIPE_PLATFORM_WEBHOOK_SECRET",
-);
-export const STRIPE_CONNECT_WEBHOOK_SECRET = defineSecret(
-  "STRIPE_CONNECT_WEBHOOK_SECRET",
-);
 
 let cachedClient: Stripe | null = null;
 

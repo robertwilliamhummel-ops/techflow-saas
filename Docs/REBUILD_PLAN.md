@@ -2509,7 +2509,7 @@ The Next.js app sends no email and needs no AWS credentials (D5).
 | `AWS_SES_ACCESS_KEY_ID`, `AWS_SES_SECRET_ACCESS_KEY` | every email sender (D5) |
 | `VERCEL_API_TOKEN`, `VERCEL_PROJECT_ID`, `VERCEL_TEAM_ID`, `EDGE_CONFIG_ID` | custom-domain provisioning and the 5-minute re-check |
 
-`functions/src/shared/stripe.ts` also declares `STRIPE_PLATFORM_WEBHOOK_SECRET` and `STRIPE_CONNECT_WEBHOOK_SECRET`, but no deployed function binds them — the webhooks run on Vercel.
+The Stripe webhook signing secrets (`STRIPE_PLATFORM_WEBHOOK_SECRET`, `STRIPE_CONNECT_WEBHOOK_SECRET`) are Vercel-only — the webhooks run there — and must not be declared in `functions/`: `firebase deploy` asks for a value for every declared secret, bound to a function or not.
 
 ### Cloud Functions non-secret config — `functions/.env.<projectId>`
 
