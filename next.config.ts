@@ -1,6 +1,12 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Builds type-check the app only. The root tsconfig also covers pdf-service
+  // and the tests (which import functions/src), whose packages a Vercel
+  // install doesn't have; `npx tsc --noEmit` still checks all of it.
+  typescript: {
+    tsconfigPath: "tsconfig.build.json",
+  },
   async headers() {
     return [
       {
