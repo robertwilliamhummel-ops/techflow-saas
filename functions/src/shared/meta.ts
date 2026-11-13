@@ -1,5 +1,6 @@
 import { FieldValue } from "firebase-admin/firestore";
 import type { TenantMetaWrite } from "./schema";
+import { DEFAULT_PRIMARY_COLOR, DEFAULT_SECONDARY_COLOR } from "./brandDefaults";
 
 // Sensible defaults applied to every newly provisioned tenant. Every field
 // here MUST be initialized — the first invoice's tenantSnapshot freezes these
@@ -18,8 +19,8 @@ export function defaultTenantMeta(
     address: null,
     contactEmail,
 
-    primaryColor: "#667eea",
-    secondaryColor: "#764ba2",
+    primaryColor: DEFAULT_PRIMARY_COLOR,
+    secondaryColor: DEFAULT_SECONDARY_COLOR,
     fontFamily: "Inter",
     faviconUrl: null,
 

@@ -2,6 +2,7 @@ import QRCode from "qrcode";
 import { getBrowser } from "./browser";
 import { loadTemplate } from "./templateLoader";
 import type { InvoiceData, RenderInvoiceRequest, TenantSnapshot } from "./types";
+import { DEFAULT_PRIMARY_COLOR, DEFAULT_SECONDARY_COLOR } from "./brandDefaults";
 
 const CSP =
   "default-src 'none'; img-src data: https:; style-src 'unsafe-inline'; font-src data: https:;";
@@ -111,8 +112,8 @@ function cssVarsFor(snapshot: TenantSnapshot): string {
   // Inlined CSS custom-properties — Handlebars triple-stash {{{ cssVars }}} writes
   // these into the <style> block. Source values come from the SERVER snapshot
   // (controlled, not user-typed-at-render-time), so the {{{ }}} bypass is safe.
-  const accent = sanitizeColor(snapshot.primaryColor) ?? "#667eea";
-  const accent2 = sanitizeColor(snapshot.secondaryColor) ?? "#764ba2";
+  const accent = sanitizeColor(snapshot.primaryColor) ?? DEFAULT_PRIMARY_COLOR;
+  const accent2 = sanitizeColor(snapshot.secondaryColor) ?? DEFAULT_SECONDARY_COLOR;
   const fontFamily = sanitizeFont(snapshot.fontFamily) ?? "Inter";
   return `--accent:${accent};--accent-2:${accent2};--font-body:'${fontFamily}', system-ui, sans-serif;`;
 }

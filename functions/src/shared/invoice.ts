@@ -7,6 +7,7 @@ import { HttpsError } from "firebase-functions/v2/https";
 import type { Timestamp, FieldValue } from "firebase-admin/firestore";
 import { isIsoCalendarDate } from "./dates";
 import { isValidEmail } from "./email";
+import { DEFAULT_PRIMARY_COLOR, DEFAULT_SECONDARY_COLOR } from "./brandDefaults";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -379,8 +380,8 @@ export function buildTenantSnapshot(
     logoUrl: null,
     logoContentType: null,
     address: meta.address != null ? String(meta.address) : null,
-    primaryColor: String(meta.primaryColor ?? "#667eea"),
-    secondaryColor: String(meta.secondaryColor ?? "#764ba2"),
+    primaryColor: String(meta.primaryColor ?? DEFAULT_PRIMARY_COLOR),
+    secondaryColor: String(meta.secondaryColor ?? DEFAULT_SECONDARY_COLOR),
     fontFamily: String(meta.fontFamily ?? "Inter"),
     faviconUrl: meta.faviconUrl != null ? String(meta.faviconUrl) : null,
     taxRate: Number(meta.taxRate ?? 0),

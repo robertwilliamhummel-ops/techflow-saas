@@ -38,8 +38,9 @@ import type { MembershipRole } from "@/lib/schema/tenant";
 import { TenantProvider, useTenantContext } from "@/lib/tenant/TenantContext";
 import { cn } from "@/lib/utils";
 import { BillingStatusBanner } from "./BillingStatusBanner";
+import { DEFAULT_PRIMARY_COLOR } from "@/lib/tenant/brandDefaults";
 
-const FALLBACK_PRIMARY = "#0066CC";
+const FALLBACK_PRIMARY = DEFAULT_PRIMARY_COLOR;
 const FALLBACK_SECONDARY = "#F5F5F5";
 
 const NAV_ICONS: Record<DashboardNavIcon, typeof LayoutDashboard> = {

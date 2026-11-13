@@ -1,5 +1,6 @@
 import "server-only";
 import { getAdminDb } from "@/lib/firebase/admin";
+import { DEFAULT_PRIMARY_COLOR } from "@/lib/tenant/brandDefaults";
 
 export interface TenantBranding {
   name: string;
@@ -32,7 +33,7 @@ export async function getTenantBranding(
       logoUrl: typeof d.logoUrl === "string" ? d.logoUrl : null,
       faviconUrl: typeof d.faviconUrl === "string" ? d.faviconUrl : null,
       primaryColor:
-        typeof d.primaryColor === "string" ? d.primaryColor : "#0066CC",
+        typeof d.primaryColor === "string" ? d.primaryColor : DEFAULT_PRIMARY_COLOR,
     };
   } catch {
     return null;

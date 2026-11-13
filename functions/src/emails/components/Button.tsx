@@ -1,13 +1,14 @@
 import { Button as REButton } from "@react-email/components";
 import { computeForeground, isValidHexColor } from "../../shared/contrast";
+import { DEFAULT_PRIMARY_COLOR } from "../../shared/brandDefaults";
 
 // Primary CTA — uses tenant primaryColor with a WCAG-safe computed foreground.
 // Blueprint rule #6 of email design principles: contrast guard applies to CTA.
-// Fallback color if tenant primaryColor is invalid/missing is Tailwind indigo-600
-// (#4F46E5) because its contrast against white is 4.56:1 and against any of its
-// computed foregrounds is AAA-grade.
+// Fallback if tenant primaryColor is invalid/missing: the neutral default brand
+// colour (D13, slate #475569), 7.6:1 against white, so the computed foreground
+// is always readable.
 
-const FALLBACK_BG = "#4F46E5";
+const FALLBACK_BG = DEFAULT_PRIMARY_COLOR;
 
 interface ButtonProps {
   href: string;

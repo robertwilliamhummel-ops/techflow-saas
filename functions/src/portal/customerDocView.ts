@@ -14,6 +14,7 @@
 // nothing new; it is withheld once nothing is left to pay.
 
 import { isPayableInvoiceStatus } from "../shared/invoiceStatus";
+import { DEFAULT_PRIMARY_COLOR } from "../shared/brandDefaults";
 
 type Data = FirebaseFirestore.DocumentData;
 
@@ -140,7 +141,7 @@ export function toCustomerBusinessView(value: unknown): CustomerBusinessView {
     name: str(s.name),
     logoUrl: strOrNull(s.logoUrl),
     address: strOrNull(s.address),
-    primaryColor: str(s.primaryColor, "#667eea"),
+    primaryColor: str(s.primaryColor, DEFAULT_PRIMARY_COLOR),
     businessNumber: strOrNull(s.businessNumber),
     currency: str(s.currency, "CAD"),
   };

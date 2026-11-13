@@ -363,7 +363,7 @@ describe("cssVars sanitization", () => {
     });
     // Sanitized to defaults — nothing dangerous leaks.
     expect(out).toBe(
-      `--accent:#667eea;--accent-2:#764ba2;--font-body:'Inter', system-ui, sans-serif;`,
+      `--accent:#475569;--accent-2:#334155;--font-body:'Inter', system-ui, sans-serif;`,
     );
     expect(out).not.toContain(";}");
     expect(out).not.toContain("expression");

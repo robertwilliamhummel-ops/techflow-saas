@@ -103,7 +103,7 @@ describe("invoice template", () => {
       },
     });
     // Falls back to default — never echoes the malicious string into the style block.
-    expect(html).toContain("--accent:#667eea");
+    expect(html).toContain("--accent:#475569");
     expect(html).not.toContain("display:none");
   });
 

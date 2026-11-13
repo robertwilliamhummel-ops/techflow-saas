@@ -18,6 +18,7 @@ import { readClaims, requireVerifiedCustomer } from "../shared/auth";
 import { lowerEmail } from "../shared/email";
 import { isCustomerVisibleQuoteStatus } from "../shared/customerVisibility";
 import { withSentryCallable } from "../shared/withSentry";
+import { DEFAULT_PRIMARY_COLOR } from "../shared/brandDefaults";
 
 export const CUSTOMER_QUOTE_LIST_LIMIT = 100;
 
@@ -74,7 +75,7 @@ function toListItem(
         typeof d.tenantSnapshot?.logoUrl === "string"
           ? d.tenantSnapshot.logoUrl
           : null,
-      primaryColor: d.tenantSnapshot?.primaryColor ?? "#667eea",
+      primaryColor: d.tenantSnapshot?.primaryColor ?? DEFAULT_PRIMARY_COLOR,
     },
   };
 }

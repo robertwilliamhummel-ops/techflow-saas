@@ -61,13 +61,13 @@ describe("StaffInvite template", () => {
     expect(html.toLowerCase()).toContain("color:#ffffff");
   });
 
-  it("falls back to indigo when primaryColor is missing or invalid", async () => {
+  it("falls back to the neutral default when primaryColor is missing or invalid", async () => {
     const html = await renderHtml(
       baseProps({
         tenant: { ...baseProps().tenant, primaryColor: null },
       }),
     );
-    expect(html).toContain("#4F46E5");
+    expect(html).toContain("#475569");
   });
 
   it("renders footer with tenant address and emailFooter", async () => {

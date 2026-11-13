@@ -39,6 +39,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { DEFAULT_PRIMARY_COLOR, DEFAULT_SECONDARY_COLOR } from "@/lib/tenant/brandDefaults";
 
 const HEX_RE = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i;
 
@@ -78,8 +79,8 @@ export default function SettingsBrandingPage() {
     resolver: zodResolver(schema),
     mode: "onChange",
     defaultValues: {
-      primaryColor: "#0066CC",
-      secondaryColor: "#374151",
+      primaryColor: DEFAULT_PRIMARY_COLOR,
+      secondaryColor: DEFAULT_SECONDARY_COLOR,
       fontFamily: "Inter",
     },
   });

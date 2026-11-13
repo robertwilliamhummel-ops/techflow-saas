@@ -20,6 +20,7 @@ import {
 } from "@/lib/portal/customerVisibility";
 import { displayQuoteStatus } from "@/lib/quotes/quoteStatus";
 import type { InvoiceStatus, QuoteStatus } from "@/lib/schema/tenant";
+import { DEFAULT_PRIMARY_COLOR } from "@/lib/tenant/brandDefaults";
 
 export interface PortalInvoiceRow {
   invoice: CustomerInvoiceListItem;
@@ -150,7 +151,7 @@ export function portalQuoteHref(
 }
 
 const HEX_COLOR = /^#[0-9a-f]{6}$/i;
-export const PORTAL_FALLBACK_ACCENT = "#475569";
+export const PORTAL_FALLBACK_ACCENT = DEFAULT_PRIMARY_COLOR;
 
 /** A business's brand colour when it is a #rrggbb hex, else a neutral slate. */
 export function portalAccent(color: string | null | undefined): string {
