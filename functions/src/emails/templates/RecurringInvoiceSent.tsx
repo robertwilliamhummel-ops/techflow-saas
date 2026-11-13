@@ -77,7 +77,7 @@ export function RecurringInvoiceSent(props: RecurringInvoiceSentProps) {
           }}
         >
           {safeTenantName} has generated your {safeFreq} invoice for{" "}
-          {safeTotal}.
+          {safeTotal}. A PDF copy is attached for your records.
         </Text>
       </Section>
 

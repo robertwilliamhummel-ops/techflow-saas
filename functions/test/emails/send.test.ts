@@ -194,6 +194,49 @@ describe("sendEmail", () => {
   });
 });
 
+describe("sendEmail attachments (D14)", () => {
+  it("sends no Attachments field when there are none", async () => {
+    await sendEmail(input());
+    expect(lastRequest().Content.Simple.Attachments).toBeUndefined();
+  });
+
+  it("passes a PDF to SES as a base64 attachment with its bytes and name", async () => {
+    const pdf = Buffer.from("%PDF-1.7 test");
+    await sendEmail(
+      input({
+        attachments: [
+          { filename: "Acme Plumbing INV-0001.pdf", contentType: "application/pdf", content: pdf },
+        ],
+      }),
+    );
+    expect(lastRequest().Content.Simple.Attachments).toEqual([
+      {
+        RawContent: pdf,
+        FileName: "Acme Plumbing INV-0001.pdf",
+        ContentType: "application/pdf",
+        ContentDisposition: "ATTACHMENT",
+        ContentTransferEncoding: "BASE64",
+      },
+    ]);
+  });
+
+  it("strips CR/LF from an attachment filename (header injection)", async () => {
+    await sendEmail(
+      input({
+        attachments: [
+          {
+            filename: "INV-0001.pdf\r\nContent-Type: text/html",
+            contentType: "application/pdf",
+            content: Buffer.from("%PDF"),
+          },
+        ],
+      }),
+    );
+    const name = lastRequest().Content.Simple.Attachments[0].FileName as string;
+    expect(name).not.toMatch(/[\r\n]/);
+  });
+});
+
 describe("header helpers", () => {
   it("formatFromHeader escapes quotes/backslashes and RFC 2047-encodes non-ASCII names", () => {
     expect(formatFromHeader('Bob "The" \\Plumber', "n@t.ca")).toBe(

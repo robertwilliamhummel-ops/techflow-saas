@@ -1,8 +1,9 @@
 // sendInvoiceEmail — Phase 2 Bundle F; transport moved to Amazon SES (D5).
 //
 // Tenant callable: reads invoice doc, renders InvoiceSent template, sends via
-// emails/send.ts. Transitions status from "draft" to "sent" if currently draft.
-// Not deduplicated — pressing Send again is a legitimate resend.
+// emails/send.ts with the invoice PDF attached (D14). Transitions status from
+// "draft" to "sent" if currently draft. Not deduplicated — pressing Send again
+// is a legitimate resend.
 
 import {
   onCall,
@@ -16,6 +17,12 @@ import { readClaims, requireTenant } from "../shared/auth";
 import { requireDocId } from "../shared/docId";
 import { isPayableInvoiceStatus } from "../shared/invoiceStatus";
 import { payPageUrl, portalDocumentUrl } from "../shared/portalLinks";
+import {
+  PDF_SERVICE_API_KEY,
+  pdfAttachmentFilename,
+  renderInvoicePdf,
+  renderPdfOrThrow,
+} from "../shared/documentPdf";
 import { requireFeature } from "../shared/requireFeature";
 import { RATE_LIMITS, enforceRateLimit } from "../shared/rateLimit";
 import { withSentryCallable } from "../shared/withSentry";
@@ -31,7 +38,7 @@ export async function sendInvoiceEmailHandler(
 ): Promise<{ success: true }> {
   const claims = readClaims(request);
   const { uid, tenantId } = requireTenant(claims);
-  await requireFeature(tenantId, "invoices");
+  const features = await requireFeature(tenantId, "invoices");
   await enforceRateLimit(uid, RATE_LIMITS.sendEmail);
 
   const data = request.data as Record<string, unknown> | undefined;
@@ -131,6 +138,20 @@ export async function sendInvoiceEmailHandler(
   const safeTenantName =
     sanitizeEmailField(snapshot.name, 100) || "TechFlow";
 
+  // D14: the customer gets the invoice itself, not only a link to it — for
+  // their records and taxes, and when they pay another way (cash, cheque).
+  const pdf = await renderPdfOrThrow(
+    () =>
+      renderInvoicePdf({
+        tenantId,
+        invoiceId,
+        invoice,
+        cardSurchargeFeature: features.cardSurcharge,
+        meta,
+      }),
+    "invoice",
+  );
+
   await sendEmail({
     to: invoice.customer.email,
     subject: `Invoice ${invoiceSnap.id} from ${safeTenantName} — ${totalFormatted}`,
@@ -141,6 +162,13 @@ export async function sendInvoiceEmailHandler(
     category: "invoice",
     tenantId,
     documentId: invoiceId,
+    attachments: [
+      {
+        filename: pdfAttachmentFilename(snapshot.name, invoiceId),
+        contentType: "application/pdf",
+        content: pdf,
+      },
+    ],
   });
 
   // Transition draft → sent.
@@ -155,6 +183,6 @@ export async function sendInvoiceEmailHandler(
 }
 
 export const sendInvoiceEmail = onCall(
-  { secrets: EMAIL_SECRETS },
+  { secrets: [...EMAIL_SECRETS, PDF_SERVICE_API_KEY] },
   withSentryCallable("sendInvoiceEmail", sendInvoiceEmailHandler),
 );

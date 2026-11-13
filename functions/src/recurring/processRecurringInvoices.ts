@@ -25,6 +25,12 @@ import {
   buildTenantSnapshot,
   resolveLineItems,
 } from "../shared/invoice";
+import {
+  PDF_SERVICE_API_KEY,
+  pdfAttachmentFilename,
+  renderInvoicePdf,
+  renderPdfOrThrow,
+} from "../shared/documentPdf";
 import { applyLogoToSnapshot, emailLogoUrl } from "../shared/logo";
 import { payPageUrl, portalDocumentUrl } from "../shared/portalLinks";
 import { computeNextRunAt, addDaysToISODate } from "../shared/recurring";
@@ -308,6 +314,7 @@ async function processOneTemplate(
         tenantSnapshot,
         totals,
         dueDate,
+        resolveFeature("cardSurcharge", features),
       );
     } catch (err) {
       // Email failure does NOT roll back the invoice — tenant can resend manually.
@@ -328,6 +335,7 @@ async function sendRecurringEmail(
   tenantSnapshot: ReturnType<typeof buildTenantSnapshot>,
   totals: { total: number },
   dueDate: string,
+  cardSurchargeFeature: boolean,
 ): Promise<void> {
   const invoiceRef = db.doc(`tenants/${tenantId}/invoices/${invoiceId}`);
   const invoiceSnap = await invoiceRef.get();
@@ -372,6 +380,20 @@ async function sendRecurringEmail(
   const safeTenantName =
     sanitizeEmailField(tenantSnapshot.name, 100) || "TechFlow";
 
+  // D14: the invoice PDF goes with the email. If it can't be made, the email
+  // isn't sent and the invoice stays a draft for the business to send.
+  const pdf = await renderPdfOrThrow(
+    () =>
+      renderInvoicePdf({
+        tenantId,
+        invoiceId,
+        invoice,
+        cardSurchargeFeature,
+        meta,
+      }),
+    "invoice",
+  );
+
   // Idempotent per generated invoice — a retried run never double-sends.
   await sendEmail({
     to: templateData.customer.email,
@@ -384,6 +406,13 @@ async function sendRecurringEmail(
     tenantId,
     documentId: invoiceId,
     idempotencyKey: `recurringInvoiceEmail:${tenantId}:${invoiceId}`,
+    attachments: [
+      {
+        filename: pdfAttachmentFilename(tenantSnapshot.name, invoiceId),
+        contentType: "application/pdf",
+        content: pdf,
+      },
+    ],
   });
 
   // Transition invoice draft → sent.
@@ -432,7 +461,7 @@ export const processRecurringInvoices = onSchedule(
     schedule: "every day 06:00",
     timeZone: "UTC",
     region: SCHEDULER_REGION,
-    secrets: [PAY_TOKEN_SECRET, ...EMAIL_SECRETS],
+    secrets: [PAY_TOKEN_SECRET, ...EMAIL_SECRETS, PDF_SERVICE_API_KEY],
   },
   withSentryEvent("processRecurringInvoices", processRecurringInvoicesHandler),
 );

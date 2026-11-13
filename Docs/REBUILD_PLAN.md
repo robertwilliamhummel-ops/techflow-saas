@@ -27,7 +27,7 @@
 
 ## Build Status, Decisions & Conventions (as of 2026-09-13)
 
-> **Read this first.** This section records what was actually built (full audit 2026-09-13) and the post-build decisions D1–D13. Where older text in this plan conflicts with this section, **this section wins**. For exact document shapes and rule logic the code is authoritative: `firestore.rules`, `storage.rules`, `firestore.indexes.json`, `functions/src/shared/schema.ts`, `functions/src/shared/invoice.ts`, `src/lib/schema/tenant.ts`. Planning history (timeline estimates, April session notes, the plan revision log) moved to `REBUILD_PLAN_DEFERRED.md` → Appendix.
+> **Read this first.** This section records what was actually built (full audit 2026-09-13) and the post-build decisions D1–D14. Where older text in this plan conflicts with this section, **this section wins**. For exact document shapes and rule logic the code is authoritative: `firestore.rules`, `storage.rules`, `firestore.indexes.json`, `functions/src/shared/schema.ts`, `functions/src/shared/invoice.ts`, `src/lib/schema/tenant.ts`. Planning history (timeline estimates, April session notes, the plan revision log) moved to `REBUILD_PLAN_DEFERRED.md` → Appendix.
 
 ### Decision log — post-build (2026-09-13)
 
@@ -46,6 +46,7 @@
 | D11 | **The marketing site is its own Vercel project** (2026-11-12, Y-05), superseding Decision #1's single project. This app's project serves only the portal host `portal.techflowsolutions.ca`, the staging host `staging.techflowsolutions.ca`, and tenant custom domains; the apex and `www` belong to the marketing site's project. | The marketing site was rebuilt as its own repo and Vercel project, and the proxy already answers 404 for any host that is neither the portal host nor a verified custom domain. Separate projects keep marketing deploys away from the billing app and give each its own env vars and release cadence. | `src/proxy.ts` (`isGenericHost`), Deploy Runbook step 3 |
 | D12 | **Each environment has its own SES configuration set, SNS topic, and sending IAM user** (2026-11-12, Y-24). Staging: `techflow-staging-transactional` → `techflow-staging-ses-events`, user `techflow-staging-ses-sender`. Production: `techflow-transactional` → `techflow-ses-events`, user `techflow-ses-sender`. | SES events carry only `category`, `tenantId` and `documentId` tags, while staging and production repeat tenant ids (same business names) and invoice numbers (`INV-0001`), so a shared topic would let a staging bounce mark a production invoice. An IAM user holds at most two access keys, so sharing one across environments leaves no slot for the rotate-by-second-key step. | `SES_CONFIGURATION_SET`, `SES_EVENTS_TOPIC_ARN` and the AWS secrets per project; Deploy Runbook step 5 |
 | D13 | **One neutral default brand: slate `#475569` primary, `#334155` secondary** (2026-11-13, tracker G-01), replacing the old app's purple pair `#667eea` / `#764ba2` and three other scattered fallbacks (`#4F46E5` in the email button, `#0066CC` in the dashboard and settings form, `#475569` in the portal). New businesses get it at signup, and every snapshot, portal, PDF and email fallback uses it. | `#667eea` is 3.66:1 on white, so it failed the app's own 4.5:1 rule and a new business couldn't re-save the colour it was given. A neutral default keeps TechFlow's (or anyone's) branding off tenant surfaces until the business sets its own; both shades pass the rule (7.6:1 and 10.4:1). Existing businesses keep their stored colours. | `functions/src/shared/brandDefaults.ts`, `src/lib/tenant/brandDefaults.ts`, `pdf-service/src/brandDefaults.ts`, pinned by `src/lib/__tests__/brandDefaults.test.ts` |
+| D14 | **Invoice, recurring-invoice and quote emails attach the document's PDF** (2026-11-13, staging test). The email keeps its Pay Invoice / View Quote button; the attached PDF (`{Business name} {INV-0001}.pdf`) is the same render as Preview PDF, from one builder. If the PDF can't be made, the email isn't sent: a manual send tells the owner to try again, an auto-sent recurring invoice stays a draft for the owner to send. Supersedes the plan's "the email is the envelope, not the document". | The PDF is the customer's record. They keep it for their books and taxes (an HST-registered customer needs the supplier's HST number on the invoice to claim input tax credits), forward it to a bookkeeper, and need it when they pay by cash or cheque and never open the pay link, which expires. Common practice backs this: QuickBooks Online attaches the invoice PDF by default and its users notice when it stops; Jobber offers it as a checkbox and keeps the PDF in its client hub. Attachments don't count toward Gmail's 102 KB clipping limit (the HTML body's size only), and SES v2 accepts them on a simple message, so no raw MIME is needed. | `functions/src/shared/documentPdf.ts` (`renderInvoicePdf`, `renderQuotePdf`, `pdfAttachmentFilename`, `renderPdfOrThrow`), `sendEmail` `attachments` in `functions/src/emails/send.ts`, `sendInvoiceEmail`, `sendQuoteEmail`, `processRecurringInvoices`; tests in `customerFacing.test.ts`, `recurring.test.ts`, `send.test.ts`, `documentPdf.test.ts` |
 
 ### As-built conventions (override older code samples in this plan)
 
@@ -1065,9 +1066,9 @@ functions/src/emails/
     Button.tsx               ← primary CTA; tenant primaryColor with computed foreground
     Divider.tsx
   templates/
-    InvoiceSent.tsx          ← "Pay Invoice" CTA → /pay/{payToken}
-    QuoteSent.tsx            ← "View Quote" → portal
-    RecurringInvoiceSent.tsx
+    InvoiceSent.tsx          ← "Pay Invoice" CTA → /pay/{payToken}; invoice PDF attached (D14)
+    QuoteSent.tsx            ← "View Quote" → portal; quote PDF attached (D14)
+    RecurringInvoiceSent.tsx ← invoice PDF attached (D14)
     StaffInvite.tsx
     PaymentReceipt.tsx       ← "Payment received"; sent by the onInvoicePaid trigger (E-01)
     MagicLinkSignIn.tsx      ← portal sign-in link; sent by sendPortalSignInLink (E-01)
@@ -1085,8 +1086,9 @@ functions/src/emails/
 - **Tags** `category` (`invoice` | `quote` | `recurring-invoice` | `staff-invite` | `payment-incident` | `payment-receipt` | `portal-sign-in`), `tenantId`, `documentId` — SES events use them to find the invoice or quote. Only `invoice`, `recurring-invoice`, and `quote` events are recorded, so a bounced receipt never overwrites the invoice email's status.
 - **Configuration set** `SES_CONFIGURATION_SET` (required for bounce/complaint events). **SES tenants**: `SES_TENANTS_ENABLED=true` passes `TenantName = tenantId` once tenants are provisioned in SES — each TechFlow tenant then gets isolated reputation metrics, automatic pausing, and (with `SuppressionScope: TENANT`) its own suppression list. Required before the first real client, not optional polish: without it a bounce for one business silently blocks that address for every other business. See the Deploy Runbook, step 5.
 - **Idempotency** — an `idempotencyKey` claims `emailSends/{sha256(key)}` in a transaction before sending (`sending` → `sent`, released on failure, stale claims taken over after 10 minutes, 30-day TTL). Automated senders use it: recurring invoices per generated invoice, invitations per invite, incident alerts per incident and owner. Manual "Send" clicks don't — resending an invoice is a legitimate action.
+- **Attachments (D14)** — `attachments: [{ filename, contentType, content }]` go to SES v2 as `Content.Simple.Attachments` (base64, `ATTACHMENT` disposition; the filename is header-sanitized). `sendInvoiceEmail`, `sendQuoteEmail` and the recurring auto-send attach the document's PDF from `shared/documentPdf.ts` — the same builder as Preview PDF — and send nothing if it can't be rendered (`renderPdfOrThrow`).
 - Recipient addresses are never logged; category, tenant, document id, and SES message id are.
-- Every function that sends declares `secrets: EMAIL_SECRETS` (`AWS_SES_ACCESS_KEY_ID`, `AWS_SES_SECRET_ACCESS_KEY`).
+- Every function that sends declares `secrets: EMAIL_SECRETS` (`AWS_SES_ACCESS_KEY_ID`, `AWS_SES_SECRET_ACCESS_KEY`); the three document senders also declare `PDF_SERVICE_API_KEY`.
 
 **Delivery feedback (closes P10):** SES configuration set → SNS topic → `sesEventsWebhook`. The webhook verifies each SNS message signature against the AWS signing certificate (https, `sns.<region>.amazonaws.com`), requires `TopicArn == SES_EVENTS_TOPIC_ARN`, confirms subscriptions only for AWS URLs, and writes `lastEmailStatus` (`delivered` | `bounced` | `complained` | `delayed` | `rejected`), a detail string, the message id, and a timestamp on the tagged invoice or quote. The dashboard can show "bounced" instead of letting the contractor assume "sent" reached the customer.
 
@@ -1108,7 +1110,7 @@ functions/src/emails/
 
 **`previewText` convention (mandatory per template):** each template exports a `build…PreviewText(props)` returning 80–110 characters, passed as `<TenantEmailLayout preview>`. Examples: InvoiceSent `Invoice #INV-0042 from Acme Plumbing — $524.30 due Apr 27`; StaffInvite `Jane Owner invited you to join Acme Plumbing on TechFlow`.
 
-**InvoiceSent content:** tenant logo; "Hi {firstName}"; "{tenant} has sent you an invoice for {total}"; large **Pay Invoice** CTA → `/pay/{payToken}`; small "view in your customer portal" link; collapsed summary (invoice number, due date, total); footer. No line-item table — the PDF and the pay page carry the detail. The email is the envelope, not the document.
+**InvoiceSent content:** tenant logo; "Hi {firstName}"; "{tenant} has sent you an invoice for {total}"; large **Pay Invoice** CTA → `/pay/{payToken}`; small "view in your customer portal" link; collapsed summary (invoice number, due date, total); "A PDF copy is attached for your records"; footer. No line-item table — the attached PDF and the pay page carry the detail. D14: the email is the envelope and the document travels with it as the attached PDF.
 
 **R4 — tenant input sanitization (mandatory).** Tenant-controlled strings reach headers (From display name, Reply-To, Subject) and template text. `sanitizeEmailField(value, maxLen)` drops NUL, C0 controls, and DEL; folds CR/LF/tab runs into single spaces (defusing header smuggling like `\r\nBcc:`); trims; and caps length (name 100, address 300, footer 500, header values 200). `sanitizeHeaderValue` returns `null` when nothing remains, and `pickReplyTo` additionally requires a valid address. `send.ts` sanitizes every header it builds, and `TenantEmailLayout` re-sanitizes defensively. **No `dangerouslySetInnerHTML` anywhere under `functions/src/emails/`** — if a template ever needs rich text, revisit with a dedicated sanitizer.
 
@@ -2508,7 +2510,7 @@ The Next.js app sends no email and needs no AWS credentials (D5).
 |---|---|
 | `PAY_TOKEN_SECRET` | pay-token sign/verify. Unique per environment (`openssl rand -base64 48`); rotating it invalidates every outstanding pay link |
 | `STRIPE_SECRET_KEY` | Connect onboarding, checkout |
-| `PDF_SERVICE_API_KEY` | `previewInvoicePDF`, `previewQuotePDF` |
+| `PDF_SERVICE_API_KEY` | `previewInvoicePDF`, `previewQuotePDF`, and the PDF attachment in `sendInvoiceEmail`, `sendQuoteEmail`, `processRecurringInvoices` (D14) |
 | `AWS_SES_ACCESS_KEY_ID`, `AWS_SES_SECRET_ACCESS_KEY` | every email sender (D5) |
 | `VERCEL_API_TOKEN`, `VERCEL_PROJECT_ID`, `VERCEL_TEAM_ID`, `EDGE_CONFIG_ID` | custom-domain provisioning and the 5-minute re-check |
 

@@ -34,6 +34,20 @@ vi.mock("@aws-sdk/client-sesv2", () => ({
     .mockImplementation((input: unknown) => ({ input })),
 }));
 
+// Mock the Cloud Run pdf-service call — invoice and quote emails attach the
+// rendered PDF (D14). The payload builder (shared/documentPdf.ts) runs for real.
+const FAKE_PDF = Buffer.from("%PDF-1.7 fake invoice");
+const { mockRenderViaPdfService } = vi.hoisted(() => ({
+  mockRenderViaPdfService: vi.fn(),
+}));
+vi.mock("../../src/shared/pdfService", () => ({
+  renderViaPdfService: mockRenderViaPdfService,
+}));
+mockRenderViaPdfService.mockResolvedValue({
+  pdfBase64: FAKE_PDF.toString("base64"),
+  contentType: "application/pdf",
+});
+
 // Mock Stripe — createPayTokenCheckoutSession uses it.
 const mockStripeCreate = vi.fn().mockResolvedValue({
   id: "cs_test_123",
@@ -1162,5 +1176,90 @@ describe("sendQuoteEmail", () => {
         fakeRequest({ quoteId: "QT-0001" }, null),
       ),
     ).rejects.toThrow(/Sign in required/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// D14 — invoice and quote emails carry the document's PDF
+// ---------------------------------------------------------------------------
+
+describe("D14: document emails attach the PDF", () => {
+  beforeEach(async () => {
+    await clearFirestore();
+    await seedTenantAndInvoice();
+    await seedQuote();
+    mockSesSend.mockClear();
+    mockSesSend.mockResolvedValue({ MessageId: "ses_msg_pdf" });
+    mockRenderViaPdfService.mockClear();
+    mockRenderViaPdfService.mockResolvedValue({
+      pdfBase64: FAKE_PDF.toString("base64"),
+      contentType: "application/pdf",
+    });
+  });
+
+  it("attaches the invoice PDF, named for the business and invoice", async () => {
+    await sendInvoiceEmailHandler(
+      fakeRequest({ invoiceId: "INV-0001" }, ownerAuth),
+    );
+
+    const render = mockRenderViaPdfService.mock.calls[0][0];
+    expect(render.path).toBe("/render/invoice");
+    expect(render.body.data.invoiceId).toBe("INV-0001");
+    expect(render.body.snapshot.name).toBe("Acme Plumbing");
+
+    const attachments = mockSesSend.mock.calls[0][0].input.Content.Simple.Attachments;
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0]).toMatchObject({
+      FileName: "Acme Plumbing INV-0001.pdf",
+      ContentType: "application/pdf",
+      ContentDisposition: "ATTACHMENT",
+      ContentTransferEncoding: "BASE64",
+    });
+    expect(Buffer.from(attachments[0].RawContent).equals(FAKE_PDF)).toBe(true);
+  });
+
+  it("doesn't send the invoice email without its PDF, and the draft stays a draft", async () => {
+    await testDb.doc(`tenants/${TENANT}/invoices/INV-0001`).update({
+      status: "draft",
+    });
+    mockRenderViaPdfService.mockRejectedValueOnce(new Error("pdf-service error 500"));
+
+    await expect(
+      sendInvoiceEmailHandler(fakeRequest({ invoiceId: "INV-0001" }, ownerAuth)),
+    ).rejects.toMatchObject({
+      code: "unavailable",
+      message: expect.stringMatching(/Couldn't create the invoice PDF, so the email wasn't sent/),
+    });
+    expect(mockSesSend).not.toHaveBeenCalled();
+    const inv = await testDb.doc(`tenants/${TENANT}/invoices/INV-0001`).get();
+    expect(inv.data()?.status).toBe("draft");
+  });
+
+  it("attaches the quote PDF", async () => {
+    await sendQuoteEmailHandler(fakeRequest({ quoteId: "QT-0001" }, ownerAuth));
+
+    const render = mockRenderViaPdfService.mock.calls[0][0];
+    expect(render.path).toBe("/render/quote");
+    expect(render.body.data.quoteId).toBe("QT-0001");
+
+    const attachments = mockSesSend.mock.calls[0][0].input.Content.Simple.Attachments;
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0]).toMatchObject({
+      FileName: "Acme Plumbing QT-0001.pdf",
+      ContentType: "application/pdf",
+      ContentDisposition: "ATTACHMENT",
+    });
+    expect(Buffer.from(attachments[0].RawContent).equals(FAKE_PDF)).toBe(true);
+  });
+
+  it("doesn't send the quote email without its PDF", async () => {
+    mockRenderViaPdfService.mockRejectedValueOnce(new Error("pdf-service unreachable"));
+
+    await expect(
+      sendQuoteEmailHandler(fakeRequest({ quoteId: "QT-0001" }, ownerAuth)),
+    ).rejects.toMatchObject({ code: "unavailable" });
+    expect(mockSesSend).not.toHaveBeenCalled();
+    const qt = await testDb.doc(`tenants/${TENANT}/quotes/QT-0001`).get();
+    expect(qt.data()?.status).toBe("draft");
   });
 });

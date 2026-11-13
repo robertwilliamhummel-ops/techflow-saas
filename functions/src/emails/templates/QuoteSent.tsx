@@ -72,7 +72,8 @@ export function QuoteSent(props: QuoteSentProps) {
             color: "#374151",
           }}
         >
-          {safeTenantName} has sent you a quote for {safeTotal}.
+          {safeTenantName} has sent you a quote for {safeTotal}. A PDF copy
+          is attached.
         </Text>
       </Section>
 

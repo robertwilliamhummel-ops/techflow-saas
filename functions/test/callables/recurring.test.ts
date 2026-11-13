@@ -35,6 +35,19 @@ vi.mock("@react-email/render", () => ({
   render: vi.fn().mockResolvedValue("<html>mock</html>"),
 }));
 
+// The Cloud Run pdf-service call — auto-sent invoices attach the PDF (D14).
+const FAKE_PDF = Buffer.from("%PDF-1.7 fake recurring invoice");
+const { mockRenderViaPdfService } = vi.hoisted(() => ({
+  mockRenderViaPdfService: vi.fn(),
+}));
+vi.mock("../../src/shared/pdfService", () => ({
+  renderViaPdfService: mockRenderViaPdfService,
+}));
+mockRenderViaPdfService.mockResolvedValue({
+  pdfBase64: FAKE_PDF.toString("base64"),
+  contentType: "application/pdf",
+});
+
 import {
   clearFirestore,
   fakeRequest,
@@ -495,6 +508,11 @@ describe("processRecurringInvoices", () => {
   beforeEach(async () => {
     await clearFirestore();
     mockSesSend.mockClear();
+    mockRenderViaPdfService.mockReset();
+    mockRenderViaPdfService.mockResolvedValue({
+      pdfBase64: FAKE_PDF.toString("base64"),
+      contentType: "application/pdf",
+    });
   });
 
   it("does nothing when no templates are due", async () => {
@@ -698,12 +716,51 @@ describe("processRecurringInvoices", () => {
     expect(invoices.docs[0].data().status).toBe("sent");
   });
 
+  it("D14: attaches the generated invoice's PDF", async () => {
+    await seedTenant();
+    await seedRecurringTemplate({ autoSend: true });
+    await processRecurringInvoicesHandler();
+
+    const invoices = await testDb
+      .collection(`tenants/${TENANT}/invoices`)
+      .get();
+    const invoiceId = invoices.docs[0].id;
+
+    const render = mockRenderViaPdfService.mock.calls[0][0];
+    expect(render.path).toBe("/render/invoice");
+    expect(render.body.data.invoiceId).toBe(invoiceId);
+
+    const attachments = mockSesSend.mock.calls[0][0].input.Content.Simple.Attachments;
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0]).toMatchObject({
+      FileName: `Acme Plumbing ${invoiceId}.pdf`,
+      ContentType: "application/pdf",
+      ContentDisposition: "ATTACHMENT",
+    });
+    expect(Buffer.from(attachments[0].RawContent).equals(FAKE_PDF)).toBe(true);
+  });
+
+  it("D14: without a PDF it sends nothing and leaves the invoice a draft", async () => {
+    await seedTenant();
+    await seedRecurringTemplate({ autoSend: true });
+    mockRenderViaPdfService.mockRejectedValueOnce(new Error("pdf-service error 500"));
+    await processRecurringInvoicesHandler();
+
+    expect(mockSesSend).not.toHaveBeenCalled();
+    const invoices = await testDb
+      .collection(`tenants/${TENANT}/invoices`)
+      .get();
+    expect(invoices.docs).toHaveLength(1);
+    expect(invoices.docs[0].data().status).toBe("draft");
+  });
+
   it("does not send email when autoSend is false", async () => {
     await seedTenant();
     await seedRecurringTemplate({ autoSend: false });
     await processRecurringInvoicesHandler();
 
     expect(mockSesSend).not.toHaveBeenCalled();
+    expect(mockRenderViaPdfService).not.toHaveBeenCalled();
 
     const invoices = await testDb
       .collection(`tenants/${TENANT}/invoices`)

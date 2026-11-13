@@ -24,7 +24,11 @@
 // limited to ses:SendEmail on the platform identity.
 
 import { createHash } from "node:crypto";
-import { SESv2Client, SendEmailCommand } from "@aws-sdk/client-sesv2";
+import {
+  SESv2Client,
+  SendEmailCommand,
+  type Attachment,
+} from "@aws-sdk/client-sesv2";
 import { defineSecret } from "firebase-functions/params";
 import * as logger from "firebase-functions/logger";
 import { createElement } from "react";
@@ -69,6 +73,15 @@ export type EmailCategory =
   | "payment-receipt"
   | "portal-sign-in";
 
+// D14: invoice, recurring-invoice and quote emails attach the document's PDF.
+// Attachments don't count toward Gmail's 102 KB clipping limit, which is the
+// HTML body's size only.
+export interface EmailAttachment {
+  filename: string;
+  contentType: string;
+  content: Buffer;
+}
+
 export interface SendEmailInput {
   to: string;
   subject: string;
@@ -80,6 +93,7 @@ export interface SendEmailInput {
   tenantId?: string | null;
   documentId?: string | null;
   idempotencyKey?: string;
+  attachments?: EmailAttachment[];
 }
 
 export interface SendEmailResult {
@@ -164,6 +178,7 @@ export async function sendEmail(
               Html: { Data: input.html, Charset: "UTF-8" },
               Text: { Data: input.text, Charset: "UTF-8" },
             },
+            Attachments: sesAttachments(input.attachments),
           },
         },
         ConfigurationSetName: configurationSet,
@@ -230,6 +245,21 @@ function logContext(input: SendEmailInput): Record<string, unknown> {
 
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+// SES builds the MIME parts. The filename lands in a header, so it gets the
+// same sanitizing as every other header value.
+function sesAttachments(
+  attachments: EmailAttachment[] | undefined,
+): Attachment[] | undefined {
+  if (!attachments?.length) return undefined;
+  return attachments.map((a) => ({
+    RawContent: a.content,
+    FileName: sanitizeHeaderValue(a.filename, 120) ?? "attachment",
+    ContentType: a.contentType,
+    ContentDisposition: "ATTACHMENT",
+    ContentTransferEncoding: "BASE64",
+  }));
 }
 
 // SES message tags allow only letters, digits, underscores, and dashes.

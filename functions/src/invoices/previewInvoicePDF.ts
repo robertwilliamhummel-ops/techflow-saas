@@ -2,7 +2,8 @@
 //
 // Tenant callable: loads the saved invoice's frozen tenantSnapshot and forwards
 // to the Cloud Run pdf-service. Returns base64-encoded PDF for in-browser
-// preview. Does NOT persist anything — pure render.
+// preview. Does NOT persist anything — pure render. The payload is built by
+// shared/documentPdf.ts, the same builder the invoice emails attach (D14).
 //
 // Auth: requires tenantId claim (read-side feature gate handled separately
 // from sendInvoiceEmail; staff/admin/owner can preview any invoice in their
@@ -13,19 +14,13 @@ import {
   HttpsError,
   type CallableRequest,
 } from "firebase-functions/v2/https";
-import { defineSecret } from "firebase-functions/params";
 import { db } from "../shared/admin";
 import { readClaims, requireTenant } from "../shared/auth";
 import { requireDocId } from "../shared/docId";
-import { pdfLogoDataUrl } from "../shared/logo";
-import { payPageUrl } from "../shared/portalLinks";
+import { PDF_SERVICE_API_KEY, renderInvoicePdf } from "../shared/documentPdf";
 import { requireFeature } from "../shared/requireFeature";
 import { RATE_LIMITS, enforceRateLimit } from "../shared/rateLimit";
 import { withSentryCallable } from "../shared/withSentry";
-import { renderViaPdfService } from "../shared/pdfService";
-import { effectiveCardSurcharge } from "../shared/surcharge";
-
-const PDF_SERVICE_API_KEY = defineSecret("PDF_SERVICE_API_KEY");
 
 export interface PreviewInvoicePDFInput {
   invoiceId?: string;
@@ -53,70 +48,20 @@ export async function previewInvoicePDFHandler(
   }
   const invoice = snap.data() as Record<string, unknown>;
 
-  const frozenSnapshot = invoice.tenantSnapshot as
-    | Record<string, unknown>
-    | undefined;
-  if (!frozenSnapshot) {
-    throw new HttpsError(
-      "failed-precondition",
-      "Invoice is missing tenantSnapshot.",
-    );
-  }
-  const snapshot = {
-    ...frozenSnapshot,
-    // D7 — the snapshot keeps only the logo copy's URL; the PDF needs the bytes.
-    logo: await pdfLogoDataUrl(frozenSnapshot, tenantId),
-    // D3 kill switch — the PDF never discloses a surcharge the platform won't charge.
-    chargeCustomerCardFees: effectiveCardSurcharge(
-      frozenSnapshot,
-      features.cardSurcharge,
-    ).enabled,
-  };
-
-  const customer = (invoice.customer as Record<string, unknown> | undefined) ?? {};
-  // A-12: a void invoice's PDF must not offer a way to pay it.
-  const payToken =
-    typeof invoice.payToken === "string" && invoice.status !== "void"
-      ? invoice.payToken
-      : null;
-  // On the business's verified custom domain, as in its invoice emails.
-  const meta = payToken
+  // Meta only matters for the pay link (the business's verified custom
+  // domain), so skip the read when the PDF won't show one.
+  const needsPayLink =
+    typeof invoice.payToken === "string" && invoice.status !== "void";
+  const meta = needsPayLink
     ? (await db.doc(`tenants/${tenantId}/meta/settings`).get()).data()
     : undefined;
-  const payUrl = payToken ? payPageUrl(meta, payToken) : null;
 
-  const data: Record<string, unknown> = {
+  const result = await renderInvoicePdf({
+    tenantId,
     invoiceId,
-    issueDate: String(invoice.issueDate ?? ""),
-    dueDate: String(invoice.dueDate ?? ""),
-    status: String(invoice.status ?? "draft"),
-    customer: {
-      name: String(customer.name ?? ""),
-      email: String(customer.email ?? ""),
-      phone: typeof customer.phone === "string" ? customer.phone : null,
-    },
-    lineItems: (invoice.lineItems as unknown[]) ?? [],
-    totals: (invoice.totals as Record<string, unknown>) ?? {},
-    notes:
-      typeof invoice.notes === "string" || invoice.notes === null
-        ? invoice.notes
-        : null,
-    paidVia:
-      typeof invoice.paymentMethod === "string" && invoice.paymentMethod
-        ? invoice.paymentMethod
-        : null,
-    paidAt: serializeTimestamp(invoice.paidAt),
-    surchargeAmountCents:
-      typeof invoice.surchargeAmountCents === "number"
-        ? invoice.surchargeAmountCents
-        : null,
-    payUrl,
-  };
-
-  const result = await renderViaPdfService({
-    path: "/render/invoice",
-    body: { snapshot, data },
-    apiKey: PDF_SERVICE_API_KEY.value(),
+    invoice,
+    cardSurchargeFeature: features.cardSurcharge,
+    meta,
   });
 
   return {
@@ -130,18 +75,3 @@ export const previewInvoicePDF = onCall(
   { secrets: [PDF_SERVICE_API_KEY] },
   withSentryCallable("previewInvoicePDF", previewInvoicePDFHandler),
 );
-
-function serializeTimestamp(value: unknown): string | null {
-  if (!value) return null;
-  if (typeof value === "string") return value;
-  if (typeof value === "object" && value !== null) {
-    const maybe = value as { toDate?: () => Date; seconds?: number };
-    if (typeof maybe.toDate === "function") {
-      return maybe.toDate().toISOString().slice(0, 10);
-    }
-    if (typeof maybe.seconds === "number") {
-      return new Date(maybe.seconds * 1000).toISOString().slice(0, 10);
-    }
-  }
-  return null;
-}

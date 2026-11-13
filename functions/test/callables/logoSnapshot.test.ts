@@ -25,6 +25,17 @@ vi.mock("@aws-sdk/client-sesv2", () => ({
     .mockImplementation((input: unknown) => ({ input })),
 }));
 
+// The email tests below check only the email HTML. Sending also attaches the
+// invoice PDF (D14), whose logo handling pdfLogoDataUrl's own tests cover, so
+// the render is stubbed here; their fixture logo URLs aren't stored copies.
+vi.mock("../../src/shared/documentPdf", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/shared/documentPdf")>()),
+  renderInvoicePdf: vi.fn().mockResolvedValue({
+    pdfBase64: Buffer.from("%PDF-1.7").toString("base64"),
+    contentType: "application/pdf",
+  }),
+}));
+
 import { clearFirestore, fakeRequest, testDb } from "./_setup";
 import { getStorage } from "firebase-admin/storage";
 import {

@@ -2,7 +2,8 @@
 //
 // Blueprint email design: single CTA "Pay Invoice" linking to /pay/{payToken}.
 // No full line-item breakdown — that goes in the PDF and on the pay page.
-// The email is the envelope, not the document.
+// The email is the envelope; the document travels with it as the attached
+// PDF (D14), which sendInvoiceEmail always includes.
 
 import { Section, Text } from "@react-email/components";
 import {
@@ -71,7 +72,8 @@ export function InvoiceSent(props: InvoiceSentProps) {
             color: "#374151",
           }}
         >
-          {safeTenantName} has sent you an invoice for {safeTotal}.
+          {safeTenantName} has sent you an invoice for {safeTotal}. A PDF
+          copy is attached for your records.
         </Text>
       </Section>
 

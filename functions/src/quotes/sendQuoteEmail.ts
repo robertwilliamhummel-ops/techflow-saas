@@ -1,7 +1,8 @@
 // sendQuoteEmail — Phase 2 Bundle F; transport moved to Amazon SES (D5).
 //
 // Tenant callable: reads quote doc, renders QuoteSent template, sends via
-// emails/send.ts. Transitions status from "draft" to "sent" if currently draft.
+// emails/send.ts with the quote PDF attached (D14). Transitions status from
+// "draft" to "sent" if currently draft.
 
 import {
   onCall,
@@ -13,6 +14,12 @@ import { render } from "@react-email/render";
 import { db, FieldValue } from "../shared/admin";
 import { readClaims, requireTenant } from "../shared/auth";
 import { requireDocId } from "../shared/docId";
+import {
+  PDF_SERVICE_API_KEY,
+  pdfAttachmentFilename,
+  renderPdfOrThrow,
+  renderQuotePdf,
+} from "../shared/documentPdf";
 import { requireFeature } from "../shared/requireFeature";
 import { RATE_LIMITS, enforceRateLimit } from "../shared/rateLimit";
 import { withSentryCallable } from "../shared/withSentry";
@@ -96,6 +103,12 @@ export async function sendQuoteEmailHandler(
   const safeTenantName =
     sanitizeEmailField(snapshot.name, 100) || "TechFlow";
 
+  // D14: the customer gets the quote itself, not only a link to it.
+  const pdf = await renderPdfOrThrow(
+    () => renderQuotePdf({ tenantId, quoteId, quote }),
+    "quote",
+  );
+
   await sendEmail({
     to: quote.customer.email,
     subject: `Quote ${quoteSnap.id} from ${safeTenantName} — ${totalFormatted}`,
@@ -106,6 +119,13 @@ export async function sendQuoteEmailHandler(
     category: "quote",
     tenantId,
     documentId: quoteId,
+    attachments: [
+      {
+        filename: pdfAttachmentFilename(snapshot.name, quoteId),
+        contentType: "application/pdf",
+        content: pdf,
+      },
+    ],
   });
 
   // Transition draft → sent.
@@ -120,6 +140,6 @@ export async function sendQuoteEmailHandler(
 }
 
 export const sendQuoteEmail = onCall(
-  { secrets: EMAIL_SECRETS },
+  { secrets: [...EMAIL_SECRETS, PDF_SERVICE_API_KEY] },
   withSentryCallable("sendQuoteEmail", sendQuoteEmailHandler),
 );
