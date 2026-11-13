@@ -26,15 +26,19 @@ export const SCHEDULER_REGION = "northamerica-northeast1";
 // they're defined; Firestore, scheduled, and HTTP-request functions ignore it.
 export const ENFORCE_APP_CHECK = process.env.ENFORCE_APP_CHECK === "true";
 
-// CPU size. 2nd gen functions default to 1 vCPU each, and a new project's
-// Cloud Run quota is 20 vCPU per region (CpuAllocPerProjectRegion). A deploy
-// starts every function to health-check it, so 44 functions x 1 vCPU failed
-// the first staging deploy with "Quota exceeded for total allowable CPU per
-// project per region". "gcf_gen1" sizes CPU from memory (256 MiB -> ~0.17
-// vCPU), which fits the whole set and costs less; concurrency becomes 1 per
-// instance, which is fine at our volume.
+// Memory and CPU size. Every function loads the whole codebase at startup
+// (googleapis, Stripe, React Email, Sentry), which needs ~270 MiB: at the
+// 256 MiB default each instance was killed while booting ("Memory limit of 256
+// MiB exceeded", staging 2026-11-13). 2nd gen functions default to 1 vCPU each,
+// and a new project's Cloud Run quota is 20 vCPU per region
+// (CpuAllocPerProjectRegion); a deploy starts every function to health-check
+// it, so 44 x 1 vCPU failed the first staging deploy ("Quota exceeded for total
+// allowable CPU per project per region"). "gcf_gen1" sizes CPU from memory —
+// 512 MiB -> ~0.33 vCPU, so 44 functions need ~15 vCPU — and concurrency
+// becomes 1 per instance, which is fine at our volume.
 setGlobalOptions({
   region: FUNCTIONS_REGION,
   enforceAppCheck: ENFORCE_APP_CHECK,
+  memory: "512MiB",
   cpu: "gcf_gen1",
 });

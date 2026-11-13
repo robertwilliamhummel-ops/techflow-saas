@@ -15,7 +15,9 @@ const SCHEDULED = new Set([
   "recheckPendingDomains",
 ]);
 
-type WithEndpoint = { __endpoint: { region?: string[]; cpu?: unknown } };
+type WithEndpoint = {
+  __endpoint: { region?: string[]; cpu?: unknown; availableMemoryMb?: unknown };
+};
 
 const deployed = Object.entries(functions).filter(
   ([, value]) =>
@@ -36,11 +38,14 @@ describe("function regions (D2)", () => {
 });
 
 // A full deploy health-checks every function at once; at 1 vCPU each the set
-// exceeds a new project's 20 vCPU regional Cloud Run quota (globalOptions.ts).
-describe("function CPU size", () => {
+// exceeds a new project's 20 vCPU regional Cloud Run quota, and at the 256 MiB
+// default the code's ~270 MiB startup footprint kills every instance
+// (globalOptions.ts).
+describe("function size", () => {
   for (const [name, fn] of deployed) {
-    it(`${name} uses gcf_gen1 CPU`, () => {
+    it(`${name} uses gcf_gen1 CPU and 512 MiB`, () => {
       expect(fn.__endpoint.cpu).toBe("gcf_gen1");
+      expect(fn.__endpoint.availableMemoryMb).toBe(512);
     });
   }
 });
