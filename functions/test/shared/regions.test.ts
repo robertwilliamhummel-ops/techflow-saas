@@ -15,7 +15,7 @@ const SCHEDULED = new Set([
   "recheckPendingDomains",
 ]);
 
-type WithEndpoint = { __endpoint: { region?: string[] } };
+type WithEndpoint = { __endpoint: { region?: string[]; cpu?: unknown } };
 
 const deployed = Object.entries(functions).filter(
   ([, value]) =>
@@ -31,6 +31,16 @@ describe("function regions (D2)", () => {
     const expected = SCHEDULED.has(name) ? SCHEDULER_REGION : FUNCTIONS_REGION;
     it(`${name} deploys to ${expected}`, () => {
       expect(fn.__endpoint.region).toEqual([expected]);
+    });
+  }
+});
+
+// A full deploy health-checks every function at once; at 1 vCPU each the set
+// exceeds a new project's 20 vCPU regional Cloud Run quota (globalOptions.ts).
+describe("function CPU size", () => {
+  for (const [name, fn] of deployed) {
+    it(`${name} uses gcf_gen1 CPU`, () => {
+      expect(fn.__endpoint.cpu).toBe("gcf_gen1");
     });
   }
 });
