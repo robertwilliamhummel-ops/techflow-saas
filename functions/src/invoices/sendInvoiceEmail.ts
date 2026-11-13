@@ -146,7 +146,7 @@ export async function sendInvoiceEmailHandler(
         tenantId,
         invoiceId,
         invoice,
-        cardSurchargeFeature: features.cardSurcharge,
+        features,
         meta,
       }),
     "invoice",

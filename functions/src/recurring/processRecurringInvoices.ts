@@ -314,7 +314,10 @@ async function processOneTemplate(
         tenantSnapshot,
         totals,
         dueDate,
-        resolveFeature("cardSurcharge", features),
+        {
+          cardSurcharge: resolveFeature("cardSurcharge", features),
+          stripePayments: resolveFeature("stripePayments", features),
+        },
       );
     } catch (err) {
       // Email failure does NOT roll back the invoice — tenant can resend manually.
@@ -335,7 +338,7 @@ async function sendRecurringEmail(
   tenantSnapshot: ReturnType<typeof buildTenantSnapshot>,
   totals: { total: number },
   dueDate: string,
-  cardSurchargeFeature: boolean,
+  pdfFeatures: { cardSurcharge: boolean; stripePayments: boolean },
 ): Promise<void> {
   const invoiceRef = db.doc(`tenants/${tenantId}/invoices/${invoiceId}`);
   const invoiceSnap = await invoiceRef.get();
@@ -388,7 +391,7 @@ async function sendRecurringEmail(
         tenantId,
         invoiceId,
         invoice,
-        cardSurchargeFeature,
+        features: pdfFeatures,
         meta,
       }),
     "invoice",

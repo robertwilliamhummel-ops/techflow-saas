@@ -48,8 +48,8 @@ export async function previewInvoicePDFHandler(
   }
   const invoice = snap.data() as Record<string, unknown>;
 
-  // Meta only matters for the pay link (the business's verified custom
-  // domain), so skip the read when the PDF won't show one.
+  // Meta only matters for the card section (Stripe readiness and the pay
+  // link's verified custom domain), so skip the read when it can't show.
   const needsPayLink =
     typeof invoice.payToken === "string" && invoice.status !== "void";
   const meta = needsPayLink
@@ -60,7 +60,7 @@ export async function previewInvoicePDFHandler(
     tenantId,
     invoiceId,
     invoice,
-    cardSurchargeFeature: features.cardSurcharge,
+    features,
     meta,
   });
 

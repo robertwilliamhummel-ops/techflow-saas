@@ -125,6 +125,13 @@ async function seedInvoice(
   });
 }
 
+// The card section (QR + pay link) needs a Stripe account that can take
+// charges, the same rule as the pay page (F-08).
+const STRIPE_READY = {
+  stripeAccountId: "acct_test_ready",
+  stripeStatus: { chargesEnabled: true },
+};
+
 async function seedQuote(
   overrides: Record<string, unknown> = {},
 ): Promise<void> {
@@ -192,6 +199,7 @@ describe("previewInvoicePDF", () => {
 
   it("forwards x-api-key and posts the snapshot+data payload", async () => {
     await seedInvoice();
+    await testDb.doc(`tenants/${TENANT}/meta/settings`).set(STRIPE_READY);
     pdfReply();
     await previewInvoicePDFHandler(
       fakeRequest({ invoiceId: "INV-1" }, ownerAuth),
@@ -256,9 +264,37 @@ describe("previewInvoicePDF", () => {
     expect(postedBody(0).data.payUrl).toBeNull();
   });
 
+  it("F-08: no card section without a Stripe account that can take charges", async () => {
+    for (const meta of [
+      {},
+      { stripeAccountId: "acct_test_pending", stripeStatus: { chargesEnabled: false } },
+      { stripeStatus: { chargesEnabled: true } },
+    ]) {
+      fetchMock.mockReset();
+      await seedInvoice();
+      await testDb.doc(`tenants/${TENANT}/meta/settings`).set(meta);
+      pdfReply();
+      await previewInvoicePDFHandler(fakeRequest({ invoiceId: "INV-1" }, ownerAuth));
+      expect(postedBody(0).data.payUrl).toBeNull();
+    }
+  });
+
+  it("F-08: no card section when the business has card payments turned off", async () => {
+    await seedInvoice();
+    await testDb.doc(`tenants/${TENANT}/meta/settings`).set(STRIPE_READY);
+    await testDb.doc(`tenants/${TENANT}/entitlements/current`).set(
+      { features: { stripePayments: false } },
+      { merge: true },
+    );
+    pdfReply();
+    await previewInvoicePDFHandler(fakeRequest({ invoiceId: "INV-1" }, ownerAuth));
+    expect(postedBody(0).data.payUrl).toBeNull();
+  });
+
   it("custom domains: the pay link uses the business's verified domain", async () => {
     await seedInvoice();
     await testDb.doc(`tenants/${TENANT}/meta/settings`).set({
+      ...STRIPE_READY,
       customDomain: "invoices.acme.test",
       customDomainStatus: { stage: "verified", message: null, checkedAt: null },
     });

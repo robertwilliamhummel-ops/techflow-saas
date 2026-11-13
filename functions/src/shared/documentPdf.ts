@@ -6,6 +6,7 @@
 import { defineSecret } from "firebase-functions/params";
 import { HttpsError } from "firebase-functions/v2/https";
 import { pdfLogoDataUrl } from "./logo";
+import { cardPaymentsReady } from "./payAmounts";
 import { renderViaPdfService } from "./pdfService";
 import { payPageUrl } from "./portalLinks";
 import { effectiveCardSurcharge } from "./surcharge";
@@ -47,9 +48,9 @@ export async function renderInvoicePdf(params: {
   tenantId: string;
   invoiceId: string;
   invoice: Doc;
-  /** The tenant's resolved cardSurcharge flag (D3 kill switch). */
-  cardSurchargeFeature: boolean;
-  /** Tenant meta, for the pay link on a verified custom domain. */
+  /** The tenant's resolved feature flags this PDF depends on. */
+  features: { cardSurcharge: boolean; stripePayments: boolean };
+  /** Tenant meta: Stripe readiness, and the pay link's verified custom domain. */
   meta: Doc | undefined;
 }): Promise<RenderedPdf> {
   const { tenantId, invoiceId, invoice } = params;
@@ -61,13 +62,18 @@ export async function renderInvoicePdf(params: {
     // D3 kill switch — the PDF never discloses a surcharge the platform won't charge.
     chargeCustomerCardFees: effectiveCardSurcharge(
       frozenSnapshot,
-      params.cardSurchargeFeature,
+      params.features.cardSurcharge,
     ).enabled,
   };
 
-  // A-12: a void invoice's PDF must not offer a way to pay it.
+  // A-12: a void invoice's PDF must not offer a way to pay it. The card
+  // section (QR code and "pay online" link) appears only when the pay page
+  // would offer a card — the same rule as verifyInvoicePayToken — so a
+  // business on e-transfer alone never sends customers to a dead end (F-08).
+  const cardReady =
+    params.features.stripePayments && cardPaymentsReady(params.meta);
   const payToken =
-    typeof invoice.payToken === "string" && invoice.status !== "void"
+    typeof invoice.payToken === "string" && invoice.status !== "void" && cardReady
       ? invoice.payToken
       : null;
 
