@@ -119,12 +119,25 @@ function quoteReq(
 // actual tag, which requires the unescaped `<` we already check for.)
 function expectNoExecutableHtml(html: string, vector: string): void {
   const lower = html.toLowerCase();
-  const forbidden = ["<script", "<iframe", "<svg", "<a ", "<a\t", "<a>"];
+  const forbidden = ["<script", "<iframe", "<svg"];
   for (const tag of forbidden) {
     expect(
       lower,
       `vector ${JSON.stringify(vector)} produced unescaped ${tag}`,
     ).not.toContain(tag);
+  }
+  // The template has one link of its own: the card section's "pay online"
+  // link to the https pay page. Any other <a is injected markup.
+  const anchors = lower.match(/<a[\s>][^>]*>/g) ?? [];
+  expect(
+    anchors.length,
+    `vector ${JSON.stringify(vector)} produced ${anchors.length} <a> tags (at most the pay link)`,
+  ).toBeLessThanOrEqual(1);
+  for (const a of anchors) {
+    expect(
+      a,
+      `vector ${JSON.stringify(vector)} produced suspicious <a>: ${a}`,
+    ).toMatch(/^<a class="pay-link" href="https:\/\/[^"<>]*">$/);
   }
   // `<img` and `<body` ARE in the template chrome. Allow exactly one `<body`
   // and only `<img` whose `src` starts with `data:` (logo + QR).
@@ -399,8 +412,9 @@ describe("cssVars sanitization", () => {
 });
 
 // ---------------------------------------------------------------------------
-// payUrl is server-validated to https:// — but the template re-renders the
-// raw string as visible text. Confirm escaping for a hostile-typed payUrl.
+// payUrl is server-validated to https:// — but the template still renders the
+// raw string, as the "pay online" link's href. Confirm escaping for a
+// hostile-typed payUrl.
 // ---------------------------------------------------------------------------
 
 describe("payUrl render", () => {

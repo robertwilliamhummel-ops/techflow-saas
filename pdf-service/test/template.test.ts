@@ -143,6 +143,15 @@ describe("invoice template", () => {
     expect(html).toContain(";base64,");
   });
 
+  it("links to the pay page instead of printing the whole pay URL", async () => {
+    // The 250-character URL was one unbreakable word that pushed the QR code
+    // off the page. A short tappable link works on a phone, where the QR code
+    // on the same screen can't be scanned.
+    const html = await buildInvoiceHtml(baseInvoice);
+    expect(html).toMatch(/<a class="pay-link" href="https:\/\/pay\.example\.com\/i\/abc">pay online<\/a>/);
+    expect(html).not.toContain(">https://pay.example.com/i/abc<");
+  });
+
   it("hides credit card block when payUrl is null", async () => {
     const html = await buildInvoiceHtml({
       ...baseInvoice,
@@ -276,10 +285,13 @@ describe("invoice template", () => {
       ...baseInvoice,
       snapshot: { ...baseSnapshot, logo: "data:image/png;base64,iVBORw0KGgo" },
     });
-    // The pay URL appears as text; no attribute or CSS may fetch from the web.
-    expect(html).not.toMatch(/\b(src|href)\s*=\s*["']?\s*(https?:)?\/\//i);
-    expect(html).not.toMatch(/url\(\s*["']?\s*(https?:)?\/\//i);
-    expect(html).not.toMatch(/@import/i);
+    // The "pay online" link is an <a href>, which fetches nothing while the
+    // page renders; no other attribute and no CSS may point at the web.
+    const withoutPayLink = html.replace(/<a class="pay-link" href="https:\/\/[^"]*">/g, "");
+    expect(withoutPayLink).not.toBe(html);
+    expect(withoutPayLink).not.toMatch(/\b(src|href)\s*=\s*["']?\s*(https?:)?\/\//i);
+    expect(withoutPayLink).not.toMatch(/url\(\s*["']?\s*(https?:)?\/\//i);
+    expect(withoutPayLink).not.toMatch(/@import/i);
   });
 
   it("includes CSP meta tag", async () => {

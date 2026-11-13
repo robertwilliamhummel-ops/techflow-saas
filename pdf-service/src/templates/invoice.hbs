@@ -87,7 +87,10 @@
       border-radius: 50%; background: var(--accent); color: #fff; text-align: center;
       font-size: 11pt; font-weight: 700;
     }
-    .pay .method .body { flex: 1; font-size: 10pt; color: #333; }
+    /* min-width: 0 + overflow-wrap: a long word (an email address) wraps inside
+       the text column instead of pushing the QR code off the page. */
+    .pay .method .body { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 10pt; color: #333; }
+    .pay .method .body .pay-link { color: var(--accent); font-weight: 600; }
     .pay .method .body strong { color: #111; }
     .pay .method .body .label { color: #555; display: inline-block; min-width: 64px; }
     .pay .method .qr { flex: 0 0 120px; }
@@ -216,8 +219,10 @@
             <div class="num">{{#if sections.etransfer}}2{{else}}1{{/if}}</div>
             <div class="body">
               <div><strong>Credit card</strong></div>
-              <div>Scan the QR code or visit:</div>
-              <div>{{data.payUrl}}</div>
+              {{! A short tappable link, not the 250-character URL: the full URL is one
+                  unbreakable word that pushed the QR code off the page. data.payUrl is
+                  validated https:// (validate.ts) and escaped here. }}
+              <div>Scan the QR code, or <a class="pay-link" href="{{data.payUrl}}">pay online</a>.</div>
               {{#if sections.surchargeNote}}
                 <div style="margin-top:6px;color:#555;">A {{percent surcharge.cardFeeFraction}} processing fee applies to credit card payments.</div>
               {{/if}}
