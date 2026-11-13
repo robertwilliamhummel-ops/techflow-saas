@@ -1,14 +1,14 @@
 # TechFlow SaaS
 
 ## Docs map (source of truth — keep in sync)
-- `Docs/REBUILD_PLAN.md` is authoritative. Its "Build Status, Decisions & Conventions" section records what is built, open bugs, post-build decisions (D1–D10), and the path to launch; it overrides older text in the plan. If code diverges from the blueprint, the code is wrong — unless the user approves a new decision, which is then recorded in that section in the same change.
+- `Docs/REBUILD_PLAN.md` is authoritative. Its "Build Status, Decisions & Conventions" section records what is built, open bugs, post-build decisions (D1–D12), and the path to launch; it overrides older text in the plan. If code diverges from the blueprint, the code is wrong — unless the user approves a new decision, which is then recorded in that section in the same change.
 - `Docs/REBUILD_PLAN_DEFERRED.md` is a rationale/audit log (R/P items with status, planning history) — do not add new features there.
 - **The blueprint is binding, not beyond question.** It records decisions, and decisions can be wrong or go stale. When one looks wrong, say so — research it first and bring evidence and sources, not an opinion. Never defend a decision because it is written down; "it's in the blueprint" is not a reason.
 - Do NOT modify REBUILD_PLAN.md, or write code that diverges from it, without the user explicitly asking or approving. Challenge freely, change nothing unilaterally. An approved change is recorded as a new D-numbered decision in the same commit.
 - Environment variables, secrets, regions, and deploy steps live only in REBUILD_PLAN.md → "Environment Strategy & Deploy Runbook". Don't restate them here or in new docs.
 
 ## Stack
-- Next.js 16 App Router on Vercel (single project, `src/proxy.ts` host routing, functions in `yul1`); Node.js 24 everywhere (D6)
+- Next.js 16 App Router on Vercel (its own project — the marketing site is separate, D11; `src/proxy.ts` host routing, functions in `yul1`); Node.js 24 everywhere (D6)
 - Firebase: Firestore + Auth + Storage + Cloud Functions v2 + Emulators — Firestore and functions in `northamerica-northeast2`, scheduled functions in `northamerica-northeast1`; runtime `nodejs24`
 - Cloud Run `pdf-service` (Puppeteer + Handlebars), protected by `X-Api-Key` from the Next.js proxy and callables
 - Stripe Connect with Standard-equivalent controller properties (full Stripe Dashboard, Stripe-liable), direct charges
