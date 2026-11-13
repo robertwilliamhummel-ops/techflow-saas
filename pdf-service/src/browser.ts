@@ -11,6 +11,18 @@ export function getBrowser(): Promise<Browser> {
   return browserPromise;
 }
 
+// No --single-process or --no-zygote: Chrome doesn't support single-process
+// mode, and Chrome 152 crashes in it on the first render ("Target closed",
+// SIGTRAP), which broke every PDF on staging. The remaining flags are the
+// usual ones for a container: no setuid sandbox, /tmp instead of a small
+// /dev/shm, no GPU.
+export const CHROME_ARGS = [
+  "--no-sandbox",
+  "--disable-setuid-sandbox",
+  "--disable-dev-shm-usage",
+  "--disable-gpu",
+];
+
 async function launchBrowser(): Promise<Browser> {
   // The Dockerfile installs the Chrome for Testing build this puppeteer-core
   // release is tested against and links it here (U-02).
@@ -19,14 +31,7 @@ async function launchBrowser(): Promise<Browser> {
   const browser = await puppeteer.launch({
     executablePath,
     headless: true,
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-      "--disable-gpu",
-      "--single-process",
-      "--no-zygote",
-    ],
+    args: CHROME_ARGS,
   });
   // If Chrome dies (OOM, crash) drop the cached promise so the next call relaunches.
   browser.on("disconnected", () => {
