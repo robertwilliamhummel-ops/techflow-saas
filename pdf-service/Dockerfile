@@ -24,10 +24,11 @@ RUN npm ci --omit=dev && npm cache clean --force
 # tested against (pptr.dev/supported-browsers), installed with Puppeteer's own
 # @puppeteer/browsers CLI; --install-deps adds the shared libraries Chrome needs
 # on Debian. An unpinned google-chrome-stable could move ahead of puppeteer-core
-# between image builds (U-02). The fonts render realistic invoices.
+# between image builds (U-02). The fonts render realistic invoices. unzip is
+# required: Chrome for Testing ships as a zip, and node:24-slim has no archiver.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
-       ca-certificates fonts-liberation fonts-noto-color-emoji fonts-noto-cjk \
+       ca-certificates unzip fonts-liberation fonts-noto-color-emoji fonts-noto-cjk \
   && CHROME_BUILD="$(node -p "require('puppeteer-core/internal/revisions.js').PUPPETEER_REVISIONS.chrome")" \
   && CHROME_PATH="$(node node_modules/@puppeteer/browsers/lib/main-cli.js install "chrome@${CHROME_BUILD}" --path /opt/chrome --install-deps --format '{{path}}' | tail -n 1)" \
   && test -x "${CHROME_PATH}" \
