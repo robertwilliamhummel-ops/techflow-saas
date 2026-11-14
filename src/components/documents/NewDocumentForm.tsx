@@ -43,6 +43,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { FieldError, TextField } from "@/components/forms/fields";
 import { isValidEmail } from "@/lib/email";
 import type { FeatureKey } from "@/lib/features";
+import { saveFailure, type SaveFailure } from "@/lib/firebase/callableErrors";
 import { getClientFunctions } from "@/lib/firebase/client";
 import { dollarsToCents, formatMoneyCents } from "@/lib/format";
 import { localIsoDate } from "@/lib/invoices/dueStatus";
@@ -239,7 +240,7 @@ function DocumentFormBody({ kind, meta }: { kind: DocumentKind; meta: TenantMeta
   const [today] = useState(() => localIsoDate(new Date()));
   const customers = useTenantCollection<CustomerWithId>("customers", CUSTOMERS_QUERY);
   const [submitting, setSubmitting] = useState<"draft" | "send" | null>(null);
-  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<SaveFailure | null>(null);
   const [schema] = useState(() => schemaFor(kind));
 
   const hasTax = Number.isFinite(meta.taxRate) && meta.taxRate > 0;
@@ -354,7 +355,7 @@ function DocumentFormBody({ kind, meta }: { kind: DocumentKind; meta: TenantMeta
       documentId = data[config.idField];
     } catch (err) {
       Sentry.captureException(err);
-      setSubmitError(errorMessage(err, `Couldn't save the ${config.noun}. Try again.`));
+      setSubmitError(saveFailure(err, `Couldn't save the ${config.noun}. Try again.`));
       setSubmitting(null);
       return;
     }
@@ -401,10 +402,26 @@ function DocumentFormBody({ kind, meta }: { kind: DocumentKind; meta: TenantMeta
       className="grid items-start gap-6 lg:grid-cols-3"
     >
       <div className="flex flex-col gap-6 lg:col-span-2">
-        {submitError ? (
+        {submitError?.kind === "unconfirmed" ? (
+          // The call failed without the server's answer, so the document may
+          // exist. The list opens in a new tab, so this form keeps its contents.
+          <Alert variant="destructive">
+            <AlertTitle>We couldn&apos;t confirm the {config.noun} was saved</AlertTitle>
+            <AlertDescription>
+              <p>
+                Check your{" "}
+                <Link href={config.listHref} target="_blank" rel="noopener">
+                  {config.noun}s list
+                  <span className="sr-only"> (opens in a new tab)</span>
+                </Link>{" "}
+                before trying again, so you don&apos;t create a duplicate.
+              </p>
+            </AlertDescription>
+          </Alert>
+        ) : submitError ? (
           <Alert variant="destructive">
             <AlertTitle>The {config.noun} wasn&apos;t saved</AlertTitle>
-            <AlertDescription>{submitError}</AlertDescription>
+            <AlertDescription>{submitError.message}</AlertDescription>
           </Alert>
         ) : null}
 
