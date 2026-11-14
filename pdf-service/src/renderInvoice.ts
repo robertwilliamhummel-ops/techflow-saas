@@ -3,6 +3,7 @@ import { getBrowser } from "./browser";
 import { loadTemplate } from "./templateLoader";
 import type { InvoiceData, RenderInvoiceRequest, TenantSnapshot } from "./types";
 import { DEFAULT_PRIMARY_COLOR, DEFAULT_SECONDARY_COLOR } from "./brandDefaults";
+import { fontFaceCss, fontStack, resolveFont, sanitizeFont } from "./fonts";
 
 const CSP =
   "default-src 'none'; img-src data: https:; style-src 'unsafe-inline'; font-src data: https:;";
@@ -56,6 +57,7 @@ export async function buildInvoiceHtml(
     data,
     qrDataUrl,
     cssVars: cssVarsFor(snapshot),
+    fontFaces: fontFacesFor(snapshot),
     sections: {
       void: isVoid,
       etransfer: showEtransfer,
@@ -82,8 +84,9 @@ async function htmlToPdf(html: string): Promise<Buffer> {
     await page.setExtraHTTPHeaders({ "Content-Security-Policy": CSP });
     // "load" (U-02): Puppeteer dropped networkidle options from setContent in
     // 24.43.1 because they never worked reliably there. Templates load nothing
-    // over the network — logo and QR are data URLs (test/template.test.ts) — so
-    // everything has rendered by the load event.
+    // over the network — logo, QR and the business's font are data URLs
+    // (test/template.test.ts, test/fonts.test.ts) — so everything has rendered by the load event,
+    // and page.pdf() waits for document.fonts.ready (its waitForFonts default).
     await page.setContent(html, { waitUntil: "load", timeout: 30_000 });
     const pdf = await page.pdf({
       format: "A4",
@@ -110,12 +113,20 @@ function footerTemplate(): string {
 
 function cssVarsFor(snapshot: TenantSnapshot): string {
   // Inlined CSS custom-properties — Handlebars triple-stash {{{ cssVars }}} writes
-  // these into the <style> block. Source values come from the SERVER snapshot
-  // (controlled, not user-typed-at-render-time), so the {{{ }}} bypass is safe.
+  // these into the <style> block. Colours must pass sanitizeColor and the font
+  // must be one of TENANT_FONTS (fonts.ts), else the defaults apply, so no
+  // snapshot text reaches the CSS and the {{{ }}} bypass is safe.
   const accent = sanitizeColor(snapshot.primaryColor) ?? DEFAULT_PRIMARY_COLOR;
   const accent2 = sanitizeColor(snapshot.secondaryColor) ?? DEFAULT_SECONDARY_COLOR;
-  const fontFamily = sanitizeFont(snapshot.fontFamily) ?? "Inter";
-  return `--accent:${accent};--accent-2:${accent2};--font-body:'${fontFamily}', system-ui, sans-serif;`;
+  const font = resolveFont(snapshot.fontFamily);
+  return `--accent:${accent};--accent-2:${accent2};--font-body:${fontStack(font)};`;
+}
+
+// G-04: the @font-face rules for the snapshot's font (the platform font when it
+// names none from the list), for the templates' other triple-stash,
+// {{{ fontFaces }}}. Built from the curated list and the vendored files only.
+function fontFacesFor(snapshot: TenantSnapshot): string {
+  return fontFaceCss(resolveFont(snapshot.fontFamily));
 }
 
 // D4 — when an invoice mixes taxable and exempt lines, exempt lines are marked
@@ -137,12 +148,6 @@ function sanitizeColor(value: string | null | undefined): string | null {
     : null;
 }
 
-function sanitizeFont(value: string | null | undefined): string | null {
-  if (!value) return null;
-  // Allow alphanumerics, spaces, and hyphens — strip apostrophes/quotes/semis.
-  return /^[A-Za-z0-9 \-]{1,64}$/.test(value) ? value : null;
-}
-
-// Re-export for tests.
-export { CSP, cssVarsFor, sanitizeColor, sanitizeFont };
+// Re-export for tests. sanitizeFont (fonts.ts) accepts only TENANT_FONTS.
+export { CSP, cssVarsFor, fontFacesFor, sanitizeColor, sanitizeFont };
 export type { InvoiceData, TenantSnapshot };

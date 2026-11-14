@@ -24,8 +24,11 @@ RUN npm ci --omit=dev && npm cache clean --force
 # tested against (pptr.dev/supported-browsers), installed with Puppeteer's own
 # @puppeteer/browsers CLI; --install-deps adds the shared libraries Chrome needs
 # on Debian. An unpinned google-chrome-stable could move ahead of puppeteer-core
-# between image builds (U-02). The fonts render realistic invoices. unzip is
-# required: Chrome for Testing ships as a zip, and node:24-slim has no archiver.
+# between image builds (U-02). These system fonts are fallbacks: the amounts'
+# monospace (Liberation Mono), and characters outside the Latin subset of the
+# business's font, which is vendored in src/fonts and embedded in each page
+# (G-04). unzip is required: Chrome for Testing ships as a zip, and
+# node:24-slim has no archiver.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
        ca-certificates unzip fonts-liberation fonts-noto-color-emoji fonts-noto-cjk \
@@ -37,6 +40,7 @@ RUN apt-get update \
 
 COPY --from=builder /build/dist ./dist
 COPY src/templates ./dist/templates
+COPY src/fonts ./dist/fonts
 
 USER pdf
 

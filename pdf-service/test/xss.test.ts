@@ -2,16 +2,19 @@
 //
 // The PDF service runs Handlebars-rendered HTML through Puppeteer. Every
 // user-controllable field flows through `{{ }}` (escaping) by template
-// design; the only triple-stash is `{{{cssVars}}}`, which is server-built
+// design; the only triple-stashes are `{{{cssVars}}}`, which is server-built
 // from the snapshot via `cssVarsFor` and sanitized via `sanitizeColor` /
-// `sanitizeFont`. These tests pin that contract: hostile inputs MUST NOT
-// produce executable HTML/CSS in the output.
+// `sanitizeFont`, and `{{{fontFaces}}}` (G-04), the chosen font's @font-face
+// rules, built from the curated font list and the vendored font files only.
+// These tests pin that contract: hostile inputs MUST NOT produce executable
+// HTML/CSS in the output.
 //
 // Failure modes we're guarding against:
 //   1. A future template edit that switches a user field to `{{{ }}}`.
 //   2. A future helper that returns a Handlebars.SafeString for user content.
 //   3. A regression in `sanitizeColor`/`sanitizeFont` that lets quote/semicolon
-//      payloads escape the cssVars expression.
+//      payloads escape the cssVars expression, or puts snapshot text into the
+//      @font-face rules.
 //
 // We test the HTML build step (`buildInvoiceHtml` / `buildQuoteHtml`) — the
 // actual Puppeteer render is the same HTML in a browser, so escape-in-HTML
@@ -24,6 +27,7 @@ import {
   sanitizeColor,
   sanitizeFont,
   cssVarsFor,
+  fontFacesFor,
 } from "../src/renderInvoice";
 import type {
   InvoiceData,
@@ -327,7 +331,7 @@ describe("quote HTML escapes hostile inputs", () => {
 });
 
 // ---------------------------------------------------------------------------
-// CSS injection through the only triple-stash sink.
+// CSS injection through the triple-stash sinks.
 // ---------------------------------------------------------------------------
 
 describe("cssVars sanitization", () => {
@@ -350,7 +354,8 @@ describe("cssVars sanitization", () => {
     });
   }
 
-  // sanitizeFont allows alphanumerics + space + hyphen only.
+  // sanitizeFont accepts only the curated families (TENANT_FONTS in fonts.ts),
+  // so a name that merely looks harmless is refused too.
   const HOSTILE_FONTS = [
     `Inter';color:red;font-family:'Arial`,
     `Inter</style><script>alert(1)</script>`,
@@ -359,6 +364,9 @@ describe("cssVars sanitization", () => {
     `Inter"`,
     `Inter\\`,
     `Inter;`,
+    `Roboto Mono`,
+    `inter`,
+    `toString`,
   ];
 
   for (const f of HOSTILE_FONTS) {
@@ -384,17 +392,44 @@ describe("cssVars sanitization", () => {
     expect(out).not.toContain("alert(");
   });
 
-  it("cssVarsFor inlines a sanitized color as-is", () => {
+  it("cssVarsFor inlines a sanitized color and a listed font as-is", () => {
     const out = cssVarsFor({
       ...baseSnapshot,
       primaryColor: "#abcdef",
       secondaryColor: "#123456",
-      fontFamily: "Roboto Mono",
+      fontFamily: "Source Sans 3",
     });
     expect(out).toContain("--accent:#abcdef");
     expect(out).toContain("--accent-2:#123456");
-    expect(out).toContain("--font-body:'Roboto Mono'");
+    expect(out).toContain("--font-body:'Source Sans 3', system-ui, sans-serif;");
   });
+
+  it("cssVarsFor falls back to a serif face after Merriweather", () => {
+    const out = cssVarsFor({ ...baseSnapshot, fontFamily: "Merriweather" });
+    expect(out).toContain("--font-body:'Merriweather', Georgia, serif;");
+  });
+
+  it("a font name that isn't on the list renders in Inter", () => {
+    const snapshot = { ...baseSnapshot, fontFamily: "Roboto Mono" };
+    expect(cssVarsFor(snapshot)).toContain("--font-body:'Inter', system-ui, sans-serif;");
+    expect(fontFacesFor(snapshot)).toBe(fontFacesFor({ ...baseSnapshot, fontFamily: "Inter" }));
+  });
+
+  // The fontFaces sink holds only the curated family names and base64 data —
+  // never any snapshot text.
+  const FONT_FACE_RULE =
+    /^@font-face\{font-family:'(Inter|Roboto|Open Sans|Lato|Montserrat|Poppins|Source Sans 3|Merriweather)';font-style:normal;font-weight:(400|700);font-display:block;src:url\(data:font\/woff2;base64,[A-Za-z0-9+/]+=*\) format\('woff2'\);\}$/;
+
+  for (const f of HOSTILE_FONTS) {
+    it(`fontFacesFor ignores the snapshot text and embeds Inter: ${f.slice(0, 40)}`, () => {
+      const css = fontFacesFor({ ...baseSnapshot, fontFamily: f });
+      const rules = css.split("\n");
+      expect(rules).toHaveLength(2);
+      for (const rule of rules) expect(rule).toMatch(FONT_FACE_RULE);
+      expect(css).toContain("font-family:'Inter'");
+      expect(css).not.toContain(f);
+    });
+  }
 
   it("hostile cssVars never produce a closing </style> tag in the rendered HTML", async () => {
     const html = await buildInvoiceHtml(

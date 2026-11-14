@@ -223,7 +223,7 @@ This keeps PDF service stateless and fast: it receives `{ html, snapshot }` (or 
 
 ### Dockerfile (as built — `pdf-service/Dockerfile`)
 
-Two stages: a builder compiles the TypeScript; the runtime image (`node:24-slim`, non-root `pdf` user) installs production dependencies, fonts, and **Chrome for Testing pinned to the exact build the installed `puppeteer-core` is tested against**. The build id comes from `puppeteer-core/internal/revisions.js` (`PUPPETEER_REVISIONS.chrome`); Puppeteer's own `@puppeteer/browsers install chrome@<build> --install-deps` downloads it with its Debian libraries, and it is linked at `/usr/local/bin/chrome` (`PUPPETEER_EXECUTABLE_PATH`). Puppeteer only guarantees the Chrome build each release lists (pptr.dev/supported-browsers), so the earlier unpinned `google-chrome-stable` could drift ahead of `puppeteer-core` between image builds (U-02). Upgrading `puppeteer-core` moves Chrome with it; `pdf-service/test/puppeteerRuntime.test.ts` pins the Dockerfile to that pairing and checks the ESM-only package still loads from the CommonJS build.
+Two stages: a builder compiles the TypeScript; the runtime image (`node:24-slim`, non-root `pdf` user) copies the templates and the vendored tenant fonts (`src/fonts` → `dist/fonts`, G-04), and installs production dependencies, fallback system fonts, and **Chrome for Testing pinned to the exact build the installed `puppeteer-core` is tested against**. The build id comes from `puppeteer-core/internal/revisions.js` (`PUPPETEER_REVISIONS.chrome`); Puppeteer's own `@puppeteer/browsers install chrome@<build> --install-deps` downloads it with its Debian libraries, and it is linked at `/usr/local/bin/chrome` (`PUPPETEER_EXECUTABLE_PATH`). Puppeteer only guarantees the Chrome build each release lists (pptr.dev/supported-browsers), so the earlier unpinned `google-chrome-stable` could drift ahead of `puppeteer-core` between image builds (U-02). Upgrading `puppeteer-core` moves Chrome with it; `pdf-service/test/puppeteerRuntime.test.ts` pins the Dockerfile to that pairing and checks the ESM-only package still loads from the CommonJS build.
 
 ### Env vars (set per Cloud Run service)
 
@@ -2129,7 +2129,7 @@ HTML template reads from the **invoice's `tenantSnapshot`** (frozen at creation 
 - Business name in header
 - Address in footer
 - primaryColor, secondaryColor for accent styling (used sparingly — see design rules below)
-- fontFamily for text rendering
+- fontFamily for text rendering (G-04): Chrome in the image has none of the curated fonts and a render loads nothing over the network (U-02), so `pdf-service/src/fonts/` vendors each family — Latin-subset static WOFF2, regular and bold, with its SIL OFL — and `src/fonts.ts` embeds only the chosen family as `data:` URLs (the page CSP's `font-src data:`). Static rather than variable files, because Chrome's PDF backend writes a variable font as Type 3 glyphs instead of a TrueType subset. A name not on the curated list renders in Inter; characters outside Latin fall back to the image's system fonts
 - `totals.taxes[]` for tax rows (one row per tax, exempt lines marked when an invoice mixes both — D4), plus `businessNumber`
 
 ### PDF design rules (the "polished and professional" target)
