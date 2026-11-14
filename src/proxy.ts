@@ -11,7 +11,7 @@ import { domainCacheKey } from "@/lib/domainCacheKey";
 // Purpose: resolve `Host` header → tenantId so the public portal renders
 // branded for the right contractor. Hot path is Vercel Edge Config (sub-50ms
 // globally replicated), cold path falls back to Firestore and re-populates
-// Edge Config on the spot.
+// Edge Config on the spot. It also sends `/` to each host's home (F-04).
 //
 // R3: matcher excludes static assets / API routes / files with extensions —
 //     without it, every image/font triggers a Firestore read.
@@ -43,6 +43,22 @@ function isGenericHost(host: string): boolean {
   // Vercel preview deploys end in .vercel.app — never custom-tenant scoped.
   if (host.endsWith(".vercel.app")) return true;
   return false;
+}
+
+// F-04 — `/` has no page. Each kind of host sends it to the home of the people
+// who use it, and that page's guard forwards everyone else: the dashboard sends
+// a signed-out visitor to /login and a customer to /portal; the portal sends a
+// signed-out visitor to its branded /portal/login and a business member to
+// /dashboard. Custom domains are the customer-facing address of a business.
+const GENERIC_HOST_HOME = "/dashboard";
+const CUSTOM_DOMAIN_HOME = "/portal";
+
+function redirectHome(req: NextRequest, pathname: string): NextResponse {
+  const url = req.nextUrl.clone();
+  url.pathname = pathname;
+  // 307, not permanent: browsers keep a permanent redirect even if `/` later
+  // gets its own page.
+  return NextResponse.redirect(url, 307);
 }
 
 // Lazy admin init — singleton at module scope so warm invocations skip it.
@@ -135,8 +151,10 @@ export async function proxy(req: NextRequest): Promise<NextResponse> {
   // replace the incoming set and propagate into Server Components via `headers()`.
   const requestHeaders = new Headers(req.headers);
   requestHeaders.delete(TENANT_HEADER);
+  const isRoot = req.nextUrl.pathname === "/";
 
   if (isGenericHost(host)) {
+    if (isRoot) return redirectHome(req, GENERIC_HOST_HOME);
     return NextResponse.next({ request: { headers: requestHeaders } });
   }
 
@@ -146,6 +164,8 @@ export async function proxy(req: NextRequest): Promise<NextResponse> {
     // Unrecognized custom host — render 404 rather than the generic portal.
     return new NextResponse("Not found", { status: 404 });
   }
+
+  if (isRoot) return redirectHome(req, CUSTOM_DOMAIN_HOME);
 
   requestHeaders.set(TENANT_HEADER, tenantId);
   return NextResponse.next({ request: { headers: requestHeaders } });

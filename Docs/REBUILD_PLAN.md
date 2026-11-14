@@ -1573,6 +1573,8 @@ export const headers = {
 
 Rationale: the pay-token is bearer-auth in the URL path. Standard URLs leak via `Referer` headers on outbound links, browser history, email-client link-unfurlers (Outlook Safe Links, Gmail, Slack), and server logs. `no-referrer` plugs the biggest hole (outbound clicks from the page). `noindex` prevents accidental indexing if the token-bearing URL is ever shared in a public channel. `X-Frame-Options: DENY` prevents a phishing site from iframing the real pay page under a fake overlay. Token + `status !== 'paid'` + 60d expiry still provide defense in depth; these headers are the cheap, must-have mitigation.
 
+**As built:** layouts can't export headers, so `next.config.ts` `headers()` sets these for `/pay/:path*`. Every response, on every host, also carries a site-wide set listed before them (F-04): `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin` (the pay entry's `no-referrer` replaces it — for the same key the later entry wins), `X-Frame-Options: DENY` with `Content-Security-Policy: frame-ancestors 'none'`, and `Permissions-Policy: camera=(), microphone=(), geolocation=()`; `X-Powered-By` is off. The CSP is `frame-ancestors` alone: a blob: document inherits the page's policy, so a directive such as `object-src 'none'` would block the browser's PDF viewer in the dashboard's preview iframe, while CSP exempts local URLs from `frame-ancestors`. Vercel already sends `Strict-Transport-Security: max-age=63072000` on every host. Covered by `src/__tests__/securityHeaders.test.ts`.
+
 **Render order (top to bottom):**
 
 1. **Branded header** — tenant logo (from `tenantSnapshot.logoUrl`, the immutable hosted copy — D7), tenant name. Background uses `tenantSnapshot.primaryColor` with `computeForeground()` for the text. Height ~80px.
@@ -1939,6 +1941,7 @@ Two domain tiers per tenant:
   2. If host is not `portal.techflowsolutions.ca` (the generic domain; also `localhost`, `127.0.0.1`, `*.vercel.app`), look up `tenantId` (Global Config key from `domainCacheKey(host)`, then `customDomains/{host}`).
   3. If found, inject `x-tenant-id` into the forwarded request headers so the login page and portal can load that tenant's branding.
   4. If not found, 404.
+  5. `/` has no page (F-04). The proxy redirects it (307) to `/dashboard` on the generic hosts — the portal host, the staging host (its `PORTAL_GENERIC_HOST`), local and preview URLs — and to `/portal` on a verified custom domain; an unknown host still gets 404. Each page's guard forwards everyone else: a signed-out visitor to `/login` or the branded `/portal/login`, a customer to `/portal`, a business member to `/dashboard`.
 
   **R3 — `config.matcher` MUST exclude static assets and API routes:**
   ```typescript

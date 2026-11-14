@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
+import { unstable_doesMiddlewareMatch } from "next/experimental/testing/server";
 
 const edgeConfigGet = vi.fn<(key: string) => Promise<string | null>>();
 
@@ -111,5 +112,71 @@ describe("proxy host routing", () => {
   it("returns 404 for an unknown custom domain", async () => {
     const res = await proxy(request("unknown.example.com"));
     expect(res.status).toBe(404);
+  });
+});
+
+describe("F-04 — `/` goes to each host's home", () => {
+  function requestPath(host: string, path: string) {
+    return new NextRequest(`https://${host}${path}`, { headers: { host } });
+  }
+
+  it("the proxy runs on `/`", () => {
+    expect(unstable_doesMiddlewareMatch({ config, url: "/" })).toBe(true);
+    expect(unstable_doesMiddlewareMatch({ config, url: "/api/pdf/invoice" })).toBe(false);
+  });
+
+  it.each([
+    "portal.techflowsolutions.ca",
+    "localhost:3000",
+    "127.0.0.1:3000",
+    "techflow-saas-git-main.vercel.app",
+  ])("sends %s to the dashboard, whose guard routes everyone else", async (host) => {
+    const req = requestPath(host, "/");
+    const res = await proxy(req);
+    expect(res.status).toBe(307);
+    // Same host as Next sees it (NextURL reads 127.0.0.1 as localhost); Next's
+    // adapter then sends a same-host Location as a relative path, so the
+    // browser stays on the host it asked for.
+    const location = new URL(res.headers.get("location") ?? "");
+    expect(location.host).toBe(req.nextUrl.host);
+    expect(location.pathname).toBe("/dashboard");
+    expect(edgeConfigGet).not.toHaveBeenCalled();
+  });
+
+  it("treats the staging host like the portal host", async () => {
+    vi.stubEnv("PORTAL_GENERIC_HOST", "staging.techflowsolutions.ca");
+    const res = await proxy(requestPath("staging.techflowsolutions.ca", "/"));
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toBe("https://staging.techflowsolutions.ca/dashboard");
+  });
+
+  it("sends a business's custom domain to its customer portal", async () => {
+    edgeConfigGet.mockResolvedValueOnce("t1");
+    const res = await proxy(requestPath("invoices.smithplumbing.ca", "/"));
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toBe("https://invoices.smithplumbing.ca/portal");
+  });
+
+  it("still answers 404 on an unknown host rather than redirecting", async () => {
+    const res = await proxy(requestPath("unknown.example.com", "/"));
+    expect(res.status).toBe(404);
+    expect(res.headers.get("location")).toBeNull();
+  });
+
+  it("keeps the query string", async () => {
+    const res = await proxy(requestPath("portal.techflowsolutions.ca", "/?ref=email"));
+    expect(res.headers.get("location")).toBe(
+      "https://portal.techflowsolutions.ca/dashboard?ref=email",
+    );
+  });
+
+  it("passes the home pages themselves through", async () => {
+    const dashboard = await proxy(requestPath("portal.techflowsolutions.ca", "/dashboard"));
+    expect(dashboard.headers.get("x-middleware-next")).toBe("1");
+
+    edgeConfigGet.mockResolvedValueOnce("t1");
+    const portal = await proxy(requestPath("invoices.smithplumbing.ca", "/portal"));
+    expect(portal.headers.get("x-middleware-next")).toBe("1");
+    expect(forwardedTenantId(portal)).toBe("t1");
   });
 });
