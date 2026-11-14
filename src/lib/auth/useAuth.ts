@@ -54,6 +54,21 @@ export function extractClaims(tokenResult: IdTokenResult | null): AuthClaims {
 }
 
 /**
+ * The user's ID token, refreshed when it predates their email verification.
+ *
+ * Firebase reloads the user at startup and on reload(), so `emailVerified`
+ * turns true soon after the link is clicked, but the cached ID token keeps
+ * the email_verified it was minted with until it refreshes, up to an hour
+ * later. Cloud Functions check the token's claim (F-02), so a token that
+ * disagrees with the user is replaced; offline, the cached one is kept.
+ */
+export async function currentIdTokenResult(user: User): Promise<IdTokenResult> {
+  const result = await user.getIdTokenResult();
+  if (!user.emailVerified || result.claims.email_verified === true) return result;
+  return user.getIdTokenResult(true).catch(() => result);
+}
+
+/**
  * Determines the correct redirect path after login based on claims.
  * Returns null if the user is not authenticated.
  */
@@ -71,7 +86,7 @@ export function useAuth(): AuthState {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(getClientAuth(), async (firebaseUser) => {
       if (firebaseUser) {
-        const tokenResult = await firebaseUser.getIdTokenResult();
+        const tokenResult = await currentIdTokenResult(firebaseUser);
         setUser(firebaseUser);
         setClaims(extractClaims(tokenResult));
       } else {

@@ -43,7 +43,7 @@ describe("updatePaymentSettings", () => {
     const res = await updatePaymentSettingsHandler(
       fakeRequest(
         { etransferEmail: "Deposits@ACME.Test" },
-        { uid: "owner1", claims: { tenantId, role: "owner" } },
+        { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } },
       ),
     );
     expect(res).toEqual({ ok: true });
@@ -56,13 +56,13 @@ describe("updatePaymentSettings", () => {
     await updatePaymentSettingsHandler(
       fakeRequest(
         { etransferEmail: "x@y.test" },
-        { uid: "owner1", claims: { tenantId, role: "owner" } },
+        { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } },
       ),
     );
     await updatePaymentSettingsHandler(
       fakeRequest(
         { etransferEmail: null },
-        { uid: "owner1", claims: { tenantId, role: "owner" } },
+        { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } },
       ),
     );
     const meta = await testDb.doc(`tenants/${tenantId}/meta/settings`).get();
@@ -75,7 +75,7 @@ describe("updatePaymentSettings", () => {
       updatePaymentSettingsHandler(
         fakeRequest(
           { etransferEmail: "not-an-email" },
-          { uid: "owner1", claims: { tenantId, role: "owner" } },
+          { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } },
         ),
       ),
     ).rejects.toThrow(/not a valid address/);
@@ -87,7 +87,7 @@ describe("updatePaymentSettings", () => {
       updatePaymentSettingsHandler(
         fakeRequest(
           { chargeCustomerCardFees: true, acknowledgeSurcharge: true },
-          { uid: "owner1", claims: { tenantId, role: "owner" } },
+          { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } },
         ),
       ),
     ).rejects.toThrow(/Feature 'cardSurcharge' is not enabled/);
@@ -101,7 +101,7 @@ describe("updatePaymentSettings", () => {
     const res = await updatePaymentSettingsHandler(
       fakeRequest(
         { chargeCustomerCardFees: false },
-        { uid: "owner1", claims: { tenantId, role: "owner" } },
+        { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } },
       ),
     );
     expect(res).toEqual({ ok: true });
@@ -114,7 +114,7 @@ describe("updatePaymentSettings", () => {
       updatePaymentSettingsHandler(
         fakeRequest(
           { chargeCustomerCardFees: true },
-          { uid: "owner1", claims: { tenantId, role: "owner" } },
+          { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } },
         ),
       ),
     ).rejects.toThrow(/acknowledging/);
@@ -126,7 +126,7 @@ describe("updatePaymentSettings", () => {
     await updatePaymentSettingsHandler(
       fakeRequest(
         { chargeCustomerCardFees: true, acknowledgeSurcharge: true },
-        { uid: "owner1", claims: { tenantId, role: "owner" } },
+        { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } },
       ),
     );
     const meta = await testDb.doc(`tenants/${tenantId}/meta/settings`).get();
@@ -141,7 +141,7 @@ describe("updatePaymentSettings", () => {
     await updatePaymentSettingsHandler(
       fakeRequest(
         { chargeCustomerCardFees: true, acknowledgeSurcharge: true },
-        { uid: "owner1", claims: { tenantId, role: "owner" } },
+        { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } },
       ),
     );
     const before = await testDb
@@ -153,13 +153,13 @@ describe("updatePaymentSettings", () => {
     await updatePaymentSettingsHandler(
       fakeRequest(
         { chargeCustomerCardFees: false },
-        { uid: "owner1", claims: { tenantId, role: "owner" } },
+        { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } },
       ),
     );
     await updatePaymentSettingsHandler(
       fakeRequest(
         { chargeCustomerCardFees: true },
-        { uid: "owner1", claims: { tenantId, role: "owner" } },
+        { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } },
       ),
     );
     const after = await testDb
@@ -180,7 +180,7 @@ describe("updatePaymentSettings", () => {
       updatePaymentSettingsHandler(
         fakeRequest(
           { cardFeePercent: 3.0 },
-          { uid: "owner1", claims: { tenantId, role: "owner" } },
+          { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } },
         ),
       ),
     ).rejects.toThrow(/hard-capped at 2.4/);
@@ -192,7 +192,7 @@ describe("updatePaymentSettings", () => {
       updatePaymentSettingsHandler(
         fakeRequest(
           { cardFeePercent: -1 },
-          { uid: "owner1", claims: { tenantId, role: "owner" } },
+          { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } },
         ),
       ),
     ).rejects.toThrow(/non-negative/);
@@ -203,7 +203,7 @@ describe("updatePaymentSettings", () => {
     await updatePaymentSettingsHandler(
       fakeRequest(
         { cardFeePercent: 2.4 },
-        { uid: "owner1", claims: { tenantId, role: "owner" } },
+        { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } },
       ),
     );
     const meta = await testDb.doc(`tenants/${tenantId}/meta/settings`).get();
@@ -216,7 +216,7 @@ describe("updatePaymentSettings", () => {
       updatePaymentSettingsHandler(
         fakeRequest(
           { chargeCustomerCardFees: "true" } as never,
-          { uid: "owner1", claims: { tenantId, role: "owner" } },
+          { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } },
         ),
       ),
     ).rejects.toThrow(/must be a boolean/);
@@ -228,7 +228,7 @@ describe("updatePaymentSettings", () => {
       updatePaymentSettingsHandler(
         fakeRequest(
           { etransferEmail: "x@y.test" },
-          { uid: "staffUser", claims: { tenantId, role: "staff" } },
+          { uid: "staffUser", claims: { tenantId, role: "staff", email_verified: true } },
         ),
       ),
     ).rejects.toThrow(/Requires one of: owner, admin/);
@@ -238,7 +238,7 @@ describe("updatePaymentSettings", () => {
     const tenantId = await seedOwner();
     await expect(
       updatePaymentSettingsHandler(
-        fakeRequest({}, { uid: "owner1", claims: { tenantId, role: "owner" } }),
+        fakeRequest({}, { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } }),
       ),
     ).rejects.toThrow(/No editable fields/);
   });
@@ -248,7 +248,7 @@ describe("updatePaymentSettings", () => {
       updatePaymentSettingsHandler(
         fakeRequest(
           { etransferEmail: "x@y.test" },
-          { uid: "someone", claims: { tenantId: "ghost", role: "owner" } },
+          { uid: "someone", claims: { tenantId: "ghost", role: "owner", email_verified: true } },
         ),
       ),
     ).rejects.toThrow(/Tenant settings not found/);

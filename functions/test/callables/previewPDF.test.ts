@@ -34,6 +34,7 @@ const ownerAuth = {
     email: "owner@acme.test",
     tenantId: TENANT,
     role: "owner" as const,
+    email_verified: true,
   },
 };
 

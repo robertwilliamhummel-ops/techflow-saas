@@ -78,6 +78,7 @@ const ownerAuth = {
     email: "owner@acme.test",
     tenantId: TENANT,
     role: "owner" as const,
+    email_verified: true,
   },
 };
 
@@ -873,15 +874,15 @@ describe("processRecurringInvoices", () => {
 describe("updateRecurringInvoice (A-10)", () => {
   const staffAuth = {
     uid: "u_staff",
-    claims: { email: "staff@acme.test", tenantId: TENANT, role: "staff" as const },
+    claims: { email: "staff@acme.test", tenantId: TENANT, role: "staff" as const, email_verified: true },
   };
   const adminAuth = {
     uid: "u_admin",
-    claims: { email: "admin@acme.test", tenantId: TENANT, role: "admin" as const },
+    claims: { email: "admin@acme.test", tenantId: TENANT, role: "admin" as const, email_verified: true },
   };
   const outsiderAuth = {
     uid: "u_outsider",
-    claims: { email: "owner@other.test", tenantId: "other-tenant", role: "owner" as const },
+    claims: { email: "owner@other.test", tenantId: "other-tenant", role: "owner" as const, email_verified: true },
   };
 
   type Auth = typeof ownerAuth | typeof staffAuth | typeof adminAuth | typeof outsiderAuth;

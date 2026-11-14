@@ -11,7 +11,7 @@ const TENANT = "acme-plumbing";
 function member(role: "owner" | "admin" | "staff", tenantId = TENANT) {
   return {
     uid: `u_${role}_${tenantId}`,
-    claims: { email: `${role}@acme.test`, tenantId, role },
+    claims: { email: `${role}@acme.test`, tenantId, role, email_verified: true },
   };
 }
 

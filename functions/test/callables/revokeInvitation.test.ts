@@ -50,7 +50,7 @@ describe("revokeInvitation", () => {
     await revokeInvitationHandler(
       fakeRequest(
         { invitationId: id },
-        { uid: "owner1", claims: { tenantId: TENANT, role: "owner" } },
+        { uid: "owner1", claims: { tenantId: TENANT, role: "owner", email_verified: true } },
       ),
     );
     const snap = await testDb
@@ -66,7 +66,7 @@ describe("revokeInvitation", () => {
     await revokeInvitationHandler(
       fakeRequest(
         { invitationId: id },
-        { uid: "admin1", claims: { tenantId: TENANT, role: "admin" } },
+        { uid: "admin1", claims: { tenantId: TENANT, role: "admin", email_verified: true } },
       ),
     );
     const data = (
@@ -81,7 +81,7 @@ describe("revokeInvitation", () => {
       revokeInvitationHandler(
         fakeRequest(
           { invitationId: id },
-          { uid: "staff1", claims: { tenantId: TENANT, role: "staff" } },
+          { uid: "staff1", claims: { tenantId: TENANT, role: "staff", email_verified: true } },
         ),
       ),
     ).rejects.toMatchObject({ code: "permission-denied" });
@@ -92,7 +92,7 @@ describe("revokeInvitation", () => {
       revokeInvitationHandler(
         fakeRequest(
           { invitationId: "nope" },
-          { uid: "owner1", claims: { tenantId: TENANT, role: "owner" } },
+          { uid: "owner1", claims: { tenantId: TENANT, role: "owner", email_verified: true } },
         ),
       ),
     ).rejects.toMatchObject({ code: "not-found" });
@@ -104,7 +104,7 @@ describe("revokeInvitation", () => {
       revokeInvitationHandler(
         fakeRequest(
           { invitationId: id },
-          { uid: "owner1", claims: { tenantId: TENANT, role: "owner" } },
+          { uid: "owner1", claims: { tenantId: TENANT, role: "owner", email_verified: true } },
         ),
       ),
     ).rejects.toMatchObject({ code: "failed-precondition" });
@@ -116,7 +116,7 @@ describe("revokeInvitation", () => {
       revokeInvitationHandler(
         fakeRequest(
           { invitationId: id },
-          { uid: "owner1", claims: { tenantId: TENANT, role: "owner" } },
+          { uid: "owner1", claims: { tenantId: TENANT, role: "owner", email_verified: true } },
         ),
       ),
     ).rejects.toMatchObject({ code: "failed-precondition" });
@@ -127,7 +127,7 @@ describe("revokeInvitation", () => {
       revokeInvitationHandler(
         fakeRequest(
           {},
-          { uid: "owner1", claims: { tenantId: TENANT, role: "owner" } },
+          { uid: "owner1", claims: { tenantId: TENANT, role: "owner", email_verified: true } },
         ),
       ),
     ).rejects.toMatchObject({ code: "invalid-argument" });

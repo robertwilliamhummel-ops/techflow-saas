@@ -42,7 +42,7 @@ const TENANT = "acme-plumbing";
 function member(role: "owner" | "admin" | "staff") {
   return {
     uid: `u_${role}`,
-    claims: { email: `${role}@acme.test`, tenantId: TENANT, role },
+    claims: { email: `${role}@acme.test`, tenantId: TENANT, role, email_verified: true },
   };
 }
 const ownerAuth = member("owner");

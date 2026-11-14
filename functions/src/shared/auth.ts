@@ -27,6 +27,16 @@ export function readClaims(request: CallableRequest): AuthedClaims {
   };
 }
 
+export const VERIFY_EMAIL_MESSAGE =
+  "Verify your email address first: open the link we emailed you, then try again.";
+
+/**
+ * A tenant member whose ID token says their email is verified. Every tenant
+ * callable starts here, so none of them can create, change, send, or preview
+ * anything for an unverified account (F-02) — the server copy of the
+ * dashboard's email verification gate. Signup, accepting an invitation, and
+ * resending the verification email don't come through here.
+ */
 export function requireTenant(claims: AuthedClaims): {
   uid: string;
   tenantId: string;
@@ -34,6 +44,9 @@ export function requireTenant(claims: AuthedClaims): {
 } {
   if (!claims.tenantId || !claims.role) {
     throw new HttpsError("permission-denied", "Tenant membership required.");
+  }
+  if (!claims.emailVerified) {
+    throw new HttpsError("failed-precondition", VERIFY_EMAIL_MESSAGE);
   }
   return { uid: claims.uid, tenantId: claims.tenantId, role: claims.role };
 }

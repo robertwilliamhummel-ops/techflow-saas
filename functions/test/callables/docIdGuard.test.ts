@@ -35,7 +35,7 @@ import { updateQuoteHandler } from "../../src/quotes/updateQuote";
 
 const owner = {
   uid: "u_owner",
-  claims: { email: "owner@ids.test", tenantId: "ids-tenant", role: "owner" as const },
+  claims: { email: "owner@ids.test", tenantId: "ids-tenant", role: "owner" as const, email_verified: true },
 };
 
 type Handler = (request: ReturnType<typeof fakeRequest>) => Promise<unknown>;

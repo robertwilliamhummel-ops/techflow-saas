@@ -54,7 +54,7 @@ describe("setUserRole", () => {
     const res = await setUserRoleHandler(
       fakeRequest(
         { targetUid: "staff1", role: "admin" },
-        { uid: "owner1", claims: { tenantId, role: "owner" } },
+        { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } },
       ),
     );
     expect(res).toEqual({ ok: true });
@@ -75,7 +75,7 @@ describe("setUserRole", () => {
       setUserRoleHandler(
         fakeRequest(
           { targetUid: "staff1", role: "admin" },
-          { uid: "staff1", claims: { tenantId, role: "staff" } },
+          { uid: "staff1", claims: { tenantId, role: "staff", email_verified: true } },
         ),
       ),
     ).rejects.toThrow(/Requires one of: owner/);
@@ -87,7 +87,7 @@ describe("setUserRole", () => {
       setUserRoleHandler(
         fakeRequest(
           { targetUid: "owner1", role: "admin" },
-          { uid: "owner1", claims: { tenantId, role: "owner" } },
+          { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } },
         ),
       ),
     ).rejects.toThrow(/cannot change their own role/);
@@ -99,7 +99,7 @@ describe("setUserRole", () => {
       setUserRoleHandler(
         fakeRequest(
           { targetUid: "stranger", role: "admin" },
-          { uid: "owner1", claims: { tenantId, role: "owner" } },
+          { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } },
         ),
       ),
     ).rejects.toThrow(/not an active member/);
@@ -111,7 +111,7 @@ describe("setUserRole", () => {
       setUserRoleHandler(
         fakeRequest(
           { targetUid: "staff1", role: "superuser" },
-          { uid: "owner1", claims: { tenantId, role: "owner" } },
+          { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } },
         ),
       ),
     ).rejects.toThrow(/role must be one of/);

@@ -101,6 +101,7 @@ const ownerAuth = {
     email: "owner@acme.test",
     tenantId: TENANT,
     role: "owner" as const,
+    email_verified: true,
   },
 };
 
@@ -957,6 +958,7 @@ describe("regenerateInvoicePayLink", () => {
             email: "staff@acme.test",
             tenantId: TENANT,
             role: "staff" as const,
+            email_verified: true,
           },
         }),
       ),

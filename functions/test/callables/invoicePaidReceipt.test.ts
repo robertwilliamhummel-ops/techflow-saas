@@ -187,7 +187,7 @@ describe("handleInvoicePaid (E-01)", () => {
 describe("markInvoicePaid records whether the owner asked for a receipt (E-01)", () => {
   const ownerAuth = {
     uid: "u_owner",
-    claims: { email: "owner@acme.test", tenantId: TENANT, role: "owner" as const },
+    claims: { email: "owner@acme.test", tenantId: TENANT, role: "owner" as const, email_verified: true },
   };
 
   it.each([

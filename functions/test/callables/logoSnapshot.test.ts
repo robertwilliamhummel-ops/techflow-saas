@@ -235,7 +235,7 @@ describe("createInvoice freezes the logo copy (A-06, D7)", () => {
         },
         {
           uid: "u_owner",
-          claims: { email: "owner@logo.test", tenantId: TENANT, role: "owner" },
+          claims: { email: "owner@logo.test", tenantId: TENANT, role: "owner", email_verified: true },
         },
       ),
     );
@@ -256,7 +256,7 @@ describe("createInvoice freezes the logo copy (A-06, D7)", () => {
 describe("invoice emails use the hosted logo (A-06)", () => {
   const owner = {
     uid: "u_owner",
-    claims: { email: "owner@logo.test", tenantId: TENANT, role: "owner" as const },
+    claims: { email: "owner@logo.test", tenantId: TENANT, role: "owner" as const, email_verified: true },
   };
 
   beforeEach(async () => {

@@ -78,7 +78,7 @@ async function seedTenant(opts: { customDomainFeature?: boolean } = {}) {
 function ownerReq<T>(data: T) {
   return fakeRequest(data, {
     uid: OWNER_UID,
-    claims: { tenantId: TENANT, role: "owner" },
+    claims: { tenantId: TENANT, role: "owner", email_verified: true },
   });
 }
 
@@ -132,7 +132,7 @@ describe("setupCustomDomain", () => {
       setupCustomDomainHandler(
         fakeRequest(
           { domain: "invoices.test.ca" },
-          { uid: "staff1", claims: { tenantId: TENANT, role: "staff" } },
+          { uid: "staff1", claims: { tenantId: TENANT, role: "staff", email_verified: true } },
         ),
       ),
     ).rejects.toMatchObject({ code: "permission-denied" });

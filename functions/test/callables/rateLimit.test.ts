@@ -40,7 +40,7 @@ const TENANT = "acme-plumbing";
 const HOUR_MS = 60 * 60 * 1000;
 const owner = {
   uid: "u_owner",
-  claims: { email: "owner@acme.test", tenantId: TENANT, role: "owner" as const },
+  claims: { email: "owner@acme.test", tenantId: TENANT, role: "owner" as const, email_verified: true },
 };
 
 function counterRef(uid: string, action: string) {

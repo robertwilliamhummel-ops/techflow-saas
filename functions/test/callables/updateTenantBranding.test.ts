@@ -46,7 +46,7 @@ describe("updateTenantBranding", () => {
           currency: "USD",
           invoicePrefix: "ACME",
         },
-        { uid: "owner1", claims: { tenantId, role: "owner" } },
+        { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } },
       ),
     );
     expect(res).toEqual({ ok: true });
@@ -69,7 +69,7 @@ describe("updateTenantBranding", () => {
     const res = await updateTenantBrandingHandler(
       fakeRequest(
         { name: "Renamed Co" },
-        { uid: "adminUser", claims: { tenantId, role: "admin" } },
+        { uid: "adminUser", claims: { tenantId, role: "admin", email_verified: true } },
       ),
     );
     expect(res).toEqual({ ok: true });
@@ -81,7 +81,7 @@ describe("updateTenantBranding", () => {
       updateTenantBrandingHandler(
         fakeRequest(
           { name: "Hacked" },
-          { uid: "staffUser", claims: { tenantId, role: "staff" } },
+          { uid: "staffUser", claims: { tenantId, role: "staff", email_verified: true } },
         ),
       ),
     ).rejects.toThrow(/Requires one of: owner, admin/);
@@ -102,7 +102,7 @@ describe("updateTenantBranding", () => {
       updateTenantBrandingHandler(
         fakeRequest(
           { primaryColor: "#FFFF00" },
-          { uid: "owner1", claims: { tenantId, role: "owner" } },
+          { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } },
         ),
       ),
     ).rejects.toThrow(/WCAG AA contrast/);
@@ -114,7 +114,7 @@ describe("updateTenantBranding", () => {
       updateTenantBrandingHandler(
         fakeRequest(
           { primaryColor: "not-a-color" },
-          { uid: "owner1", claims: { tenantId, role: "owner" } },
+          { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } },
         ),
       ),
     ).rejects.toThrow(/hex color/);
@@ -138,7 +138,7 @@ describe("updateTenantBranding", () => {
       updateTenantBrandingHandler(
         fakeRequest(
           { taxRate: 1.5 },
-          { uid: "owner1", claims: { tenantId, role: "owner" } },
+          { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } },
         ),
       ),
     ).rejects.toThrow(/between 0 and 1/);
@@ -150,7 +150,7 @@ describe("updateTenantBranding", () => {
       updateTenantBrandingHandler(
         fakeRequest(
           { name: "X" },
-          { uid: "owner1", claims: { tenantId, role: "owner" } },
+          { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } },
         ),
       ),
     ).rejects.toThrow(/2–100 characters/);
@@ -162,7 +162,7 @@ describe("updateTenantBranding", () => {
       updateTenantBrandingHandler(
         fakeRequest(
           { logoUrl: "http://insecure.example.com/logo.png" },
-          { uid: "owner1", claims: { tenantId, role: "owner" } },
+          { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } },
         ),
       ),
     ).rejects.toThrow(/valid https URL/);
@@ -173,7 +173,7 @@ describe("updateTenantBranding", () => {
     await updateTenantBrandingHandler(
       fakeRequest(
         { logoUrl: null },
-        { uid: "owner1", claims: { tenantId, role: "owner" } },
+        { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } },
       ),
     );
     const meta = await testDb.doc(`tenants/${tenantId}/meta/settings`).get();
@@ -182,7 +182,7 @@ describe("updateTenantBranding", () => {
 
   it("sets contactEmail lowercased, clears it with null, rejects invalid (D5)", async () => {
     const tenantId = await seedOwner();
-    const auth = { uid: "owner1", claims: { tenantId, role: "owner" as const } };
+    const auth = { uid: "owner1", claims: { tenantId, role: "owner" as const, email_verified: true } };
 
     await updateTenantBrandingHandler(
       fakeRequest({ contactEmail: "Office@Acme.Test" }, auth),
@@ -207,7 +207,7 @@ describe("updateTenantBranding", () => {
       updateTenantBrandingHandler(
         fakeRequest(
           { invoicePrefix: "inv!" },
-          { uid: "owner1", claims: { tenantId, role: "owner" } },
+          { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } },
         ),
       ),
     ).rejects.toThrow(/uppercase letters\/digits/);
@@ -219,7 +219,7 @@ describe("updateTenantBranding", () => {
       updateTenantBrandingHandler(
         fakeRequest(
           { currency: "EUR" },
-          { uid: "owner1", claims: { tenantId, role: "owner" } },
+          { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } },
         ),
       ),
     ).rejects.toThrow(/CAD or USD/);
@@ -229,7 +229,7 @@ describe("updateTenantBranding", () => {
     const tenantId = await seedOwner();
     await expect(
       updateTenantBrandingHandler(
-        fakeRequest({}, { uid: "owner1", claims: { tenantId, role: "owner" } }),
+        fakeRequest({}, { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } }),
       ),
     ).rejects.toThrow(/No editable fields/);
   });
@@ -244,7 +244,7 @@ describe("updateTenantBranding", () => {
           chargeCustomerCardFees: true,
           stripeAccountId: "acct_evil",
         } as never,
-        { uid: "owner1", claims: { tenantId, role: "owner" } },
+        { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } },
       ),
     );
     const meta = await testDb.doc(`tenants/${tenantId}/meta/settings`).get();

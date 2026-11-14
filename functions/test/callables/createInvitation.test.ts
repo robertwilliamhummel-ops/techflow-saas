@@ -47,7 +47,7 @@ describe("createInvitation", () => {
     const { invitationId } = await createInvitationHandler(
       fakeRequest(
         { email: "staff@acme.test", role: "staff" },
-        { uid: "owner1", claims: { tenantId, role: "owner" } },
+        { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } },
       ),
     );
 
@@ -72,7 +72,7 @@ describe("createInvitation", () => {
     const { invitationId } = await createInvitationHandler(
       fakeRequest(
         { email: "Staff@ACME.Test", role: "admin" },
-        { uid: "owner1", claims: { tenantId, role: "owner" } },
+        { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } },
       ),
     );
     const snap = await testDb
@@ -99,7 +99,7 @@ describe("createInvitation", () => {
       createInvitationHandler(
         fakeRequest(
           { email: "x@y.test", role: "staff" },
-          { uid: "intruder", claims: { tenantId, role: "staff" } },
+          { uid: "intruder", claims: { tenantId, role: "staff", email_verified: true } },
         ),
       ),
     ).rejects.toThrow(/Requires one of: owner, admin/);
@@ -111,7 +111,7 @@ describe("createInvitation", () => {
       createInvitationHandler(
         fakeRequest(
           { email: "new@acme.test", role: "owner" },
-          { uid: "owner1", claims: { tenantId, role: "owner" } },
+          { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } },
         ),
       ),
     ).rejects.toThrow(/role must be one of: admin, staff/);
@@ -123,7 +123,7 @@ describe("createInvitation", () => {
       createInvitationHandler(
         fakeRequest(
           { email: "not-an-email", role: "staff" },
-          { uid: "owner1", claims: { tenantId, role: "owner" } },
+          { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } },
         ),
       ),
     ).rejects.toThrow(/not a valid address/);
@@ -134,14 +134,14 @@ describe("createInvitation", () => {
     await createInvitationHandler(
       fakeRequest(
         { email: "dup@acme.test", role: "staff" },
-        { uid: "owner1", claims: { tenantId, role: "owner" } },
+        { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } },
       ),
     );
     await expect(
       createInvitationHandler(
         fakeRequest(
           { email: "dup@acme.test", role: "admin" },
-          { uid: "owner1", claims: { tenantId, role: "owner" } },
+          { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } },
         ),
       ),
     ).rejects.toThrow(/unaccepted invitation already exists/);
