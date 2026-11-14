@@ -1,11 +1,13 @@
-// Region placement (decision D2, 2026-09-13).
+// Region placement (decision D2, 2026-09-13; D16, 2026-11-13).
 //
 // Firestore (default) lives in northamerica-northeast2 (Toronto). Every
 // callable, HTTP function, and Firestore trigger runs next to it — Firestore
 // triggers MUST share the database's region (Eventarc requirement).
 //
-// Cloud Scheduler is not offered in Toronto, so scheduled functions pin to
-// northamerica-northeast1 (Montréal), the other Canadian region.
+// D16: Cloud Scheduler is now offered in Toronto, so scheduled functions (and
+// their Scheduler jobs, created in the function's region) run there too. D2
+// had pinned them to northamerica-northeast1 (Montréal) when Toronto had no
+// Scheduler. The constant stays so a future move is one line.
 //
 // src/index.ts must import this module before any function module (only
 // shared/sentry.ts, which defines no functions, comes earlier):
@@ -16,7 +18,7 @@
 import { setGlobalOptions } from "firebase-functions/v2";
 
 export const FUNCTIONS_REGION = "northamerica-northeast2";
-export const SCHEDULER_REGION = "northamerica-northeast1";
+export const SCHEDULER_REGION = FUNCTIONS_REGION;
 
 // App Check (R-04). With ENFORCE_APP_CHECK=true in functions/.env.<projectId>,
 // every callable rejects requests without a valid App Check token (401).

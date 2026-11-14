@@ -9,7 +9,7 @@
 
 ## Stack
 - Next.js 16 App Router on Vercel (its own project — the marketing site is separate, D11; `src/proxy.ts` host routing, functions in `yul1`); Node.js 24 everywhere (D6)
-- Firebase: Firestore + Auth + Storage + Cloud Functions v2 + Emulators — Firestore and functions in `northamerica-northeast2`, scheduled functions in `northamerica-northeast1`; runtime `nodejs24`
+- Firebase: Firestore + Auth + Storage + Cloud Functions v2 + Emulators — Firestore and all functions, scheduled ones included, in `northamerica-northeast2` (D16); runtime `nodejs24`
 - Cloud Run `pdf-service` (Puppeteer + Handlebars), protected by `X-Api-Key` from the Next.js proxy and callables
 - Stripe Connect with Standard-equivalent controller properties (full Stripe Dashboard, Stripe-liable), direct charges
 - Amazon SES + React Email for transactional mail, sent only from Cloud Functions via `functions/src/emails/send.ts`

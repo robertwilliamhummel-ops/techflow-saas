@@ -29,6 +29,14 @@ describe("function regions (D2)", () => {
     expect(deployed.length).toBeGreaterThan(20);
   });
 
+  // D16: Cloud Scheduler is offered in Toronto, so nothing deploys to Montréal.
+  it("runs every function, scheduled ones included, in Toronto", () => {
+    expect(SCHEDULER_REGION).toBe("northamerica-northeast2");
+    for (const [, fn] of deployed) {
+      expect(fn.__endpoint.region).toEqual(["northamerica-northeast2"]);
+    }
+  });
+
   for (const [name, fn] of deployed) {
     const expected = SCHEDULED.has(name) ? SCHEDULER_REGION : FUNCTIONS_REGION;
     it(`${name} deploys to ${expected}`, () => {
