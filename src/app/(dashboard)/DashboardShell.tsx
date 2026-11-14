@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect } from "react";
@@ -15,6 +14,7 @@ import {
   Users,
 } from "lucide-react";
 
+import { BusinessLogo } from "@/components/branding/BusinessLogo";
 import { buttonVariants } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -139,22 +139,15 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
 
 function TenantBrand({ name, logoUrl }: { name: string; logoUrl: string | null }) {
   return (
+    // The name sits beside a square logo and wraps under a wide one, rather
+    // than being cut to a few letters.
     <Link
       href="/dashboard"
-      className="flex min-w-0 items-center gap-2.5 rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+      className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1.5 rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
     >
       {logoUrl ? (
-        // A light tile keeps dark logos readable on the dark dashboard.
-        <span className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-md bg-white p-0.5">
-          <Image
-            src={logoUrl}
-            alt=""
-            width={32}
-            height={32}
-            className="max-h-full max-w-full object-contain"
-            unoptimized
-          />
-        </span>
+        // The white tile keeps dark logos readable on the dark dashboard.
+        <BusinessLogo src={logoUrl} maxWidth={144} maxHeight={32} tile />
       ) : (
         <span
           aria-hidden
@@ -163,7 +156,7 @@ function TenantBrand({ name, logoUrl }: { name: string; logoUrl: string | null }
           {initialOf(name, "T")}
         </span>
       )}
-      <span className="truncate font-semibold">{name || "Dashboard"}</span>
+      <span className="min-w-24 flex-1 truncate font-semibold">{name || "Dashboard"}</span>
     </Link>
   );
 }

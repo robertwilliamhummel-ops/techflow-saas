@@ -13,6 +13,7 @@ import { useTenantContext } from "@/lib/tenant/TenantContext";
 import { meetsWcagAA, contrastRatio } from "@/lib/design/contrast";
 import { TENANT_FONTS } from "@/lib/design/fonts";
 import { uploadBrandingAsset } from "@/lib/storage/uploadBrandingAsset";
+import { BusinessLogo } from "@/components/branding/BusinessLogo";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -232,16 +233,16 @@ export default function SettingsBrandingPage() {
         </CardHeader>
         <CardContent className="grid gap-4">
           {meta?.logoUrl ? (
-            <div className="flex h-24 w-48 items-center justify-center rounded-md border bg-muted/30 p-2">
-              <Image
-                src={meta.logoUrl}
-                alt="Current logo"
-                width={160}
-                height={80}
-                className="max-h-full max-w-full object-contain"
-                unoptimized
-              />
-            </div>
+            // On white and at the invoice PDF's logo size (200 × 60 at most),
+            // so a dark logo doesn't vanish into the dark dashboard.
+            <figure className="grid gap-1.5">
+              <div className="flex min-h-24 w-fit max-w-full items-center rounded-md border bg-white px-5 py-4">
+                <BusinessLogo src={meta.logoUrl} alt="Current logo" maxWidth={200} maxHeight={60} />
+              </div>
+              <figcaption className="text-xs text-muted-foreground">
+                Shown as it appears on your invoices.
+              </figcaption>
+            </figure>
           ) : (
             <p className="text-sm text-muted-foreground">No logo uploaded.</p>
           )}

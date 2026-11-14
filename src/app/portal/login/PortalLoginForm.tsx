@@ -5,7 +5,6 @@
 // where Firebase finishes signing in and the customer goes on to the page they
 // asked for (blueprint, "Customer magic link flow").
 
-import Image from "next/image";
 import { useRouter } from "next/navigation";
 import {
   useEffect,
@@ -19,6 +18,7 @@ import { isSignInWithEmailLink, signInWithEmailLink } from "firebase/auth";
 import { httpsCallable } from "firebase/functions";
 import * as Sentry from "@sentry/nextjs";
 
+import { BusinessLogo } from "@/components/branding/BusinessLogo";
 import { TextField } from "@/components/forms/fields";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -250,13 +250,12 @@ export function PortalLoginForm({ tenantName, logoUrl, primaryColor, next }: Pro
     <Card className="w-full max-w-sm">
       <CardHeader className="items-center text-center">
         {logoUrl ? (
-          <Image
+          <BusinessLogo
             src={logoUrl}
             alt={tenantName ?? "Logo"}
-            width={64}
-            height={64}
-            className="mx-auto mb-2 rounded"
-            unoptimized
+            maxWidth={240}
+            maxHeight={64}
+            className="mx-auto mb-2"
           />
         ) : null}
         <CardTitle className="text-balance">{title}</CardTitle>

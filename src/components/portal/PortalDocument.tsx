@@ -145,6 +145,7 @@ export function DocumentHeader({
           name={business.name}
           logoUrl={business.logoUrl}
           primaryColor={business.primaryColor}
+          size="lg"
         />
         <div className="grid min-w-0 gap-0.5">
           <p className="font-semibold wrap-break-word">{business.name || "Business"}</p>

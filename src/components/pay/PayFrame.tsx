@@ -5,12 +5,12 @@
 // platform branding (blueprint, "Public pay page") — and the messages for
 // every result that isn't a payable invoice.
 
-import Image from "next/image";
 import Link from "next/link";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { httpsCallable } from "firebase/functions";
 import * as Sentry from "@sentry/nextjs";
 
+import { BusinessLogo } from "@/components/branding/BusinessLogo";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -90,18 +90,10 @@ export function PayFrame({
       >
         <div className="mx-auto flex h-20 w-full max-w-2xl items-center gap-3 px-4">
           {business?.logoUrl ? (
-            <span className="flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-md bg-white p-1">
-              <Image
-                src={business.logoUrl}
-                alt=""
-                width={48}
-                height={48}
-                className="max-h-full max-w-full object-contain"
-                unoptimized
-              />
-            </span>
+            // On a white tile, so a dark logo shows on any brand colour.
+            <BusinessLogo src={business.logoUrl} maxWidth={160} maxHeight={40} tile />
           ) : null}
-          <p className="truncate text-lg font-semibold">{business?.name || "Invoice payment"}</p>
+          <p className="min-w-0 truncate text-lg font-semibold">{business?.name || "Invoice payment"}</p>
         </div>
       </header>
 
