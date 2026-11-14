@@ -13,6 +13,7 @@ import {
   isCustomerVisibleInvoiceStatus,
   isCustomerVisibleQuoteStatus,
 } from "@/lib/portal/customerVisibility";
+import type { TenantFont } from "@/lib/design/fonts";
 import { displayQuoteStatus } from "@/lib/quotes/quoteStatus";
 import type { InvoiceStatus, QuoteStatus } from "@/lib/schema/tenant";
 
@@ -46,6 +47,8 @@ export interface CustomerBusinessView {
   logoUrl: string | null;
   address: string | null;
   primaryColor: string;
+  /** The font its pages render in (G-04); Inter when the snapshot names none from the list. */
+  fontFamily: TenantFont;
   businessNumber: string | null;
   currency: string;
 }

@@ -78,7 +78,7 @@ function QuoteSheet({
   const currency = business.currency;
 
   return (
-    <DocumentSheet label={`Quote ${quote.id} from ${business.name}`}>
+    <DocumentSheet label={`Quote ${quote.id} from ${business.name}`} fontFamily={business.fontFamily}>
       <DocumentHeader
         business={business}
         kind="Quote"

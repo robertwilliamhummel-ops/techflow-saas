@@ -120,6 +120,18 @@ describe("updateTenantBranding", () => {
     ).rejects.toThrow(/hex color/);
   });
 
+  it("G-04: rejects a font that isn't on the curated list", async () => {
+    const tenantId = await seedOwner();
+    await expect(
+      updateTenantBrandingHandler(
+        fakeRequest(
+          { fontFamily: "Comic Sans MS" },
+          { uid: "owner1", claims: { tenantId, role: "owner" } },
+        ),
+      ),
+    ).rejects.toThrow(/fontFamily must be one of: Inter, Roboto/);
+  });
+
   it("rejects taxRate out of range", async () => {
     const tenantId = await seedOwner();
     await expect(

@@ -15,6 +15,7 @@
 
 import { isPayableInvoiceStatus } from "../shared/invoiceStatus";
 import { DEFAULT_PRIMARY_COLOR } from "../shared/brandDefaults";
+import { resolveTenantFont, type TenantFont } from "../shared/fonts";
 
 type Data = FirebaseFirestore.DocumentData;
 
@@ -46,6 +47,8 @@ export interface CustomerBusinessView {
   logoUrl: string | null;
   address: string | null;
   primaryColor: string;
+  /** The font its pages render in (G-04); Inter when the snapshot names none from the list. */
+  fontFamily: TenantFont;
   businessNumber: string | null;
   currency: string;
 }
@@ -142,6 +145,7 @@ export function toCustomerBusinessView(value: unknown): CustomerBusinessView {
     logoUrl: strOrNull(s.logoUrl),
     address: strOrNull(s.address),
     primaryColor: str(s.primaryColor, DEFAULT_PRIMARY_COLOR),
+    fontFamily: resolveTenantFont(s.fontFamily),
     businessNumber: strOrNull(s.businessNumber),
     currency: str(s.currency, "CAD"),
   };

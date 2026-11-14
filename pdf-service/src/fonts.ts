@@ -1,7 +1,8 @@
 // The fonts a business can choose in Settings → Branding (blueprint, Phase 1.5
 // "Font system"), and the @font-face rules that put the chosen one in its PDFs.
 //
-// The list mirrors TENANT_FONTS in the app's src/lib/design/fonts.ts.
+// Mirrors src/lib/design/fonts.ts (app) and functions/src/shared/fonts.ts; the
+// app's src/lib/__tests__/fonts.test.ts pins the three lists together.
 //
 // Chrome in the image has none of these installed, and a render loads nothing
 // over the network (U-02), so each family is vendored in src/fonts/<dir>/ with

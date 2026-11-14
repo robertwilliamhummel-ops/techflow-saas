@@ -24,6 +24,7 @@ const BUSINESS = {
   logoUrl: null,
   address: "12 King St W, Toronto",
   primaryColor: "#0066CC",
+  fontFamily: "Inter" as const,
   businessNumber: null,
   currency: "CAD",
 };

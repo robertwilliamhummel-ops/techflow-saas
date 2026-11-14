@@ -11,7 +11,7 @@ import { toast } from "sonner";
 import { getClientFunctions } from "@/lib/firebase/client";
 import { useTenantContext } from "@/lib/tenant/TenantContext";
 import { meetsWcagAA, contrastRatio } from "@/lib/design/contrast";
-import { TENANT_FONTS } from "@/lib/design/fonts";
+import { resolveTenantFont, TENANT_FONTS } from "@/lib/design/fonts";
 import { uploadBrandingAsset } from "@/lib/storage/uploadBrandingAsset";
 import { prepareLogo } from "@/lib/branding/prepareLogo";
 import { LogoPreviews } from "@/components/settings/LogoPreviews";
@@ -93,7 +93,9 @@ export default function SettingsBrandingPage() {
     form.reset({
       primaryColor: meta.primaryColor,
       secondaryColor: meta.secondaryColor,
-      fontFamily: meta.fontFamily,
+      // A name saved before the list was enforced shows as Inter, the font it
+      // renders in.
+      fontFamily: resolveTenantFont(meta.fontFamily),
     });
   }, [meta, form]);
 
@@ -212,6 +214,10 @@ export default function SettingsBrandingPage() {
                         </SelectContent>
                       </Select>
                     </FormControl>
+                    <FormDescription>
+                      Used on your PDFs, pay page, and customer portal. Your dashboard stays in
+                      Inter.
+                    </FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}

@@ -196,6 +196,7 @@ describe("getCustomerQuoteDetail (P-06)", () => {
       logoUrl: "https://storage.example.com/logo.png",
       address: null,
       primaryColor: "#123456",
+      fontFamily: "Inter",
       businessNumber: null,
       currency: "CAD",
     });

@@ -2,8 +2,10 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 
 import { safePortalReturnPath } from "@/lib/auth/guardRedirects";
+import { tenantFontClass } from "@/lib/design/tenantFontClass";
 import { tenantIdFromReturnPath } from "@/lib/portal/portalSignIn";
 import { getTenantBranding } from "@/lib/tenant/getTenantBranding";
+import { cn } from "@/lib/utils";
 import { PortalLoginForm } from "./PortalLoginForm";
 
 export const runtime = "nodejs";
@@ -49,7 +51,12 @@ export default async function PortalLoginPage({ searchParams }: { searchParams: 
   const { next, branding } = await resolveLogin(searchParams);
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background p-4">
+    <div
+      className={cn(
+        "flex min-h-screen items-center justify-center bg-background p-4",
+        tenantFontClass(branding?.fontFamily),
+      )}
+    >
       <PortalLoginForm
         tenantName={branding?.name ?? null}
         logoUrl={branding?.logoUrl ?? null}

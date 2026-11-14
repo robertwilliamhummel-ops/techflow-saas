@@ -7,6 +7,7 @@ import { db, FieldValue } from "../shared/admin";
 import { readClaims, requireRole, requireTenant } from "../shared/auth";
 import { isValidHexColor, meetsWcagAA } from "../shared/contrast";
 import { isValidEmail, lowerEmail } from "../shared/email";
+import { isTenantFont, TENANT_FONTS } from "../shared/fonts";
 import { withSentryCallable } from "../shared/withSentry";
 
 // Whitelisted branding + business-identity fields editable via the settings
@@ -106,6 +107,19 @@ function validColor(raw: unknown, field: string): string {
   return s.startsWith("#") ? s : `#${s}`;
 }
 
+// The curated list only (G-04): the pages and PDFs carry these families and
+// nothing else, so any other name would silently render in the platform font.
+function validFont(raw: unknown): string {
+  const s = String(raw ?? "").trim();
+  if (!isTenantFont(s)) {
+    throw new HttpsError(
+      "invalid-argument",
+      `fontFamily must be one of: ${TENANT_FONTS.join(", ")}.`,
+    );
+  }
+  return s;
+}
+
 function validCurrency(raw: unknown): "CAD" | "USD" {
   if (raw === "CAD" || raw === "USD") return raw;
   throw new HttpsError("invalid-argument", "currency must be CAD or USD.");
@@ -170,11 +184,7 @@ export async function updateTenantBrandingHandler(
     patch.secondaryColor = validColor(data.secondaryColor, "secondaryColor");
   }
   if ("fontFamily" in data) {
-    patch.fontFamily = validString(data.fontFamily, {
-      field: "fontFamily",
-      min: 1,
-      max: 50,
-    });
+    patch.fontFamily = validFont(data.fontFamily);
   }
   if ("emailFooter" in data) {
     patch.emailFooter = validNullableString(data.emailFooter, {

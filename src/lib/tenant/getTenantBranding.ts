@@ -1,5 +1,6 @@
 import "server-only";
 import { getAdminDb } from "@/lib/firebase/admin";
+import { resolveTenantFont, type TenantFont } from "@/lib/design/fonts";
 import { DEFAULT_PRIMARY_COLOR } from "@/lib/tenant/brandDefaults";
 
 export interface TenantBranding {
@@ -7,11 +8,13 @@ export interface TenantBranding {
   logoUrl: string | null;
   faviconUrl: string | null;
   primaryColor: string;
+  fontFamily: TenantFont;
 }
 
 /**
  * Server-only — fetches the minimal branding fields the portal/pay
- * layouts need for tab title + favicon. Reads `tenants/{id}/meta/settings`
+ * layouts need for tab title + favicon, and the branded portal login for its
+ * logo, colour and font. Reads `tenants/{id}/meta/settings`
  * via Admin SDK (rules block unauthenticated reads of meta).
  *
  * Returns null when the tenant doc is missing OR admin env is not configured
@@ -34,6 +37,7 @@ export async function getTenantBranding(
       faviconUrl: typeof d.faviconUrl === "string" ? d.faviconUrl : null,
       primaryColor:
         typeof d.primaryColor === "string" ? d.primaryColor : DEFAULT_PRIMARY_COLOR,
+      fontFamily: resolveTenantFont(d.fontFamily),
     };
   } catch {
     return null;

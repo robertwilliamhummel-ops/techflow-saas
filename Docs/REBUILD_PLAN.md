@@ -744,9 +744,9 @@ Tailwind config: dashboard layout sets `<html className="dark">` server-side; po
 ### Font system
 
 - **Platform default:** Inter, loaded via `next/font/google` in `src/app/layout.tsx`. Inter is shadcn's convention and renders cleanly at all sizes.
-- **Tenant `fontFamily` override scope:** customer-facing surfaces only — portal pages and generated PDFs. The admin dashboard always renders in Inter regardless of tenant `fontFamily`.
+- **Tenant `fontFamily` override scope:** customer-facing surfaces only — generated PDFs, the pay pages (`/pay/[token]` and its success and cancelled pages, from the snapshot), the portal invoice and quote sheets (from the snapshot), and the branded portal login (from current `meta`) (G-04). The admin dashboard always renders in Inter regardless of tenant `fontFamily`, and so does the portal home, a neutral list across businesses.
 - **Why scoped:** the dashboard is Reggie's app dressed in tenant branding for tenant staff; consistent font there reduces support burden. The portal and PDFs are what the tenant's customers see — full brand expression matters there.
-- **Allowed tenant fonts:** curated list (Inter, Roboto, Open Sans, Lato, Montserrat, Poppins, Source Sans 3, Merriweather). All loaded via `next/font/google` with `display: 'swap'`. Free-text font input is not allowed (prevents broken renders, missing-font fallbacks, and supply-chain risk from arbitrary `@import` URLs).
+- **Allowed tenant fonts:** curated list (Inter, Roboto, Open Sans, Lato, Montserrat, Poppins, Source Sans 3, Merriweather). On the web they load via `next/font/google` (self-hosted at build, `display: 'swap'`, `preload: false`) in `src/lib/design/tenantFontClass.ts`, imported only by those pages; each loader sets `--font-sans`, so `tenantFontClass(fontFamily)` on a wrapper retypes everything inside it. Without preload a page downloads only its business's family (the Latin file is 28–98 KB; Inter, the platform font, adds nothing). PDFs embed vendored files instead (Phase 6, "Per-tenant branding in PDFs"). Free-text font input is not allowed (prevents broken renders, missing-font fallbacks, and supply-chain risk from arbitrary `@import` URLs): `updateTenantBranding` accepts only the list, and a stored name off the list renders in Inter everywhere. The list lives in `src/lib/design/fonts.ts`, `functions/src/shared/fonts.ts`, and `pdf-service/src/fonts.ts`, pinned by `src/lib/__tests__/fonts.test.ts`.
 
 ### Toast system (single source — Sonner)
 
@@ -800,7 +800,7 @@ Rule: **no domain component reaches for raw HTML form elements or Tailwind color
 - [x] `src/lib/invoices/statusBadge.ts` with canonical status → variant mapping
 - [x] Dashboard layout sets `<html className="dark">`; portal layout sets light
 - [x] Inter loaded via `next/font/google` in root layout
-- [x] Curated tenant font list defined in `src/lib/design/fonts.ts` with `next/font` loaders
+- [x] Curated tenant font list defined in `src/lib/design/fonts.ts`, with its `next/font` loaders in `src/lib/design/tenantFontClass.ts` (G-04)
 - [x] `Toaster` mounted once in root layout; all toast calls use `sonner`
 - [x] Tenant override pattern (`--primary`/`--secondary` only, with computed `--primary-foreground`) wired in dashboard + portal layouts
 - [x] One reference page (e.g., `/dashboard/style-guide`, dev-only, gated by env) renders every primitive in light + dark + with a sample tenant override, for visual regression review
@@ -862,7 +862,7 @@ Region: every function — callables, HTTP functions, Firestore triggers and sch
 | `createInvitation` | — | owner/admin; invite email via SES, one send per invitation |
 | `onAcceptInvite` | — | invitee whose verified email matches |
 | `revokeInvitation` | — | owner/admin; stamps `revokedAt` |
-| `updateTenantBranding` | — | owner/admin; business info, branding, tax, currency, `contactEmail` |
+| `updateTenantBranding` | — | owner/admin; business info, branding (`fontFamily` from the curated list only, G-04), tax, currency, `contactEmail` |
 | `updatePaymentSettings` | `cardSurcharge` to switch surcharging on (D3) | owner/admin; e-Transfer email, surcharge settings |
 | `createInvoice`, `updateInvoice` | `invoices` | any role |
 | `deleteInvoice` (drafts only), `voidInvoice`, `markInvoicePaid`, `regenerateInvoicePayLink` | `invoices` | owner/admin |
@@ -1982,7 +1982,7 @@ Two domain tiers per tenant:
 
   This is Phase 5 scope, not a later optimization — building the middleware without it means ripping it out and redoing it under load.
 
-- **Branded login page.** The `/portal/login` route reads the resolved `tenantId` (from middleware), fetches `tenants/{tenantId}/meta/settings` via `getTenantBranding` (subset: name, logoUrl, primaryColor, faviconUrl), and renders the login page with the tenant's branding. The customer sees "Smith Plumbing" on the login screen, not "TechFlow."
+- **Branded login page.** The `/portal/login` route reads the resolved `tenantId` (from middleware), fetches `tenants/{tenantId}/meta/settings` via `getTenantBranding` (subset: name, logoUrl, primaryColor, faviconUrl, fontFamily), and renders the login page with the tenant's branding. The customer sees "Smith Plumbing" on the login screen, not "TechFlow."
 
   **⚠️ This fetch MUST be server-side via Firebase Admin SDK — never client-side.**
   A visitor to the login page is unauthenticated. The Firestore rule `allow read: if request.auth.token.tenantId == tenantId` blocks unauthenticated reads of `meta`. A client-side `getDoc()` call returns permission-denied, the login page renders with no branding (or crashes), and the whole bundled-offering value prop breaks on the first customer load.
@@ -2141,7 +2141,7 @@ The PDF is the document customers save, print, and forward to their accountant. 
 3. **Single-page for typical invoices.** Paginate cleanly for long line-item lists, with the header (logo + invoice number) repeated on each page and "Page X of Y" in the footer.
 4. **Monospace font for amounts.** Right-aligned. Fixed decimal places. Makes totals scannable.
 5. **Alternating row shading on the line-item table** at ~3% gray. Subtle, not loud.
-6. **Tenant `fontFamily` applies to body text** on customer-facing surfaces (PDF, portal). Admin dashboard stays on Inter — decision from Phase 1.5.
+6. **Tenant `fontFamily` applies to body text** on customer-facing surfaces (PDF, pay page, portal). Admin dashboard stays on Inter — decision from Phase 1.5.
 
 ### Payment methods block (bottom of PDF, above the footer)
 

@@ -21,6 +21,8 @@ import { formatDateMillis } from "@/lib/format";
 import { payLoadError, type PayLoadError, type VerifyResult } from "@/lib/pay/payPage";
 import type { CustomerBusinessView } from "@/lib/portal/portalDocument";
 import { portalAccent } from "@/lib/portal/portalHome";
+import { tenantFontClass } from "@/lib/design/tenantFontClass";
+import { cn } from "@/lib/utils";
 
 export type PayVerification =
   | { state: "loading" }
@@ -82,8 +84,15 @@ export function PayFrame({
 }) {
   const accent = business ? portalAccent(business.primaryColor) : null;
 
+  // The whole page is the business's surface, so it takes the business's font
+  // once the link is checked (G-04).
   return (
-    <div className="flex min-h-screen flex-col bg-background text-foreground">
+    <div
+      className={cn(
+        "flex min-h-screen flex-col bg-background text-foreground",
+        business && tenantFontClass(business.fontFamily),
+      )}
+    >
       <header
         className={accent ? undefined : "border-b bg-card"}
         style={accent ? { backgroundColor: accent, color: computeForeground(accent) } : undefined}

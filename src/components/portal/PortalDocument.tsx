@@ -27,6 +27,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { tenantFontClass } from "@/lib/design/tenantFontClass";
 import { CUSTOMER_READ_TIMEOUT_MS } from "@/lib/firebase/callOptions";
 import { getClientAuth, getClientFunctions } from "@/lib/firebase/client";
 import { dollarsToCents, formatMoneyCents } from "@/lib/format";
@@ -116,11 +117,23 @@ export function PortalDocumentFrame({ children }: { children: ReactNode }) {
   );
 }
 
-export function DocumentSheet({ label, children }: { label: string; children: ReactNode }) {
+/** The document itself, in the font of the business that sent it (G-04). */
+export function DocumentSheet({
+  label,
+  fontFamily,
+  children,
+}: {
+  label: string;
+  fontFamily: string;
+  children: ReactNode;
+}) {
   return (
     <article
       aria-label={label}
-      className="grid gap-8 rounded-xl bg-card p-5 ring-1 ring-foreground/10 sm:p-8"
+      className={cn(
+        "grid gap-8 rounded-xl bg-card p-5 ring-1 ring-foreground/10 sm:p-8",
+        tenantFontClass(fontFamily),
+      )}
     >
       {children}
     </article>

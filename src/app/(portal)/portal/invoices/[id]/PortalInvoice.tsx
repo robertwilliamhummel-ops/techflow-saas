@@ -97,7 +97,10 @@ function InvoiceSheet({
   const totalCents = dollarsToCents(invoice.totals.total);
 
   return (
-    <DocumentSheet label={`Invoice ${invoice.id} from ${business.name}`}>
+    <DocumentSheet
+      label={`Invoice ${invoice.id} from ${business.name}`}
+      fontFamily={business.fontFamily}
+    >
       <DocumentHeader
         business={business}
         kind="Invoice"
