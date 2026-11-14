@@ -12,8 +12,20 @@ import * as logger from "firebase-functions/logger";
 import { SCHEDULER_REGION } from "../shared/globalOptions";
 import { withSentryEvent } from "../shared/withSentry";
 
+// googleapis clients don't pick up the runtime's credentials by themselves:
+// without `auth` the request goes out unauthenticated and Google rejects it
+// ("Request is missing required authentication credential"). Every nightly
+// export on staging failed that way until this fix (2026-11-14). GoogleAuth
+// uses the function's service account, which holds
+// roles/datastore.importExportAdmin (Deploy Runbook step 1).
+const EXPORT_SCOPES = [
+  "https://www.googleapis.com/auth/datastore",
+  "https://www.googleapis.com/auth/cloud-platform",
+];
+
 export async function scheduledFirestoreExportHandler(): Promise<void> {
-  const firestore = google.firestore("v1");
+  const auth = new google.auth.GoogleAuth({ scopes: EXPORT_SCOPES });
+  const firestore = google.firestore({ version: "v1", auth });
   const projectId = process.env.GCLOUD_PROJECT!;
   const bucket = `gs://${projectId}-firestore-backups`;
   const timestamp = new Date().toISOString().slice(0, 10);

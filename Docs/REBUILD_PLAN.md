@@ -2327,7 +2327,12 @@ import { google } from 'googleapis';
 export const scheduledFirestoreExport = onSchedule(
   { schedule: 'every day 03:00', timeZone: 'UTC', region: SCHEDULER_REGION },  // northamerica-northeast2 (D16)
   async () => {
-    const firestore = google.firestore('v1');
+    // googleapis clients don't use the runtime's credentials unless given
+    // `auth`; without it every export fails unauthenticated (fixed 2026-11-14).
+    const auth = new google.auth.GoogleAuth({
+      scopes: ['https://www.googleapis.com/auth/datastore', 'https://www.googleapis.com/auth/cloud-platform'],
+    });
+    const firestore = google.firestore({ version: 'v1', auth });
     const projectId = process.env.GCLOUD_PROJECT!;
     const bucket = `gs://${projectId}-firestore-backups`;
     const timestamp = new Date().toISOString().slice(0, 10);
@@ -2343,11 +2348,11 @@ export const scheduledFirestoreExport = onSchedule(
 );
 ```
 
-Requires:
-- Cloud Storage bucket created: `{projectId}-firestore-backups`
+Requires (set up 2026-11-14 for staging and prod — Deploy Runbook step 1):
+- Cloud Storage bucket `{projectId}-firestore-backups` in `northamerica-northeast2`, uniform bucket-level access, public access prevention enforced
 - Bucket lifecycle rule: delete objects 30 days after creation
-- Service account for Cloud Functions needs `datastore.databases.export` + `storage.objects.create` on the bucket
-- One-time IAM setup during Phase 1
+- The functions' runtime service account (`{PROJECT_NUMBER}-compute@developer.gserviceaccount.com`) starts the export: `roles/datastore.importExportAdmin` on the project, plus `roles/storage.admin` on the backup bucket (Google's scheduled-export guide)
+- The Firestore service agent (`service-{PROJECT_NUMBER}@gcp-sa-firestore.iam.gserviceaccount.com`) writes the files: `roles/storage.admin` on the backup bucket (Firestore export docs). The earlier "`datastore.databases.export` + `storage.objects.create` for the functions account" list missed the service agent (F-05)
 
 ### Restore procedures (documented, not scripted)
 
@@ -2540,7 +2545,7 @@ Vercel env vars and Cloud Functions secrets are parallel systems — both must b
 - Create the project; Firestore Native in `northamerica-northeast2`; the default Storage bucket in `northamerica-northeast2`.
 - Enable APIs: Cloud Functions, Cloud Run, Cloud Build, Artifact Registry, Eventarc, Cloud Scheduler, Secret Manager, Identity Toolkit.
 - Prod: enable Firestore PITR and delete protection.
-- Backups: create `{projectId}-firestore-backups` in the same region with a 30-day lifecycle rule; grant the functions service account `datastore.databases.export` and object create on the bucket.
+- Backups: create `{projectId}-firestore-backups` in the same region (uniform access, public access prevention) with a 30-day lifecycle rule; grant the functions' runtime service account `roles/datastore.importExportAdmin` on the project and `roles/storage.admin` on the bucket, and the Firestore service agent `service-{PROJECT_NUMBER}@gcp-sa-firestore.iam.gserviceaccount.com` `roles/storage.admin` on the bucket (create it with `gcloud beta services identity create --service=firestore.googleapis.com` if missing). See Firestore Backup Strategy.
 - Firestore TTL policies (`payAttempts`, `stripeEvents`, `emailSends`, `signInLinkLimits`, `rateLimits` on `expireAt`) are declared in `firestore.indexes.json` and created by the indexes deploy below — nothing to set by hand. Expired documents are typically deleted within 24 hours.
 - Run the emulator suites, take a manual export, then `firebase deploy --only firestore:rules,firestore:indexes,storage --project <projectId>`. New composite indexes take a few minutes to build; check they show "Enabled" in the Firebase Console before relying on the queries.
 - Set the functions secrets and `functions/.env.<projectId>`, then `firebase deploy --only functions --project <projectId>`. The CLI first loads the code to discover its functions and gives up after 10 seconds (all 44 load in about 2 seconds locally). If it reports `User code failed to load. Cannot determine backend specification. Timeout after 10000` on a cold or busy machine, retry, or set `FUNCTIONS_DISCOVERY_TIMEOUT=30` for that deploy — the override Firebase documents in its Cloud Functions tips. Every function runs with `memory: "512MiB"` and `cpu: "gcf_gen1"` (`functions/src/shared/globalOptions.ts`, about 0.33 vCPU each): the code needs about 270 MiB at startup, so the 256 MiB default killed every instance while booting, and a new project's Cloud Run quota is 20 vCPU per region, a deploy health-checks all 44 functions at once, and at the default 1 vCPU each the first staging deploy failed with "Quota exceeded for total allowable CPU per project per region".
