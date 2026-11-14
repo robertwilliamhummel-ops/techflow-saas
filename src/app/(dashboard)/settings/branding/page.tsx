@@ -13,7 +13,8 @@ import { useTenantContext } from "@/lib/tenant/TenantContext";
 import { meetsWcagAA, contrastRatio } from "@/lib/design/contrast";
 import { TENANT_FONTS } from "@/lib/design/fonts";
 import { uploadBrandingAsset } from "@/lib/storage/uploadBrandingAsset";
-import { BusinessLogo } from "@/components/branding/BusinessLogo";
+import { prepareLogo } from "@/lib/branding/prepareLogo";
+import { LogoPreviews } from "@/components/settings/LogoPreviews";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -73,6 +74,7 @@ export default function SettingsBrandingPage() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [logoUploading, setLogoUploading] = useState(false);
   const [faviconUploading, setFaviconUploading] = useState(false);
+  const [logoVeryLight, setLogoVeryLight] = useState(false);
   const logoInputRef = useRef<HTMLInputElement>(null);
   const faviconInputRef = useRef<HTMLInputElement>(null);
 
@@ -125,9 +127,12 @@ export default function SettingsBrandingPage() {
     const setBusy = kind === "logo" ? setLogoUploading : setFaviconUploading;
     setBusy(true);
     try {
-      const url = await uploadBrandingAsset(tenantId, kind, file);
+      // D15: a see-through logo is uploaded on a white tile.
+      const logo = kind === "logo" ? await prepareLogo(file) : null;
+      const url = await uploadBrandingAsset(tenantId, kind, logo?.file ?? file);
       const fn = httpsCallable(getClientFunctions(), "updateTenantBranding");
       await fn(kind === "logo" ? { logoUrl: url } : { faviconUrl: url });
+      if (logo) setLogoVeryLight(logo.veryLight);
       toast.success(`${kind === "logo" ? "Logo" : "Favicon"} updated.`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : `Could not upload ${kind}.`);
@@ -233,16 +238,7 @@ export default function SettingsBrandingPage() {
         </CardHeader>
         <CardContent className="grid gap-4">
           {meta?.logoUrl ? (
-            // On white and at the invoice PDF's logo size (200 × 60 at most),
-            // so a dark logo doesn't vanish into the dark dashboard.
-            <figure className="grid gap-1.5">
-              <div className="flex min-h-24 w-fit max-w-full items-center rounded-md border bg-white px-5 py-4">
-                <BusinessLogo src={meta.logoUrl} alt="Current logo" maxWidth={200} maxHeight={60} />
-              </div>
-              <figcaption className="text-xs text-muted-foreground">
-                Shown as it appears on your invoices.
-              </figcaption>
-            </figure>
+            <LogoPreviews src={meta.logoUrl} veryLight={logoVeryLight} />
           ) : (
             <p className="text-sm text-muted-foreground">No logo uploaded.</p>
           )}
