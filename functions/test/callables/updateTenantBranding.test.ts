@@ -126,7 +126,7 @@ describe("updateTenantBranding", () => {
       updateTenantBrandingHandler(
         fakeRequest(
           { fontFamily: "Comic Sans MS" },
-          { uid: "owner1", claims: { tenantId, role: "owner" } },
+          { uid: "owner1", claims: { tenantId, role: "owner", email_verified: true } },
         ),
       ),
     ).rejects.toThrow(/fontFamily must be one of: Inter, Roboto/);
