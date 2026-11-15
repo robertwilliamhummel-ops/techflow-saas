@@ -2530,6 +2530,8 @@ The Stripe webhook signing secrets (`STRIPE_PLATFORM_WEBHOOK_SECRET`, `STRIPE_CO
 
 ### Cloud Functions non-secret config — `functions/.env.<projectId>`
 
+`firebase deploy` loads `functions/.env` for **every** project before `functions/.env.<projectId>`, so it must not exist with environment-specific values: a project file that forgot `APP_URL` would ship whatever `.env` said (it used to say `http://localhost:3000`). Local values go in `functions/.env.local`, which only the emulator loads (F-05). Unset, `APP_URL` falls back to `https://portal.techflowsolutions.ca` in code.
+
 | Variable | Default | Notes |
 |---|---|---|
 | `APP_URL` | `https://portal.techflowsolutions.ca` | links in emails, Stripe redirect URLs, invitation accept URL; for a business with a verified custom domain, that domain replaces it in customers' portal and pay links and Stripe redirects (`functions/src/shared/portalLinks.ts`) |
@@ -2564,7 +2566,7 @@ Vercel env vars and Cloud Functions secrets are parallel systems — both must b
 - Platform admin: `npx ts-node functions/src/scripts/setPlatformAdmin.ts <uid> <email>` with application default credentials.
 
 **2. Cloud Run `pdf-service`**
-- `gcloud run deploy pdf-service-<env> --source ./pdf-service --region northamerica-northeast2 --memory 2Gi --cpu 2 --allow-unauthenticated` with `PDF_SERVICE_API_KEY` from Secret Manager (the API key, not IAM, protects the service); prod adds `--min-instances 1` (P3).
+- `gcloud run deploy pdf-service-<env> --source ./pdf-service --region northamerica-northeast2 --memory 2Gi --cpu 2 --concurrency 10 --max-instances 3 --allow-unauthenticated` with `PDF_SERVICE_API_KEY` from Secret Manager (the API key, not IAM, protects the service). Concurrency 10 keeps one Chrome per instance busy without starving it at 2 GiB; 3 instances caps cost and is far above launch load (F-05; staging runs exactly this). Prod adds `--min-instances 1` (P3) once the first client is live — until then it stays at 0, so the first PDF after an idle spell takes a few seconds longer (owner's call, 2026-11-14).
 - **R3, resolved differently:** Cloud Run domain mappings aren't offered in `northamerica-northeast2`. Use the deterministic URL `https://pdf-service-<env>-<PROJECT_NUMBER>.northamerica-northeast2.run.app` — it depends only on service name, project number, and region, so recreating the service keeps it. Set it as `PDF_SERVICE_URL` in both Vercel and functions.
 
 **3. Vercel**
