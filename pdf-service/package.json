@@ -14,8 +14,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "express": "^4.21.2",
-    "handlebars": "^4.7.8",
+    "express": "^4.22.3",
+    "handlebars": "^4.7.10",
     "puppeteer-core": "^25.10.0",
     "qrcode": "^1.5.4"
   },
