@@ -9,11 +9,13 @@ import { z } from "zod";
 import {
   createUserWithEmailAndPassword,
   sendEmailVerification,
+  signInWithEmailAndPassword,
 } from "firebase/auth";
 import { httpsCallable } from "firebase/functions";
 
 import { getClientAuth, getClientFunctions } from "@/lib/firebase/client";
 import { authErrorMessage } from "@/lib/auth/authErrors";
+import { completeSignup } from "@/lib/auth/signupFlow";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -53,27 +55,28 @@ export default function SignupPage() {
     setSubmitError(null);
     const auth = getClientAuth();
     try {
-      const cred = await createUserWithEmailAndPassword(
-        auth,
-        values.email,
-        values.password,
-      );
-
-      // Critical sequence (blueprint Phase 5):
-      //  1. Create the Auth user (above).
-      //  2. Await onSignup so Firestore docs + custom claims exist.
-      //  3. Force-refresh the ID token so the client sees the new tenantId claim.
-      //  4. Only then redirect into the dashboard.
+      // Critical sequence (blueprint Phase 5): create the Auth user, await
+      // onSignup so Firestore docs + custom claims exist, force-refresh the ID
+      // token, and only then redirect. A retry after a failed onSignup carries
+      // on with the account the first try created (completeSignup).
       const onSignup = httpsCallable<
         { businessName: string },
         { tenantId: string }
       >(getClientFunctions(), "onSignup");
-      await onSignup({ businessName: values.businessName });
-
-      // Fire-and-forget — don't block redirect on the email send.
-      sendEmailVerification(cred.user).catch(() => {});
-
-      await cred.user.getIdToken(true);
+      await completeSignup(values, {
+        createUser: async (email, password) =>
+          (await createUserWithEmailAndPassword(auth, email, password)).user,
+        signIn: async (email, password) =>
+          (await signInWithEmailAndPassword(auth, email, password)).user,
+        tenantIdOf: async (user) => {
+          const { claims } = await user.getIdTokenResult(true);
+          return typeof claims.tenantId === "string" ? claims.tenantId : null;
+        },
+        onSignup: async (businessName) => {
+          await onSignup({ businessName });
+        },
+        sendEmailVerification: (user) => sendEmailVerification(user),
+      });
       router.replace("/dashboard");
     } catch (err) {
       setSubmitError(authErrorMessage(err));

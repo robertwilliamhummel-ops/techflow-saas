@@ -1803,6 +1803,8 @@ await user.getIdToken(true);                                    // pull the new 
 router.replace("/dashboard");
 ```
 
+As built, `completeSignup` (`src/lib/auth/signupFlow.ts`) runs this sequence and makes it recoverable (audit 2026-11-13): if `onSignup` fails after the Auth user exists, pressing Create account again gets `auth/email-already-in-use`, signs in with the same email and password, and calls `onSignup` for that account if its refreshed token has no `tenantId` (an account that already has a business just goes to the dashboard). A sign-in that fails reports the original email-in-use error. The session alone is never reused: a portal customer's email-link account has no password, and no business is attached to it.
+
 **tenantId generation (C4):** slug of the business name (lowercase, non-alphanumeric runs → `-`, trimmed, max 40 characters, fallback `tenant`) with `-1`, `-2`, … on collision (`pickTenantId` in `functions/src/shared/tenantId.ts`). The candidate is picked and claimed in the signup transaction: `tenants/{id}/meta/settings` is written with `create()`, so two businesses with the same name can't share an id (A-12). Readable ids show up in Firestore paths, Stripe metadata, Sentry tags, and support conversations.
 
 **Server side** (`functions/src/tenants/onSignup.ts`):
