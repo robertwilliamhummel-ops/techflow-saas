@@ -2176,7 +2176,7 @@ How to pay
 
 **Conditional rendering in the PDF template:**
 - If `tenantSnapshot.etransferEmail` is absent → hide section 1, renumber section 2.
-- If the tenant has no Stripe Connect account OR the invoice has no `payToken` → hide section 2.
+- If the tenant has no Stripe Connect account OR the invoice has no `payToken` → hide section 2. As built (F-08), both PDF callers — `shared/documentPdf.ts` in Cloud Functions and the `/api/pdf/invoice` route (`src/lib/pdf/loadDoc.ts`) — show it only when the pay page would offer a card: `stripePayments` on and a Stripe account whose `stripeStatus.chargesEnabled` is true (`cardPaymentsReady`).
 - If both are absent → block invoice send at `createInvoice` time (already specified in Phase 3).
 
 **Surcharge line item on paid-by-card invoices:**

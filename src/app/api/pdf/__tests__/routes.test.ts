@@ -67,6 +67,17 @@ function seedTenantEntitlements(tenantId: string, features: Record<string, boole
   store.set(`tenants/${tenantId}/entitlements/current`, { features });
 }
 
+// A business that can take card payments (F-08): a connected Stripe account
+// that Stripe lets take charges.
+const CARD_READY = {
+  stripeAccountId: "acct_123",
+  stripeStatus: { chargesEnabled: true },
+};
+
+function seedMeta(tenantId: string, meta: Record<string, unknown> = {}): void {
+  store.set(`tenants/${tenantId}/meta/settings`, { ...CARD_READY, ...meta });
+}
+
 function snapshot(extra: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     version: 1,
@@ -215,6 +226,7 @@ describe("GET /api/pdf/invoice", () => {
 
   it("200 + streams PDF for tenant token", async () => {
     seedTenantEntitlements("acme");
+    seedMeta("acme");
     seedInvoice("acme", "INV-1");
     verifyIdToken.mockResolvedValueOnce({ uid: "u1", tenantId: "acme" });
     pdfReply();
@@ -317,6 +329,7 @@ describe("GET /api/pdf/invoice", () => {
 
   it("A-12: a void invoice's PDF gets no pay link", async () => {
     seedTenantEntitlements("acme");
+    seedMeta("acme");
     seedInvoice("acme", "INV-1", { status: "void" });
     verifyIdToken.mockResolvedValueOnce({ uid: "u1", tenantId: "acme" });
     pdfReply();
@@ -453,7 +466,7 @@ describe("custom domains: the PDF's pay link", () => {
   it("uses the business's verified custom domain", async () => {
     seedTenantEntitlements("acme");
     seedInvoice("acme", "INV-1");
-    store.set("tenants/acme/meta/settings", {
+    seedMeta("acme", {
       customDomain: "Invoices.Acme.test",
       customDomainStatus: { stage: "verified", message: null, checkedAt: null },
     });
@@ -467,10 +480,75 @@ describe("custom domains: the PDF's pay link", () => {
   it("keeps the shared portal host until the domain is verified", async () => {
     seedTenantEntitlements("acme");
     seedInvoice("acme", "INV-1");
-    store.set("tenants/acme/meta/settings", {
+    seedMeta("acme", {
       customDomain: "invoices.acme.test",
       customDomainStatus: { stage: "ssl_pending", message: null, checkedAt: null },
     });
+    verifyIdToken.mockResolvedValueOnce({ uid: "u1", tenantId: "acme" });
+    pdfReply();
+
+    expect((await requestPdf()).status).toBe(200);
+    expect(postedBody(0).data.payUrl).toBe("https://app.example.test/pay/pay-tok-1");
+  });
+});
+
+describe("F-08: the PDF offers a card only when the business can take one", () => {
+  function requestPdf() {
+    return invoiceGET(
+      makeRequest("https://app.example.test/api/pdf/invoice?tenantId=acme&invoiceId=INV-1", {
+        authorization: "Bearer good",
+      }),
+    );
+  }
+
+  it.each([
+    ["no settings document", null],
+    ["no Stripe account (e-Transfer only)", { stripeAccountId: null, stripeStatus: { chargesEnabled: false } }],
+    ["a Stripe account that can't take charges yet", { stripeStatus: { chargesEnabled: false } }],
+    ["no Stripe status", { stripeStatus: null }],
+  ])("no pay link with %s", async (_label, meta) => {
+    seedTenantEntitlements("acme");
+    if (meta) seedMeta("acme", meta);
+    seedInvoice("acme", "INV-1", {
+      tenantSnapshot: snapshot({ etransferEmail: "pay@acme.test" }),
+    });
+    verifyIdToken.mockResolvedValueOnce({ uid: "u1", tenantId: "acme" });
+    pdfReply();
+
+    expect((await requestPdf()).status).toBe(200);
+    expect(postedBody(0).data.payUrl).toBeNull();
+  });
+
+  it("no pay link when the tenant's stripePayments feature is off", async () => {
+    seedTenantEntitlements("acme", { stripePayments: false });
+    seedMeta("acme");
+    seedInvoice("acme", "INV-1");
+    verifyIdToken.mockResolvedValueOnce({ uid: "u1", tenantId: "acme" });
+    pdfReply();
+
+    expect((await requestPdf()).status).toBe(200);
+    expect(postedBody(0).data.payUrl).toBeNull();
+  });
+
+  it("the customer's portal download follows the same rule", async () => {
+    seedTenantEntitlements("acme");
+    seedMeta("acme", { stripeStatus: { chargesEnabled: false } });
+    seedInvoice("acme", "INV-1");
+    verifyIdToken.mockResolvedValueOnce({
+      uid: "cust1",
+      email: "jane@example.com",
+      email_verified: true,
+    });
+    pdfReply();
+
+    expect((await requestPdf()).status).toBe(200);
+    expect(postedBody(0).data.payUrl).toBeNull();
+  });
+
+  it("a pay link once the Stripe account can take charges", async () => {
+    seedTenantEntitlements("acme");
+    seedMeta("acme");
+    seedInvoice("acme", "INV-1");
     verifyIdToken.mockResolvedValueOnce({ uid: "u1", tenantId: "acme" });
     pdfReply();
 

@@ -6,6 +6,7 @@
 
 import { getAdminDb } from "@/lib/firebase/admin";
 import { resolveFeature, type FeatureKey } from "@/lib/features";
+import { cardPaymentsReady } from "@/lib/stripe/cardPaymentsReady";
 import { portalOriginFor } from "@/lib/tenant/portalOrigin";
 
 export class PdfLoadError extends Error {
@@ -66,15 +67,21 @@ export async function loadInvoiceForPdf(
       resolveFeature("cardSurcharge", overrides),
   };
 
-  // A-12: a void invoice's PDF must not offer a way to pay it.
+  const meta = metaSnap.exists
+    ? (metaSnap.data() as Record<string, unknown>)
+    : null;
+  // A-12: a void invoice's PDF must not offer a way to pay it. The card
+  // section (QR code and pay link) appears only when the pay page would offer
+  // a card — stripePayments on and a Stripe account that can take charges, the
+  // rule of the Cloud Functions builder (functions/src/shared/documentPdf.ts) —
+  // so an e-Transfer-only business's PDF never leads to a dead end (F-08).
+  const cardReady =
+    resolveFeature("stripePayments", overrides) && cardPaymentsReady(meta);
   const payToken =
-    typeof data.payToken === "string" && data.status !== "void"
+    typeof data.payToken === "string" && data.status !== "void" && cardReady
       ? data.payToken
       : null;
-  const payOrigin = portalOriginFor(
-    metaSnap.exists ? (metaSnap.data() as Record<string, unknown>) : null,
-    platformBaseUrl,
-  );
+  const payOrigin = portalOriginFor(meta, platformBaseUrl);
   const payUrl = payToken
     ? `${payOrigin}/pay/${encodeURIComponent(payToken)}`
     : null;
