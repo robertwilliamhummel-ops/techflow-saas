@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect } from "react";
 import {
   ChevronsUpDown,
   ClipboardList,
@@ -26,7 +25,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useAuth } from "@/lib/auth/useAuth";
-import { computeForeground } from "@/lib/design/contrast";
 import {
   DASHBOARD_NAV,
   isNavItemActive,
@@ -38,10 +36,6 @@ import type { MembershipRole } from "@/lib/schema/tenant";
 import { TenantProvider, useTenantContext } from "@/lib/tenant/TenantContext";
 import { cn } from "@/lib/utils";
 import { BillingStatusBanner } from "./BillingStatusBanner";
-import { DEFAULT_PRIMARY_COLOR } from "@/lib/tenant/brandDefaults";
-
-const FALLBACK_PRIMARY = DEFAULT_PRIMARY_COLOR;
-const FALLBACK_SECONDARY = "#F5F5F5";
 
 const NAV_ICONS: Record<DashboardNavIcon, typeof LayoutDashboard> = {
   dashboard: LayoutDashboard,
@@ -67,17 +61,6 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
   const { user, claims, signOut } = useAuth();
   const pathname = usePathname();
   const router = useRouter();
-  const primary = meta?.primaryColor ?? FALLBACK_PRIMARY;
-  const secondary = meta?.secondaryColor ?? FALLBACK_SECONDARY;
-
-  // Menus, selects and dialogs portal into <body>, outside this wrapper, so
-  // the dark theme also goes on <html> while the dashboard is mounted
-  // (blueprint Phase 1.5: dashboard dark, portal light).
-  useEffect(() => {
-    const root = document.documentElement;
-    root.classList.add("dark");
-    return () => root.classList.remove("dark");
-  }, []);
 
   // Feature-gated items wait for entitlements so they never flash in and out.
   const navItems = visibleNavItems(DASHBOARD_NAV, {
@@ -96,20 +79,12 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <div
-      className="dark min-h-screen bg-background text-foreground"
-      style={
-        {
-          "--primary": primary,
-          "--primary-foreground": computeForeground(primary),
-          "--secondary": secondary,
-          "--secondary-foreground": computeForeground(secondary),
-        } as React.CSSProperties
-      }
-    >
+    // TechFlow's platform theme (D17, set by the layout's PlatformTheme), light
+    // or dark with the system; the sidebar and phone header are navy (`dark`).
+    <div className="min-h-screen bg-background text-foreground">
       <BillingStatusBanner role={claims.role} />
       <div className="md:flex">
-        <aside className="hidden border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:sticky md:top-0 md:flex md:h-dvh md:w-60 md:shrink-0 md:flex-col">
+        <aside className="dark hidden border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:sticky md:top-0 md:flex md:h-dvh md:w-60 md:shrink-0 md:flex-col">
           <div className="p-4">
             <TenantBrand name={meta?.name ?? ""} logoUrl={meta?.logoUrl ?? null} />
           </div>
@@ -121,7 +96,7 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
           </div>
         </aside>
 
-        <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur md:hidden">
+        <header className="dark sticky top-0 z-40 border-b bg-background/95 backdrop-blur md:hidden">
           <div className="flex items-center justify-between gap-3 px-4 py-3">
             <TenantBrand name={meta?.name ?? ""} logoUrl={meta?.logoUrl ?? null} />
             <AccountMenu account={account} compact />

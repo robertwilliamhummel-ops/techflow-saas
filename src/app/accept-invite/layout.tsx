@@ -1,11 +1,14 @@
 import type { Metadata } from "next";
 
-import { platformMetadata } from "@/lib/platformMetadata";
+import { PlatformTheme } from "@/components/theme/PlatformTheme";
+import { platformMetadata, showPlatformBrand } from "@/lib/platformMetadata";
 
 export function generateMetadata(): Promise<Metadata> {
   return platformMetadata("Join your team");
 }
 
-export default function AcceptInviteLayout({ children }: { children: React.ReactNode }) {
-  return children;
+// Accepting a staff invitation is a platform screen (D17), like sign-in —
+// except on a business's custom domain, which carries no TechFlow branding (D13).
+export default async function AcceptInviteLayout({ children }: { children: React.ReactNode }) {
+  return (await showPlatformBrand()) ? <PlatformTheme>{children}</PlatformTheme> : children;
 }

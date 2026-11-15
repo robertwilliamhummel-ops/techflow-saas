@@ -2,7 +2,19 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
-@custom-variant dark (&:is(.dark *));
+/* `dark:` applies inside `.dark` and, on the platform's own screens
+   ([data-theme="platform"], D17), when the system is set to dark. Tenant-facing
+   pages have neither, so they stay light. */
+@custom-variant dark {
+    &:is(.dark *) {
+        @slot;
+    }
+    @media (prefers-color-scheme: dark) {
+        &:is([data-theme="platform"] *) {
+            @slot;
+        }
+    }
+}
 
 @theme inline {
     --font-heading: var(--font-sans);
@@ -129,6 +141,96 @@
     --sidebar-accent-foreground: oklch(0.985 0 0);
     --sidebar-border: oklch(1 0 0 / 10%);
     --sidebar-ring: oklch(0.556 0 0);
+}
+
+/* ── Platform theme (G-02, D17) ──────────────────────────────────────────────
+   The tokens above stay neutral for tenant-facing pages (portal, pay page,
+   custom domains). The platform's own screens — dashboard, sign-in, account
+   pages — render inside PlatformTheme, which sets [data-theme="platform"], and
+   wear TechFlow's brand (techflow-site/brand/BRAND_GUIDE.md): Harbour Navy and
+   white, a neutral primary button (navy on light, white on navy), Deep Teal on
+   light and Signal Aqua on dark for the focus ring and success. Light or dark
+   follows the system; `.dark` inside a light page makes a navy surface (the
+   dashboard's sidebar and phone header). Text pairs ≥ 4.5:1, UI ≥ 3:1 —
+   pinned by src/lib/design/platformTheme.test.ts. */
+@utility platform-dark {
+    color-scheme: dark;
+    --background: #061a26;
+    --foreground: #f1f6f5;
+    --card: #08212f;
+    --card-foreground: #f1f6f5;
+    --popover: #0e2c3c;
+    --popover-foreground: #f1f6f5;
+    --primary: #ffffff;
+    --primary-foreground: #061a26;
+    --secondary: #0e2c3c;
+    --secondary-foreground: #f1f6f5;
+    --muted: #0e2c3c;
+    --muted-foreground: #c0d2d8;
+    --accent: #1d4250;
+    --accent-foreground: #ffffff;
+    --destructive: #ff8f8f;
+    --destructive-foreground: #061a26;
+    --success: #6be6d6;
+    --success-foreground: #061a26;
+    --warning: #fbbf24;
+    --warning-foreground: #061a26;
+    --border: #1d4250;
+    --input: #5f7f8c;
+    --ring: #6be6d6;
+    --sidebar: #061a26;
+    --sidebar-foreground: #f1f6f5;
+    --sidebar-primary: #ffffff;
+    --sidebar-primary-foreground: #061a26;
+    --sidebar-accent: #0e2c3c;
+    --sidebar-accent-foreground: #f1f6f5;
+    --sidebar-border: #1d4250;
+    --sidebar-ring: #6be6d6;
+}
+
+[data-theme="platform"] {
+    color-scheme: light;
+    --background: #f6f8f8;
+    --foreground: #061a26;
+    --card: #ffffff;
+    --card-foreground: #061a26;
+    --popover: #ffffff;
+    --popover-foreground: #061a26;
+    --primary: #061a26;
+    --primary-foreground: #ffffff;
+    --secondary: #eaeff0;
+    --secondary-foreground: #061a26;
+    --muted: #eaeff0;
+    --muted-foreground: #2c4855;
+    --accent: #eaeff0;
+    --accent-foreground: #061a26;
+    --destructive: #b3261e;
+    --destructive-foreground: #ffffff;
+    --success: #0b6a68;
+    --success-foreground: #ffffff;
+    --warning: #f59e0b;
+    --warning-foreground: #061a26;
+    --border: #d6dee0;
+    --input: #7a909b;
+    --ring: #0b6a68;
+    --sidebar: #061a26;
+    --sidebar-foreground: #f1f6f5;
+    --sidebar-primary: #ffffff;
+    --sidebar-primary-foreground: #061a26;
+    --sidebar-accent: #0e2c3c;
+    --sidebar-accent-foreground: #f1f6f5;
+    --sidebar-border: #1d4250;
+    --sidebar-ring: #6be6d6;
+}
+
+@media (prefers-color-scheme: dark) {
+    [data-theme="platform"] {
+        @apply platform-dark;
+    }
+}
+
+[data-theme="platform"] .dark {
+    @apply platform-dark;
 }
 
 @layer base {

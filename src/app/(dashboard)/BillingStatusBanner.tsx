@@ -25,12 +25,12 @@ export function BillingStatusBanner({ role }: { role: MembershipRole | undefined
     : "Stripe needs more information before you can accept card payments.";
 
   return (
-    <div className="border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm text-amber-100">
+    <div className="border-b border-warning/40 bg-warning/15 px-4 py-2 text-sm text-foreground">
       <div className="mx-auto flex max-w-6xl items-center justify-between gap-4">
         <span>{message}</span>
         <Link
           href="/billing"
-          className="font-medium underline underline-offset-4 hover:text-amber-50"
+          className="font-medium underline underline-offset-4 hover:decoration-2"
         >
           Open Billing
         </Link>
