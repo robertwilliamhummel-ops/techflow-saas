@@ -15,6 +15,7 @@ import { resolveTenantFont, TENANT_FONTS } from "@/lib/design/fonts";
 import { uploadBrandingAsset } from "@/lib/storage/uploadBrandingAsset";
 import { prepareLogo } from "@/lib/branding/prepareLogo";
 import { LogoPreviews } from "@/components/settings/LogoPreviews";
+import { FAVICON_MAX_BYTES, LOGO_MAX_BYTES } from "@/lib/tenant/brandingLimits";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -67,7 +68,19 @@ const schema = z.object({
 
 type FormValues = z.infer<typeof schema>;
 
-const MAX_BRANDING_BYTES = 2 * 1024 * 1024; // mirrors Storage rule.
+// Before D15 prepares a logo: a sanity cap so a huge file isn't decoded at all.
+const RAW_LOGO_MAX_BYTES = 10 * 1024 * 1024;
+
+// Mirrors storage.rules (F-01): a logo over 500 KB would fail every invoice.
+// For a logo it applies to the prepared file that is actually uploaded.
+function tooLargeMessage(kind: "logo" | "favicon", size: number): string | null {
+  if (kind === "logo") {
+    return size > LOGO_MAX_BYTES
+      ? "Logo must be 500 KB or smaller. Export a smaller PNG or JPG and try again."
+      : null;
+  }
+  return size >= FAVICON_MAX_BYTES ? "Favicon must be under 2 MB." : null;
+}
 
 export default function SettingsBrandingPage() {
   const { tenantId, meta, loading } = useTenantContext();
@@ -122,8 +135,18 @@ export default function SettingsBrandingPage() {
     file: File | undefined | null,
   ) {
     if (!file || !tenantId) return;
-    if (file.size > MAX_BRANDING_BYTES) {
-      toast.error("File must be under 2 MB.");
+    // A logo is checked after D15 prepares it: the white tile can bring a large
+    // transparent PNG under the 500 KB limit, so checking the original first
+    // would refuse a logo that uploads fine. The raw cap only stops a huge file
+    // from being decoded in the browser at all.
+    const precheck =
+      kind === "logo"
+        ? file.size > RAW_LOGO_MAX_BYTES
+          ? "That image is too large to use as a logo. Export it under 10 MB and try again."
+          : null
+        : tooLargeMessage(kind, file.size);
+    if (precheck) {
+      toast.error(precheck);
       return;
     }
     const setBusy = kind === "logo" ? setLogoUploading : setFaviconUploading;
@@ -131,7 +154,13 @@ export default function SettingsBrandingPage() {
     try {
       // D15: a see-through logo is uploaded on a white tile.
       const logo = kind === "logo" ? await prepareLogo(file) : null;
-      const url = await uploadBrandingAsset(tenantId, kind, logo?.file ?? file);
+      const upload = logo?.file ?? file;
+      const tooLarge = kind === "logo" ? tooLargeMessage(kind, upload.size) : null;
+      if (tooLarge) {
+        toast.error(tooLarge);
+        return;
+      }
+      const url = await uploadBrandingAsset(tenantId, kind, upload);
       const fn = httpsCallable(getClientFunctions(), "updateTenantBranding");
       await fn(kind === "logo" ? { logoUrl: url } : { faviconUrl: url });
       if (logo) setLogoVeryLight(logo.veryLight);
@@ -239,7 +268,7 @@ export default function SettingsBrandingPage() {
         <CardHeader>
           <CardTitle>Logo</CardTitle>
           <CardDescription>
-            Shown on invoices and the customer portal. PNG, JPG, or SVG, max 2 MB.
+            Shown on invoices and the customer portal. PNG, JPG, or SVG, max 500 KB.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">

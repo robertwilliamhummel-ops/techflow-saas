@@ -23,8 +23,17 @@ service firebase.storage {
       return fileName.matches('^(logo|favicon)[.](png|jpg|jpeg|webp|svg|ico)$');
     }
 
-    function isBrandingImage() {
-      return request.resource.size < 2 * 1024 * 1024
+    // F-01: invoices and quotes copy the logo and refuse one over 500 KB
+    // (LOGO_MAX_BYTES, functions/src/shared/logo.ts), so the upload stops at
+    // the same size. A favicon only reaches a browser tab and keeps 2 MB.
+    // Pinned by src/lib/__tests__/brandingLimits.test.ts.
+    function isWithinSizeLimit(fileName) {
+      return (fileName.matches('^logo[.].*') && request.resource.size <= 500 * 1024)
+        || (fileName.matches('^favicon[.].*') && request.resource.size < 2 * 1024 * 1024);
+    }
+
+    function isBrandingImage(fileName) {
+      return isWithinSizeLimit(fileName)
         && request.resource.contentType.matches(
              '^image/(png|jpeg|webp|svg[+]xml|x-icon|vnd[.]microsoft[.]icon)$');
     }
@@ -39,7 +48,7 @@ service firebase.storage {
       allow create, update: if belongsToTenant(tenantId)
         && isOwnerOrAdmin()
         && isBrandingFileName(fileName)
-        && isBrandingImage();
+        && isBrandingImage(fileName);
     }
 
     // All other tenant-scoped assets (snapshots, attachments) flow through

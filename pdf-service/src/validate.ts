@@ -22,7 +22,7 @@ export class ValidationError extends Error {
 const MAX_NOTES = 4_000;
 const MAX_DESCRIPTION = 1_000;
 const MAX_LINE_ITEMS = 200;
-const MAX_LOGO_DATA_URL = 800_000; // base64 inflates ~33% — 500KB raw → ~670KB encoded.
+export const MAX_LOGO_DATA_URL = 800_000; // base64 inflates ~33% — 500KB raw → ~670KB encoded.
 const MAX_TAX_LINES = 5;
 
 export function validateInvoiceBody(input: unknown): RenderInvoiceRequest {

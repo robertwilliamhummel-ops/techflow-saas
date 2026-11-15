@@ -73,7 +73,7 @@
 
 | Phase | Status | Remaining |
 |---|---|---|
-| 1 Schema, rules, claims | Done — 62 Firestore + 18 Storage rules tests; indexes and TTL policies in `firestore.indexes.json`, pinned to their queries by tests; customer + recurring-management callables (A-10) | — |
+| 1 Schema, rules, claims | Done — 62 Firestore + 21 Storage rules tests; indexes and TTL policies in `firestore.indexes.json`, pinned to their queries by tests; customer + recurring-management callables (A-10) | — |
 | 1.5 Design system | Done | — |
 | 2 Cloud Functions | Done — 405 callable, 69 email, 175 shared tests; PaymentReceipt and MagicLinkSignIn emails (E-01); App Check switch and per-user rate limits (R-04); Sentry reporting on every function (O-01) | — |
 | 3 Frontend architecture | Contexts, guards, auth recovery done; dashboard navigation and home (S-01); invoices list (S-02); new invoice (S-03); invoice detail (S-04); customers (S-05); quotes list, new quote, and quote detail (S-06); portal home (S-07); portal invoice and quote pages (S-08); public pay page with its success and cancelled pages (S-09); portal sign-in by email link (S-10) | No placeholder pages left |
@@ -539,11 +539,11 @@ Two identity patterns are enforced:
 
 Customer-visible statuses (A-05): invoices `sent`, `unpaid`, `overdue`, `partial`, `paid`, `refunded`, `partially-refunded`, `void` (A-12 — a cancelled invoice stays visible so the customer knows not to pay it); quotes `sent`, `accepted`, `declined`, `expired`, `converted`. The rules repeat the allow-lists in `functions/src/shared/customerVisibility.ts`, and the rules tests iterate those constants.
 
-**Storage (`storage.rules`, 18 emulator tests in `functions/test/rules/storage.test.ts`):**
+**Storage (`storage.rules`, 21 emulator tests in `functions/test/rules/storage.test.ts`):**
 
 | Path | Read | Write |
 |---|---|---|
-| `tenants/{t}/{logo\|favicon}.{png\|jpg\|jpeg\|webp\|svg\|ico}` | members of `t` | create/update by `owner`/`admin` of `t`; content type `image/png\|jpeg\|webp\|svg+xml\|x-icon\|vnd.microsoft.icon`; under 2 MB; no deletes |
+| `tenants/{t}/{logo\|favicon}.{png\|jpg\|jpeg\|webp\|svg\|ico}` | members of `t` | create/update by `owner`/`admin` of `t`; content type `image/png\|jpeg\|webp\|svg+xml\|x-icon\|vnd.microsoft.icon`; a logo at most 500 KB — the size invoices and quotes accept (F-01) — and a favicon under 2 MB; no deletes |
 | `tenants/{t}/**` (snapshots, anything nested) | members of `t` | none (Admin SDK only) |
 | anything else | none | none |
 
@@ -1828,7 +1828,7 @@ router.replace("/dashboard");
 - Edit business name, reply-to email (`contactEmail`, D5), address
 - Edit branding: primaryColor, secondaryColor, fontFamily picker, favicon upload
 - **Contrast guard on color pickers** — primaryColor and secondaryColor inputs run `meetsWcagAA(hex, '#FFFFFF')` on change; if the ratio is below 4.5:1, show inline error "This color is too light — button text won't be readable. Try a darker shade." Save button stays disabled until valid. `updateTenantBranding` callable re-validates server-side.
-- Logo upload → Firebase Storage at `tenants/{tenantId}/logo.{ext}` (png, jpg, webp, svg; Storage rules mirror Firestore tenant scoping). D15: the browser first puts a logo with transparency, and any SVG, on a solid white tile and uploads that PNG; very light artwork uploads as it is with a warning. The page previews the stored logo on white and in a dark-mode inbox.
+- Logo upload → Firebase Storage at `tenants/{tenantId}/logo.{ext}` (png, jpg, webp, svg; at most 500 KB, the size invoices and quotes accept — the Branding page and `storage.rules` both refuse a larger file, F-01; Storage rules mirror Firestore tenant scoping). D15: the browser first puts a logo with transparency, and any SVG, on a solid white tile and uploads that PNG; very light artwork uploads as it is with a warning. The page previews the stored logo on white and in a dark-mode inbox.
   **⚠️ After upload, call `getDownloadURL(ref)` and store the returned public https URL in `meta.logoUrl` — NOT the Storage path.** The token-bearing download URL is what's publicly fetchable; the raw Storage path (e.g. `tenants/acme/logo.png`) requires authenticated Storage access, which customers and the PDF renderer don't have. Same rule for `favicon.ico` → `meta.faviconUrl`. As built (F-10): a replacement goes to the same path and Storage keeps the object's download token, so `getDownloadURL` returns the old URL and pages kept showing the old image. `uploadBrandingAsset` adds the upload's object generation as `&v=`, which Storage ignores, so each upload saves a new URL.
 - Favicon upload → Firebase Storage at `tenants/{tenantId}/favicon.{ext}` (ico, png, svg; see getDownloadURL note above)
 - Show current plan (read-only), button to contact for upgrade (manual for MVP)

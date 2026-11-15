@@ -122,10 +122,34 @@ describe("tenants/{tenantId}/{logo|favicon}.{ext} — uploads", () => {
     );
   });
 
-  it("rejects files of 2 MB or more", async () => {
+  // F-01: invoices and quotes refuse a logo over 500 KB, so uploads do too.
+  it("accepts a logo of exactly 500 KB", async () => {
+    const atCap = new Uint8Array(500 * 1024);
+    await assertSucceeds(
+      upload(authed("alice", OWNER_T1), "tenants/t1/logo.png", "image/png", atCap),
+    );
+  });
+
+  it("rejects a logo over 500 KB", async () => {
+    const storage = authed("alice", OWNER_T1);
+    for (const size of [500 * 1024 + 1, 1024 * 1024]) {
+      await assertFails(
+        upload(storage, "tenants/t1/logo.png", "image/png", new Uint8Array(size)),
+      );
+    }
+  });
+
+  it("accepts a favicon over 500 KB but under 2 MB", async () => {
+    const oneMb = new Uint8Array(1024 * 1024);
+    await assertSucceeds(
+      upload(authed("alice", OWNER_T1), "tenants/t1/favicon.ico", "image/x-icon", oneMb),
+    );
+  });
+
+  it("rejects a favicon of 2 MB or more", async () => {
     const big = new Uint8Array(2 * 1024 * 1024);
     await assertFails(
-      upload(authed("alice", OWNER_T1), "tenants/t1/logo.png", "image/png", big),
+      upload(authed("alice", OWNER_T1), "tenants/t1/favicon.ico", "image/x-icon", big),
     );
   });
 
