@@ -13,7 +13,9 @@
 //     Link-generation and send failures are logged, not returned, for the same
 //     reason.
 //   - An email only goes to an address with at least one customer-visible
-//     invoice or quote — the portal would show nothing to anyone else.
+//     invoice or quote — the portal would show nothing to anyone else. On a
+//     custom domain the document must be from that domain's business, since
+//     the link's one-time code is delivered to that domain.
 //   - Each address gets at most 5 requests an hour and one a minute, counted in
 //     a transaction on signInLinkLimits/{sha256(email)} (TTL-cleaned via
 //     expireAt). Over the limit the call still answers ok and sends nothing.
@@ -39,6 +41,10 @@ import { sanitizeEmailField } from "../emails/sanitize";
 import { MagicLinkSignIn } from "../emails/templates/MagicLinkSignIn";
 import { listCustomerInvoices } from "./getCustomerInvoices";
 import { listCustomerQuotes } from "./getCustomerQuotes";
+import {
+  isCustomerVisibleInvoiceStatus,
+  isCustomerVisibleQuoteStatus,
+} from "../shared/customerVisibility";
 import { withSentryCallable } from "../shared/withSentry";
 
 export const SIGN_IN_LINKS_PER_HOUR = 5;
@@ -71,7 +77,10 @@ export async function sendPortalSignInLinkHandler(
     return { ok: true };
   }
 
-  if (!(await hasVisibleDocuments(email))) {
+  const isCustomer = target.tenantId
+    ? await hasVisibleDocumentsAt(target.tenantId, email)
+    : await hasVisibleDocuments(email);
+  if (!isCustomer) {
     logger.info("portalSignInLink: no customer-visible documents", {
       tenantId: target.tenantId,
     });
@@ -211,6 +220,53 @@ async function takeSignInLinkSlot(email: string): Promise<boolean> {
 async function hasVisibleDocuments(email: string): Promise<boolean> {
   if ((await listCustomerInvoices(email, { limit: 1 })).length > 0) return true;
   return (await listCustomerQuotes(email, { limit: 1 })).length > 0;
+}
+
+// On a custom domain the link's one-time code lands on that domain, so only a
+// customer of that business may get one: a customer-visible invoice or quote
+// from that tenant, not from any business on the platform (audit 2026-11-13).
+// Equality on customer.email alone uses the automatic single-field index;
+// statuses are filtered here, a bounded number of pages at a time.
+const TENANT_SCAN_PAGE_SIZE = 50;
+const TENANT_SCAN_MAX_PAGES = 4;
+
+async function hasVisibleDocumentsAt(
+  tenantId: string,
+  email: string,
+): Promise<boolean> {
+  return (
+    (await hasVisibleIn(
+      `tenants/${tenantId}/invoices`,
+      email,
+      isCustomerVisibleInvoiceStatus,
+    )) ||
+    (await hasVisibleIn(
+      `tenants/${tenantId}/quotes`,
+      email,
+      isCustomerVisibleQuoteStatus,
+    ))
+  );
+}
+
+async function hasVisibleIn(
+  collectionPath: string,
+  email: string,
+  isVisible: (status: unknown) => boolean,
+): Promise<boolean> {
+  const base = db
+    .collection(collectionPath)
+    .where("customer.email", "==", email)
+    .select("status");
+  let cursor: FirebaseFirestore.QueryDocumentSnapshot | undefined;
+  for (let page = 0; page < TENANT_SCAN_MAX_PAGES; page++) {
+    const snap = await (cursor ? base.startAfter(cursor) : base)
+      .limit(TENANT_SCAN_PAGE_SIZE)
+      .get();
+    if (snap.docs.some((d) => isVisible(d.get("status")))) return true;
+    if (snap.size < TENANT_SCAN_PAGE_SIZE) return false;
+    cursor = snap.docs[snap.docs.length - 1];
+  }
+  return false;
 }
 
 export const sendPortalSignInLink = onCall(

@@ -50,8 +50,9 @@ async function seedDocument(
   id: string,
   email: string,
   status: string,
+  tenantId: string = TENANT,
 ): Promise<void> {
-  await testDb.doc(`tenants/${TENANT}/${collection}/${id}`).set({
+  await testDb.doc(`tenants/${tenantId}/${collection}/${id}`).set({
     customer: { name: "Jane Doe", email, phone: null },
     totals: { subtotal: 100, taxAmount: 13, total: 113 },
     tenantSnapshot: { name: "Acme Plumbing", primaryColor: "#0066CC" },
@@ -148,6 +149,58 @@ describe("sendPortalSignInLink (E-01)", () => {
     ).resolves.toEqual({ ok: true });
 
     expect(mockSesSend).not.toHaveBeenCalled();
+  });
+
+  describe("on a custom domain, only that business's customers", () => {
+    const domainUrl = `https://${DOMAIN}/portal`;
+
+    it("sends nothing to another business's customer, still answering ok", async () => {
+      // Visible documents at a different business only.
+      await seedDocument("invoices", "INV-0001", "bob@example.com", "sent", "bright-electric");
+      await seedDocument("quotes", "QT-0001", "bob@example.com", "sent", "bright-electric");
+
+      await expect(call("bob@example.com", domainUrl)).resolves.toEqual({ ok: true });
+      expect(mockSesSend).not.toHaveBeenCalled();
+    });
+
+    it("sends nothing when the business only has a draft for that address", async () => {
+      await seedDocument("invoices", "INV-0002", "drafty@example.com", "draft");
+      await seedDocument("quotes", "QT-0002", "drafty@example.com", "draft");
+      await seedDocument("invoices", "INV-0009", "drafty@example.com", "sent", "bright-electric");
+
+      await expect(call("drafty@example.com", domainUrl)).resolves.toEqual({ ok: true });
+      expect(mockSesSend).not.toHaveBeenCalled();
+    });
+
+    it("sends to a customer who only has a quote from that business", async () => {
+      await seedDocument("quotes", "QT-0001", "bob@example.com", "accepted");
+      await call("bob@example.com", domainUrl);
+      expect(sentEmails()).toHaveLength(1);
+      expect(sentEmails()[0].Destination.ToAddresses).toEqual(["bob@example.com"]);
+    });
+
+    it("finds a visible invoice behind more than a page of drafts", async () => {
+      const batch = testDb.batch();
+      for (let i = 0; i < 60; i++) {
+        batch.set(testDb.doc(`tenants/${TENANT}/invoices/D-${String(i).padStart(3, "0")}`), {
+          customer: { name: "Many Drafts", email: "many@example.com", phone: null },
+          status: "draft",
+          createdAt: Timestamp.now(),
+        });
+      }
+      await batch.commit();
+      // Sorts after every draft id.
+      await seedDocument("invoices", "Z-0001", "many@example.com", "overdue");
+
+      await call("many@example.com", domainUrl);
+      expect(sentEmails()).toHaveLength(1);
+    });
+
+    it("leaves the shared portal host open to a customer of any business", async () => {
+      await seedDocument("invoices", "INV-0001", "bob@example.com", "sent", "bright-electric");
+      await call("bob@example.com", "https://portal.techflowsolutions.ca/portal");
+      expect(sentEmails()).toHaveLength(1);
+    });
   });
 
   it("allows one link a minute per address, still answering ok", async () => {
