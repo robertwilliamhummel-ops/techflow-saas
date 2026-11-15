@@ -1123,9 +1123,9 @@ functions/src/emails/
 Reads a quote document, creates a new invoice document in the same tenant with:
 - Same customer
 - Same line items (hourly services + line items)
-- Same totals and tax settings
+- Same totals and tax settings — the quote's stored line amounts and totals, and its snapshot's tax rate and name, even if the business's tax settings changed since (audit 2026-11-13; the code had recomputed at the current rate)
 - New invoice number from `tenants/{tenantId}/counters/invoice`
-- Fresh `tenantSnapshot` (in case branding changed since quote was created)
+- Fresh `tenantSnapshot` (in case branding changed since quote was created), except its `taxRate` and `taxName`, which stay the quote's so a later `updateInvoice` recomputes on them
 - Link back to the source quote: `sourceQuoteId: quoteId`
 - Marks the source quote as `status: 'converted'` and stores `convertedToInvoiceId`
 - Its own dates (S-06): optional `issueDate` and `dueDate` from the caller — real calendar dates, due not before issued — defaulting to today (UTC) and 30 days later. The quote's `validUntil` is how long the offer stood, not when payment is due, so it is not used as the due date

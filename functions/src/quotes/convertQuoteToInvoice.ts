@@ -3,7 +3,8 @@
 // Blueprint spec (line 1142–1155):
 // - Same customer, line items, totals, tax settings from the quote
 // - New invoice number from counters/invoice
-// - Fresh tenantSnapshot (in case branding changed since quote was created)
+// - Fresh tenantSnapshot (in case branding changed since quote was created),
+//   except its tax rate and name, which stay the quote's
 // - sourceQuoteId on the new invoice, convertedToInvoiceId on the quote
 // - Transactional: quote status update + invoice creation in one shot
 // - Feature gate: BOTH quotes AND invoices
@@ -101,22 +102,50 @@ export async function convertQuoteToInvoiceHandler(
     throw new Error("Tenant meta not found — corrupt tenant state.");
   }
   const meta = metaSnap.data()!;
+  // The invoice bills what the customer accepted: the quote's line items, tax
+  // settings and totals, even if the business changed its tax settings since.
+  // The fresh snapshot keeps the quote's tax rate and name too, so editing the
+  // invoice later (updateInvoice recomputes from the snapshot) stays on them.
+  const quoteSnapshot = (quote.tenantSnapshot ?? {}) as Record<string, unknown>;
+  const tax = {
+    rate:
+      typeof quoteSnapshot.taxRate === "number"
+        ? quoteSnapshot.taxRate
+        : Number(meta.taxRate ?? 0),
+    name:
+      typeof quoteSnapshot.taxName === "string"
+        ? quoteSnapshot.taxName
+        : String(meta.taxName ?? ""),
+  };
   // Freeze the logo as an immutable Storage copy (A-06); PDFs inline it (D7).
-  const snapshot = buildTenantSnapshot(meta, features);
+  const snapshot = {
+    ...buildTenantSnapshot(meta, features),
+    taxRate: tax.rate,
+    taxName: tax.name,
+  };
   await applyLogoToSnapshot(
     snapshot,
     tenantId,
     (meta.logoUrl as string | null) ?? null,
   );
 
-  // Recompute totals from quote line items (per-line taxable carried over, D4)
-  // + current meta tax.
-  const rawLineItems = resolveLineItems(quote.lineItems, quote.applyTax === true);
-  const lineItems = computeLineItems(rawLineItems);
-  const totals = computeInvoiceTotals(rawLineItems, {
-    rate: Number(meta.taxRate ?? 0),
-    name: String(meta.taxName ?? ""),
+  // Per-line taxable carried over (D4). The quote's stored amounts and totals
+  // are kept as they are, so the invoice matches the quote to the cent even if
+  // the rounding code changes; they are computed (with the quote's tax) only
+  // for a quote stored without them.
+  const storedLines: unknown[] = Array.isArray(quote.lineItems) ? quote.lineItems : [];
+  const rawLineItems = resolveLineItems(storedLines, quote.applyTax === true);
+  const lineItems = computeLineItems(rawLineItems).map((line, i) => {
+    const stored = (storedLines[i] as { amount?: unknown } | null)?.amount;
+    return typeof stored === "number" && Number.isFinite(stored)
+      ? { ...line, amount: stored }
+      : line;
   });
+  const storedTotals = quote.totals as { total?: unknown } | undefined;
+  const totals =
+    typeof storedTotals?.total === "number" && Number.isFinite(storedTotals.total)
+      ? quote.totals
+      : computeInvoiceTotals(rawLineItems, tax);
 
   const prefix = String(meta.invoicePrefix ?? "INV");
 

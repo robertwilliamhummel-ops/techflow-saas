@@ -490,7 +490,7 @@ describe("convertQuoteToInvoice", () => {
     expect(qtCounter.value).toBe(1);
   });
 
-  it("uses fresh tenantSnapshot, not the quote's frozen snapshot", async () => {
+  it("uses fresh branding, but the quote's tax settings and totals", async () => {
     const { quoteId } = await createQuoteHandler(
       fakeRequest(validQuoteData(), ownerAuth),
     );
@@ -516,13 +516,39 @@ describe("convertQuoteToInvoice", () => {
       await testDb.doc(`tenants/${TENANT}/invoices/INV-0001`).get()
     ).data()!;
     expect(inv.tenantSnapshot.name).toBe("Acme HVAC");
-    expect(inv.tenantSnapshot.taxRate).toBe(0.15);
 
-    // Invoice totals use NEW tax rate
-    // (1×5000 + 10×45) = 5450, 15% = 817.50
-    expect(inv.totals.taxRate).toBe(0.15);
-    expect(inv.totals.taxAmount).toBe(817.5);
-    expect(inv.totals.total).toBe(6267.5);
+    // ...but bills what the customer accepted: the quote's tax settings and
+    // totals ("Same totals and tax settings"), not the business's new 15%.
+    // (1×5000 + 10×45) = 5450, 13% = 708.50
+    expect(inv.tenantSnapshot.taxRate).toBe(qt.tenantSnapshot.taxRate);
+    expect(inv.tenantSnapshot.taxName).toBe(qt.tenantSnapshot.taxName);
+    expect(inv.totals).toEqual(qt.totals);
+    expect(inv.totals.taxRate).toBe(0.13);
+    expect(inv.totals.taxAmount).toBe(708.5);
+    expect(inv.totals.total).toBe(6158.5);
+    expect(inv.lineItems).toEqual(qt.lineItems);
+  });
+
+  it("keeps the quote's stored amounts to the cent", async () => {
+    const { quoteId } = await createQuoteHandler(
+      fakeRequest(validQuoteData(), ownerAuth),
+    );
+    // Amounts as an older build of the rounding code stored them.
+    const quoteRef = testDb.doc(`tenants/${TENANT}/quotes/${quoteId}`);
+    const stored = (await quoteRef.get()).data()!;
+    const lineItems = stored.lineItems.map(
+      (li: Record<string, unknown>, i: number) => (i === 0 ? { ...li, amount: 4999.99 } : li),
+    );
+    const totals = { ...stored.totals, subtotal: 5449.99, total: 6158.49 };
+    await quoteRef.update({ lineItems, totals });
+
+    await convertQuoteToInvoiceHandler(fakeRequest({ quoteId }, ownerAuth));
+
+    const inv = (
+      await testDb.doc(`tenants/${TENANT}/invoices/INV-0001`).get()
+    ).data()!;
+    expect(inv.lineItems[0].amount).toBe(4999.99);
+    expect(inv.totals).toEqual(totals);
   });
 
   it("carries per-line taxable flags from quote to invoice (D4)", async () => {
