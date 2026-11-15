@@ -6,13 +6,14 @@ import { tenantFontClass } from "@/lib/design/tenantFontClass";
 import { tenantIdFromReturnPath } from "@/lib/portal/portalSignIn";
 import { getTenantBranding } from "@/lib/tenant/getTenantBranding";
 import { cn } from "@/lib/utils";
+import { businessTabIcon, NEUTRAL_TAB_ICON } from "@/lib/tenant/tabIcon";
 import { PortalLoginForm } from "./PortalLoginForm";
 
 export const runtime = "nodejs";
 
 const PLATFORM_DEFAULT: Metadata = {
   title: "Sign in — TechFlow",
-  icons: { icon: "/favicon.ico" },
+  icons: { icon: NEUTRAL_TAB_ICON },
 };
 
 type SearchParams = Promise<{ [key: string]: string | string[] | undefined }>;
@@ -38,7 +39,7 @@ export async function generateMetadata({
   if (!branding) return PLATFORM_DEFAULT;
   return {
     title: `Sign in — ${branding.name}`,
-    icons: { icon: branding.faviconUrl ?? "/favicon.ico" },
+    icons: { icon: businessTabIcon(branding) },
   };
 }
 

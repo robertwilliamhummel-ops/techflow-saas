@@ -3,12 +3,13 @@ import { headers } from "next/headers";
 import { PortalAuthGuard } from "@/lib/auth/AuthGuard";
 import { PortalShell } from "./PortalShell";
 import { getTenantBranding } from "@/lib/tenant/getTenantBranding";
+import { businessTabIcon, NEUTRAL_TAB_ICON } from "@/lib/tenant/tabIcon";
 
 export const runtime = "nodejs";
 
 const PLATFORM_DEFAULT: Metadata = {
   title: "TechFlow",
-  icons: { icon: "/favicon.ico" },
+  icons: { icon: NEUTRAL_TAB_ICON },
 };
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -24,7 +25,7 @@ export async function generateMetadata(): Promise<Metadata> {
 
   return {
     title: branding.name,
-    icons: { icon: branding.faviconUrl ?? "/favicon.ico" },
+    icons: { icon: businessTabIcon(branding) },
     openGraph: {
       title: `Invoice from ${branding.name}`,
       images: branding.logoUrl ? [branding.logoUrl] : [],

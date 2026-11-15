@@ -4,6 +4,7 @@ import { headers } from "next/headers";
 
 import { isDocId } from "@/lib/portal/portalDocument";
 import { getTenantBranding } from "@/lib/tenant/getTenantBranding";
+import { businessTabIcon } from "@/lib/tenant/tabIcon";
 
 /**
  * Tab title and favicon for a portal invoice or quote page (S-08): the business
@@ -26,7 +27,7 @@ export async function portalDocumentMetadata(
 
   return {
     title: branding.name,
-    icons: { icon: branding.faviconUrl ?? "/favicon.ico" },
+    icons: { icon: businessTabIcon(branding) },
     openGraph: {
       title: `${kind} from ${branding.name}`,
       images: branding.logoUrl ? [branding.logoUrl] : [],

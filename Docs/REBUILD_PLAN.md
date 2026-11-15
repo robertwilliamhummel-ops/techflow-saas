@@ -1550,6 +1550,7 @@ Notes:
 - **Admin SDK is required** because Firestore rules block unauthenticated reads of `meta`. Same pattern as the branded login page (already documented below).
 - **The pay page is Node runtime**, not Edge. Admin SDK requires Node. Explicitly set `export const runtime = 'nodejs';` in the layout to prevent Vercel auto-optimizing it to Edge and breaking.
 - **Favicon URL is served from Firebase Storage** via `getDownloadURL()` (the token-bearing public URL, per the logo convention). No Storage rules lookup needed; it's publicly fetchable by the browser on the tab.
+- **As built (G-03): no TechFlow fallback.** There is no `app/favicon.ico`, which Next.js would add to every page. A business without a favicon gets its initial on its brand colour, and a page that doesn't know the business gets a neutral document icon (`src/lib/tenant/tabIcon.ts`), as does the root layout. Only TechFlow's own pages (sign-in, sign-up, the dashboard, accepting an invitation) carry TechFlow's favicon, title template and, on the sign-in pages, its logo (`src/lib/platformMetadata.ts`, assets in `public/brand/`), and not on a business's custom domain.
 
 ### Public pay page (`/pay/[token]`) — content specification
 
