@@ -316,19 +316,21 @@ export function computeInvoiceTotals(
   lineItems: LineItemInput[],
   tax: { rate: number; name: string },
 ): InvoiceTotals {
-  let subtotal = 0;
-  let taxableSubtotal = 0;
+  // Whole cents throughout, so sums are exact too.
+  let subtotalCents = 0;
+  let taxableCents = 0;
   for (const li of lineItems) {
-    const amount = roundCents(li.quantity * li.rate);
-    subtotal += amount;
-    if (li.taxable) taxableSubtotal += amount;
+    const cents = lineCents(li.quantity, li.rate);
+    subtotalCents += cents;
+    if (li.taxable) taxableCents += cents;
   }
-  subtotal = roundCents(subtotal);
-  taxableSubtotal = roundCents(taxableSubtotal);
+  const subtotal = subtotalCents / 100;
+  const taxableSubtotal = taxableCents / 100;
 
   const rate = Number.isFinite(tax.rate) && tax.rate > 0 ? tax.rate : 0;
-  const taxAmount =
-    rate > 0 && taxableSubtotal > 0 ? roundCents(taxableSubtotal * rate) : 0;
+  const taxCents =
+    rate > 0 && taxableCents > 0 ? roundedProduct(taxableCents, rate, 0) : 0;
+  const taxAmount = taxCents / 100;
   const taxes: TaxLine[] =
     taxAmount > 0
       ? [
@@ -347,19 +349,64 @@ export function computeInvoiceTotals(
     taxRate: taxAmount > 0 ? rate : 0,
     taxAmount,
     taxes,
-    total: roundCents(subtotal + taxAmount),
+    total: (subtotalCents + taxCents) / 100,
   };
 }
 
 export function computeLineItems(inputs: LineItemInput[]): LineItem[] {
   return inputs.map((li) => ({
     ...li,
-    amount: roundCents(li.quantity * li.rate),
+    amount: lineCents(li.quantity, li.rate) / 100,
   }));
 }
 
-function roundCents(n: number): number {
-  return Math.round(n * 100) / 100;
+// Money math in exact decimals (audit 2026-11-13). Binary floating point keeps
+// some exact half-cents just below .5 (0.25 h x $64.10 = $16.025 is stored as
+// 16.02499...), so Math.round(n * 100) rounded them down. Each number is taken
+// as the decimal it reads as (its shortest round-trip string: what was typed),
+// the two are multiplied exactly as integers, and the product is rounded half
+// away from zero. A product that was already exact in cents is unchanged.
+// The invoice form's copy, src/lib/invoices/draftTotals.ts, is pinned to this
+// one by src/lib/__tests__/invoiceFormMirrors.test.ts.
+
+interface ExactDecimal {
+  units: bigint; // value = units / 10^scale
+  scale: number;
+}
+
+const TEN = BigInt(10);
+
+function exactDecimal(n: number): ExactDecimal {
+  const [mantissa, exponent] = String(n).toLowerCase().split("e");
+  const [whole, fraction = ""] = mantissa.split(".");
+  let units = BigInt(whole + fraction);
+  let scale = fraction.length - Number(exponent ?? 0);
+  if (scale < 0) {
+    units *= TEN ** BigInt(-scale);
+    scale = 0;
+  }
+  return { units, scale };
+}
+
+/** a x b x 10^decimals, rounded half away from zero to an integer. */
+function roundedProduct(a: number, b: number, decimals: number): number {
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return NaN;
+  const x = exactDecimal(a);
+  const y = exactDecimal(b);
+  const units = x.units * y.units;
+  const scale = x.scale + y.scale - decimals;
+  if (scale <= 0) return Number(units * TEN ** BigInt(-scale));
+  const divisor = TEN ** BigInt(scale);
+  const quotient = units / divisor; // truncates toward zero
+  const remainder = units % divisor;
+  const twice = (remainder < BigInt(0) ? -remainder : remainder) * BigInt(2);
+  const away = twice >= divisor ? (units < BigInt(0) ? BigInt(-1) : BigInt(1)) : BigInt(0);
+  return Number(quotient + away);
+}
+
+/** quantity x rate in whole cents. */
+function lineCents(quantity: number, rate: number): number {
+  return roundedProduct(quantity, rate, 2);
 }
 
 // ---------------------------------------------------------------------------

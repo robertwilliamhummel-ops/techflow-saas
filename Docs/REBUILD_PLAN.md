@@ -62,7 +62,7 @@
 | Platform admin | Custom claim `platformAdmin: true` + `platformAdmins/{uid}`, granted by `functions/src/scripts/setPlatformAdmin.ts` (older text says `role: platform_admin`). No rule lets any client write entitlements; plans and feature overrides are edited in the Firebase Console. |
 | User doc | `users/{uid}` — `{ uid, email, displayName, defaultTenantId, createdAt }` (older text says `primaryTenantId`) |
 | Writes | Every tenant collection is `allow write: if false`; all mutations go through callables |
-| Money | Dollars rounded to cents server-side; Stripe amounts in cents (`paidAmountCents`, `surchargeAmountCents`) |
+| Money | Dollars rounded to cents server-side; Stripe amounts in cents (`paidAmountCents`, `surchargeAmountCents`). Line amounts and tax are computed in exact decimals (each number as the decimal it reads as) and rounded half up to whole cents, then summed in cents, in `computeInvoiceTotals` and the form's copy `src/lib/invoices/draftTotals.ts`, pinned by `invoiceFormMirrors.test.ts` (audit 2026-11-13: `Math.round(n * 100)` rounded exact half-cents that floating point stores below .5 down, e.g. 0.25 h × $64.10 saved $16.02, 5% of $0.70 saved $0.03) |
 | Payment method | `manual` \| `etransfer` \| `cash` \| `card` (the Stripe webhook writes `card`) |
 | Custom-domain stage | `unverified` \| `dns_pending` \| `ssl_pending` \| `verified` \| `error` |
 | Stripe webhooks | `/api/webhooks/stripe/platform` (platform scope, no handlers today) and `/api/webhooks/stripe/connect` (connected-account scope: payments, refunds, disputes, `account.updated`, `account.application.deauthorized`) |

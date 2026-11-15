@@ -3,7 +3,10 @@
 // inputs, so a change to one without the other fails here.
 
 import { describe, expect, it } from "vitest";
-import { computeInvoiceTotals as serverTotals } from "../../../functions/src/shared/invoice";
+import {
+  computeInvoiceTotals as serverTotals,
+  computeLineItems as serverLineItems,
+} from "../../../functions/src/shared/invoice";
 import { isIsoCalendarDate as serverIsDate } from "../../../functions/src/shared/dates";
 import { isValidEmail as serverIsEmail } from "../../../functions/src/shared/email";
 import { computeDraftTotals, draftLineAmount } from "@/lib/invoices/draftTotals";
@@ -42,6 +45,15 @@ describe("computeDraftTotals matches Cloud Functions", () => {
       tax: { rate: 0.05, name: "GST" },
     },
     {
+      label: "exact half-cents floating point stores below .5 (audit 2026-11-13)",
+      lines: [
+        { description: "Quarter hour", quantity: 0.25, rate: 64.1, taxable: true },
+        { description: "Clips", quantity: 1.5, rate: 0.69, taxable: true },
+        { description: "Small part", quantity: 1, rate: 0.7, taxable: true },
+      ],
+      tax: { rate: 0.05, name: "GST" },
+    },
+    {
       label: "no tax configured",
       lines: [{ description: "Consult", quantity: 1, rate: 200, taxable: true }],
       tax: { rate: 0, name: "" },
@@ -59,6 +71,29 @@ describe("computeDraftTotals matches Cloud Functions", () => {
 
   it("rounds each line to cents like the server", () => {
     expect(draftLineAmount({ quantity: 3, rate: 0.335 })).toBe(1.01);
+  });
+
+  it("rounds exact half-cents up: 0.25 h x $64.10 is $16.03, 1.5 x $0.69 is $1.04", () => {
+    expect(draftLineAmount({ quantity: 0.25, rate: 64.1 })).toBe(16.03);
+    expect(draftLineAmount({ quantity: 1.5, rate: 0.69 })).toBe(1.04);
+  });
+
+  it("agrees with the server, and with exact integer math, on every quarter hour at sampled rates", () => {
+    // Exact cents of (q4 / 4) x (rc / 100), rounded half up.
+    const exactCents = (q4: number, rc: number) => Math.floor((2 * q4 * rc + 4) / 8);
+    for (let rc = 1; rc <= 20000; rc += 7) {
+      for (let q4 = 1; q4 <= 16; q4++) {
+        const quantity = q4 / 4;
+        const rate = rc / 100;
+        const lines = [{ description: "x", quantity, rate, taxable: true }];
+        const amount = draftLineAmount({ quantity, rate });
+        expect(Math.round(amount * 100)).toBe(exactCents(q4, rc));
+        expect(amount).toBe(serverLineItems(lines)[0].amount);
+        expect(computeDraftTotals(lines, { rate: 0.13, name: "HST" })).toEqual(
+          serverTotals(lines, { rate: 0.13, name: "HST" }),
+        );
+      }
+    }
   });
 });
 
