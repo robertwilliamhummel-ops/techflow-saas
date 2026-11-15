@@ -6,9 +6,12 @@
 //                    the invoice's `customer.email` (case-insensitive), AND the
 //                    document is in a status customers may see (A-05, S-08).
 //
-// Anything else → 403, or 404 for the matching customer asking for a document
-// they may not see, answered as if it didn't exist. The proxy is the single
-// security boundary; Cloud Run trusts the proxy.
+// Anything else gets the same 404 a missing document gets, so a signed-in
+// stranger can't use the routes to learn which businesses or document numbers
+// exist (audit 2026-11-13). authorizePdfCaller runs before anything is read,
+// authorizePdfAccess right after the document is read and before anything else
+// about it (its feature flags, its shape) can show in the answer. The proxy is
+// the single security boundary; Cloud Run trusts the proxy.
 
 import { getAdminAuth } from "@/lib/firebase/admin";
 import type { DecodedIdToken } from "firebase-admin/auth";
@@ -27,6 +30,37 @@ export class PdfAuthError extends Error {
     this.name = "PdfAuthError";
     this.status = status;
   }
+}
+
+export const PDF_NOT_FOUND = "Document not found.";
+
+function notFound(): PdfAuthError {
+  return new PdfAuthError(404, PDF_NOT_FOUND);
+}
+
+// A single Firestore document id (functions' requireDocId), so a query param
+// can't address another path.
+const DOC_ID = /^[A-Za-z0-9_-]{1,128}$/;
+
+/**
+ * The checks that need no document: the ids are plain document ids, a business
+ * user asks only for its own tenant, and anyone else has a verified email.
+ */
+export function authorizePdfCaller(
+  decoded: DecodedIdToken,
+  ids: { tenantId: string; documentId: string },
+): PdfAuthMode {
+  if (!DOC_ID.test(ids.tenantId) || !DOC_ID.test(ids.documentId)) throw notFound();
+  const tokenTenantId = (decoded as DecodedIdToken & { tenantId?: unknown })
+    .tenantId;
+  if (typeof tokenTenantId === "string" && tokenTenantId.length > 0) {
+    if (tokenTenantId !== ids.tenantId) throw notFound();
+    return "tenant";
+  }
+  if (decoded.email_verified !== true || typeof decoded.email !== "string" || !decoded.email) {
+    throw notFound();
+  }
+  return "customer";
 }
 
 export function readBearerToken(req: Request): string {
@@ -65,12 +99,7 @@ export function authorizePdfAccess(
     .tenantId;
 
   if (typeof tokenTenantId === "string" && tokenTenantId.length > 0) {
-    if (tokenTenantId !== opts.tenantId) {
-      throw new PdfAuthError(
-        403,
-        "Tenant claim does not match invoice path.",
-      );
-    }
+    if (tokenTenantId !== opts.tenantId) throw notFound();
     return { uid: decoded.uid, mode: "tenant" };
   }
 
@@ -79,14 +108,9 @@ export function authorizePdfAccess(
   const customerMatches =
     tokenEmail.toLowerCase() === opts.customerEmail.toLowerCase();
 
-  if (!emailVerified || !tokenEmail || !customerMatches) {
-    throw new PdfAuthError(
-      403,
-      "Token does not authorize access to this document.",
-    );
-  }
-  if (!opts.customerMayView) {
-    throw new PdfAuthError(404, "Document not found.");
+  // S-08: a customer never gets a draft, answered as if it didn't exist.
+  if (!emailVerified || !tokenEmail || !customerMatches || !opts.customerMayView) {
+    throw notFound();
   }
   return { uid: decoded.uid, mode: "customer" };
 }

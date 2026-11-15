@@ -6,6 +6,7 @@
 
 import { getAdminDb } from "@/lib/firebase/admin";
 import { resolveFeature, type FeatureKey } from "@/lib/features";
+import { PDF_NOT_FOUND } from "@/lib/pdf/auth";
 import { cardPaymentsReady } from "@/lib/stripe/cardPaymentsReady";
 import { portalOriginFor } from "@/lib/tenant/portalOrigin";
 
@@ -29,6 +30,12 @@ export interface LoadedInvoice {
 }
 
 /**
+ * Checks the caller against the document as soon as it is read, before
+ * anything else about it shows in the answer; throws to refuse.
+ */
+export type AuthorizeLoadedDoc = (doc: { customerEmail: string; status: string }) => void;
+
+/**
  * `platformBaseUrl` is the shared portal host; a business's verified custom
  * domain replaces it in the PDF's pay link, as in its emails.
  */
@@ -36,19 +43,17 @@ export async function loadInvoiceForPdf(
   tenantId: string,
   invoiceId: string,
   platformBaseUrl: string,
+  authorize: AuthorizeLoadedDoc,
 ): Promise<LoadedInvoice> {
-  const overrides = await requireFeatureEnabled(tenantId, "invoices");
   const db = getAdminDb();
-  const [snap, metaSnap] = await Promise.all([
+  const [snap, metaSnap, overrides] = await Promise.all([
     db.doc(`tenants/${tenantId}/invoices/${invoiceId}`).get(),
     db.doc(`tenants/${tenantId}/meta/settings`).get(),
+    readFeatureOverrides(tenantId),
   ]);
-  if (!snap.exists) {
-    throw new PdfLoadError(404, "Invoice not found.");
-  }
-  const data = snap.data() as Record<string, unknown>;
-  const customer = (data.customer as { email?: unknown } | undefined) ?? {};
-  const customerEmail = typeof customer.email === "string" ? customer.email : "";
+  const data = readAuthorized(snap, authorize);
+  requireFeatureEnabled(overrides, "invoices");
+  const customerEmail = customerEmailOf(data);
   if (!customerEmail) {
     throw new PdfLoadError(409, "Invoice has no customer email.");
   }
@@ -133,17 +138,15 @@ export interface LoadedQuote {
 export async function loadQuoteForPdf(
   tenantId: string,
   quoteId: string,
+  authorize: AuthorizeLoadedDoc,
 ): Promise<LoadedQuote> {
-  await requireFeatureEnabled(tenantId, "quotes");
-  const snap = await getAdminDb()
-    .doc(`tenants/${tenantId}/quotes/${quoteId}`)
-    .get();
-  if (!snap.exists) {
-    throw new PdfLoadError(404, "Quote not found.");
-  }
-  const data = snap.data() as Record<string, unknown>;
-  const customer = (data.customer as { email?: unknown } | undefined) ?? {};
-  const customerEmail = typeof customer.email === "string" ? customer.email : "";
+  const [snap, overrides] = await Promise.all([
+    getAdminDb().doc(`tenants/${tenantId}/quotes/${quoteId}`).get(),
+    readFeatureOverrides(tenantId),
+  ]);
+  const data = readAuthorized(snap, authorize);
+  requireFeatureEnabled(overrides, "quotes");
+  const customerEmail = customerEmailOf(data);
   if (!customerEmail) {
     throw new PdfLoadError(409, "Quote has no customer email.");
   }
@@ -180,20 +183,43 @@ export async function loadQuoteForPdf(
   };
 }
 
-async function requireFeatureEnabled(
+// A missing document answers exactly like one the caller may not see.
+function readAuthorized(
+  snap: { exists: boolean; data(): unknown },
+  authorize: AuthorizeLoadedDoc,
+): Record<string, unknown> {
+  if (!snap.exists) throw new PdfLoadError(404, PDF_NOT_FOUND);
+  const data = snap.data() as Record<string, unknown>;
+  authorize({
+    customerEmail: customerEmailOf(data),
+    status: typeof data.status === "string" ? data.status : "",
+  });
+  return data;
+}
+
+function customerEmailOf(data: Record<string, unknown>): string {
+  const customer = (data.customer as { email?: unknown } | undefined) ?? {};
+  return typeof customer.email === "string" ? customer.email : "";
+}
+
+async function readFeatureOverrides(
   tenantId: string,
-  feature: FeatureKey,
 ): Promise<Record<string, boolean> | null> {
   const snap = await getAdminDb()
     .doc(`tenants/${tenantId}/entitlements/current`)
     .get();
-  const overrides = snap.exists
+  return snap.exists
     ? ((snap.data() as { features?: Record<string, boolean> }).features ?? null)
     : null;
+}
+
+function requireFeatureEnabled(
+  overrides: Record<string, boolean> | null,
+  feature: FeatureKey,
+): void {
   if (!resolveFeature(feature, overrides)) {
     throw new PdfLoadError(403, `Feature "${feature}" is not enabled for this tenant.`);
   }
-  return overrides;
 }
 
 function deriveStringOrNull(value: unknown): string | null {

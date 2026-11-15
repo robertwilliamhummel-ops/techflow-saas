@@ -8,6 +8,7 @@ import { NextResponse } from "next/server";
 import {
   PdfAuthError,
   authorizePdfAccess,
+  authorizePdfCaller,
   readBearerToken,
   verifyIdToken,
 } from "@/lib/pdf/auth";
@@ -34,16 +35,20 @@ export async function GET(req: Request): Promise<Response> {
     const token = readBearerToken(req);
     const decoded = await verifyIdToken(token);
 
+    // Nothing is read for a caller who couldn't see this tenant's invoices, and
+    // every refusal is the same 404 a missing invoice gets.
+    authorizePdfCaller(decoded, { tenantId, documentId: invoiceId });
+
     const platformBaseUrl =
       process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
-    const loaded = await loadInvoiceForPdf(tenantId, invoiceId, platformBaseUrl);
-
-    authorizePdfAccess(decoded, {
-      tenantId,
-      customerEmail: loaded.customerEmail,
-      // S-08: a customer never gets a draft (A-05).
-      customerMayView: isCustomerVisibleInvoiceStatus(loaded.status),
-    });
+    const loaded = await loadInvoiceForPdf(tenantId, invoiceId, platformBaseUrl, (doc) =>
+      authorizePdfAccess(decoded, {
+        tenantId,
+        customerEmail: doc.customerEmail,
+        // S-08: a customer never gets a draft (A-05).
+        customerMayView: isCustomerVisibleInvoiceStatus(doc.status),
+      }),
+    );
 
     return await proxyToPdfService({
       path: "/render/invoice",

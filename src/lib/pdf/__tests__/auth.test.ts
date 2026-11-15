@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   PdfAuthError,
   authorizePdfAccess,
+  authorizePdfCaller,
   readBearerToken,
   verifyIdToken,
 } from "../auth";
@@ -74,6 +75,33 @@ describe("verifyIdToken", () => {
   });
 });
 
+const NOT_FOUND = expect.objectContaining({ status: 404, message: "Document not found." });
+
+describe("authorizePdfCaller (before anything is read)", () => {
+  const ids = { tenantId: "acme", documentId: "INV-0001" };
+
+  it("lets a business ask for its own documents", () => {
+    expect(authorizePdfCaller(decodedFor({ tenantId: "acme" }), ids)).toBe("tenant");
+  });
+
+  it("lets a verified email ask; the document decides", () => {
+    expect(
+      authorizePdfCaller(decodedFor({ email: "jane@example.com", email_verified: true }), ids),
+    ).toBe("customer");
+  });
+
+  it.each([
+    ["another business", decodedFor({ tenantId: "other" }), ids],
+    ["an unverified email", decodedFor({ email: "jane@example.com", email_verified: false }), ids],
+    ["no email and no tenant", decodedFor({}), ids],
+    ["a path in the document id", decodedFor({ tenantId: "acme" }), { ...ids, documentId: "INV-0001/x/y" }],
+    ["a path in the tenant id", decodedFor({ email: "j@x.test", email_verified: true }), { ...ids, tenantId: "acme/x" }],
+    ["a reserved-looking empty id", decodedFor({ tenantId: "acme" }), { ...ids, documentId: "" }],
+  ])("answers not found for %s", (_label, decoded, request) => {
+    expect(() => authorizePdfCaller(decoded, request)).toThrow(NOT_FOUND);
+  });
+});
+
 describe("authorizePdfAccess (tenant mode)", () => {
   it("accepts when token tenantId matches invoice tenantId", () => {
     const result = authorizePdfAccess(
@@ -91,13 +119,13 @@ describe("authorizePdfAccess (tenant mode)", () => {
     expect(result).toEqual({ uid: "u1", mode: "tenant" });
   });
 
-  it("rejects when token tenantId mismatches invoice tenantId", () => {
+  it("answers not found when token tenantId mismatches invoice tenantId", () => {
     expect(() =>
       authorizePdfAccess(
         decodedFor({ tenantId: "other" }),
         { ...VISIBLE, customerEmail: "x@y.com" },
       ),
-    ).toThrow(/Tenant claim does not match/);
+    ).toThrow(NOT_FOUND);
   });
 });
 
@@ -116,17 +144,17 @@ describe("authorizePdfAccess (customer mode)", () => {
         decodedFor({ email: "jane@example.com", email_verified: true }),
         { ...VISIBLE, customerMayView: false },
       ),
-    ).toThrow(expect.objectContaining({ status: 404 }));
+    ).toThrow(NOT_FOUND);
   });
 
-  it("S-08: a stranger gets the same 403 whatever the document's status", () => {
+  it("S-08: a stranger gets the same not found whatever the document's status", () => {
     for (const customerMayView of [true, false]) {
       expect(() =>
         authorizePdfAccess(
           decodedFor({ email: "someone-else@example.com", email_verified: true }),
           { ...VISIBLE, customerMayView },
         ),
-      ).toThrow(expect.objectContaining({ status: 403 }));
+      ).toThrow(NOT_FOUND);
     }
   });
 

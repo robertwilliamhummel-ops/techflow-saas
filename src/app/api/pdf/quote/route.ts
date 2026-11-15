@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import {
   PdfAuthError,
   authorizePdfAccess,
+  authorizePdfCaller,
   readBearerToken,
   verifyIdToken,
 } from "@/lib/pdf/auth";
@@ -31,14 +32,18 @@ export async function GET(req: Request): Promise<Response> {
     const token = readBearerToken(req);
     const decoded = await verifyIdToken(token);
 
-    const loaded = await loadQuoteForPdf(tenantId, quoteId);
+    // Nothing is read for a caller who couldn't see this tenant's quotes, and
+    // every refusal is the same 404 a missing quote gets.
+    authorizePdfCaller(decoded, { tenantId, documentId: quoteId });
 
-    authorizePdfAccess(decoded, {
-      tenantId,
-      customerEmail: loaded.customerEmail,
-      // S-08: a customer never gets a draft (A-05).
-      customerMayView: isCustomerVisibleQuoteStatus(loaded.status),
-    });
+    const loaded = await loadQuoteForPdf(tenantId, quoteId, (doc) =>
+      authorizePdfAccess(decoded, {
+        tenantId,
+        customerEmail: doc.customerEmail,
+        // S-08: a customer never gets a draft (A-05).
+        customerMayView: isCustomerVisibleQuoteStatus(doc.status),
+      }),
+    );
 
     return await proxyToPdfService({
       path: "/render/quote",

@@ -196,7 +196,7 @@ describe("GET /api/pdf/invoice", () => {
     expect(res.status).toBe(404);
   });
 
-  it("403 when tenant token does not match invoice tenantId", async () => {
+  it("404 when tenant token does not match invoice tenantId", async () => {
     seedTenantEntitlements("acme");
     seedInvoice("acme", "INV-1");
     verifyIdToken.mockResolvedValueOnce({ uid: "u1", tenantId: "other" });
@@ -205,10 +205,10 @@ describe("GET /api/pdf/invoice", () => {
         authorization: "Bearer good",
       }),
     );
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(404);
   });
 
-  it("403 when customer email mismatches invoice email", async () => {
+  it("404 when customer email mismatches invoice email", async () => {
     seedTenantEntitlements("acme");
     seedInvoice("acme", "INV-1");
     verifyIdToken.mockResolvedValueOnce({
@@ -221,7 +221,7 @@ describe("GET /api/pdf/invoice", () => {
         authorization: "Bearer good",
       }),
     );
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(404);
   });
 
   it("200 + streams PDF for tenant token", async () => {
@@ -288,7 +288,7 @@ describe("GET /api/pdf/invoice", () => {
       }),
     );
 
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(404);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -554,6 +554,86 @@ describe("F-08: the PDF offers a card only when the business can take one", () =
 
     expect((await requestPdf()).status).toBe(200);
     expect(postedBody(0).data.payUrl).toBe("https://app.example.test/pay/pay-tok-1");
+  });
+});
+
+describe("a signed-in stranger can't learn what exists (audit 2026-11-13)", () => {
+  async function answer(
+    kind: "invoice" | "quote",
+    query: string,
+    caller: Record<string, unknown>,
+  ): Promise<{ status: number; body: unknown }> {
+    verifyIdToken.mockResolvedValueOnce(caller);
+    const get = kind === "invoice" ? invoiceGET : quoteGET;
+    const res = await get(
+      makeRequest(`https://app.example.test/api/pdf/${kind}?${query}`, {
+        authorization: "Bearer good",
+      }),
+    );
+    return { status: res.status, body: await res.json() };
+  }
+
+  const NOT_FOUND = { status: 404, body: { error: "Document not found." } };
+  const stranger = { uid: "s1", email: "stranger@example.com", email_verified: true };
+  const otherBusiness = { uid: "o1", tenantId: "other" };
+
+  beforeEach(() => {
+    seedTenantEntitlements("acme");
+    seedInvoice("acme", "INV-0001");
+    seedInvoice("acme", "INV-0002", { status: "draft" });
+    seedQuote("acme", "QT-0001");
+    // A business with invoices switched off must not answer differently.
+    seedTenantEntitlements("closed", { invoices: false, quotes: false });
+    seedInvoice("closed", "INV-0001");
+  });
+
+  it.each([
+    ["a missing invoice", "tenantId=acme&invoiceId=INV-0099"],
+    ["a missing business", "tenantId=nobody&invoiceId=INV-0001"],
+    ["someone else's invoice", "tenantId=acme&invoiceId=INV-0001"],
+    ["someone else's draft", "tenantId=acme&invoiceId=INV-0002"],
+    ["an invoice at a business with invoices off", "tenantId=closed&invoiceId=INV-0001"],
+    ["an id that isn't a document id", "tenantId=acme&invoiceId=INV-0001%2Fx%2Fy"],
+  ])("a customer gets the same 404 for %s", async (_label, query) => {
+    expect(await answer("invoice", query, stranger)).toEqual(NOT_FOUND);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a missing invoice", "tenantId=acme&invoiceId=INV-0099"],
+    ["another business's invoice", "tenantId=acme&invoiceId=INV-0001"],
+    ["a business with invoices off", "tenantId=closed&invoiceId=INV-0001"],
+  ])("another business gets the same 404 for %s, without a read", async (_label, query) => {
+    fakeDb.doc.mockClear();
+    expect(await answer("invoice", query, otherBusiness)).toEqual(NOT_FOUND);
+    expect(fakeDb.doc).not.toHaveBeenCalled();
+  });
+
+  it("an unverified account gets the same 404, without a read", async () => {
+    fakeDb.doc.mockClear();
+    expect(
+      await answer("invoice", "tenantId=acme&invoiceId=INV-0001", {
+        uid: "u9",
+        email: "jane@example.com",
+        email_verified: false,
+      }),
+    ).toEqual(NOT_FOUND);
+    expect(fakeDb.doc).not.toHaveBeenCalled();
+  });
+
+  it("quotes answer the same way", async () => {
+    expect(await answer("quote", "tenantId=acme&quoteId=QT-0099", stranger)).toEqual(NOT_FOUND);
+    expect(await answer("quote", "tenantId=acme&quoteId=QT-0001", stranger)).toEqual(NOT_FOUND);
+    expect(await answer("quote", "tenantId=acme&quoteId=QT-0001", otherBusiness)).toEqual(NOT_FOUND);
+    expect(await answer("quote", "tenantId=closed&quoteId=QT-0001", stranger)).toEqual(NOT_FOUND);
+  });
+
+  it("the business itself still learns its invoices are switched off", async () => {
+    const res = await answer("invoice", "tenantId=closed&invoiceId=INV-0001", {
+      uid: "c1",
+      tenantId: "closed",
+    });
+    expect(res.status).toBe(403);
   });
 });
 

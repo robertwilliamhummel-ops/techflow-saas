@@ -2043,8 +2043,8 @@ Streamed back through Next.js to the caller
 - **Dual auth pattern (two branches):**
   - **Tenant user path:** Token has `tenantId` claim → verify `tenantId` matches the invoice's parent tenant path. Contractor previewing/downloading their own invoice.
   - **Customer path:** Token has NO `tenantId` claim but has `email_verified: true` → verify token email matches the invoice's `customer.email`. End-customer downloading from the portal.
-  - If neither branch matches → 403.
-- Checks `invoices` feature is enabled for the invoice's tenant (read from `entitlements`)
+  - If neither branch matches → 404 `Document not found.`, the same answer as a missing document, a customer asking for a draft (S-08), or an id that isn't a single document id, so a signed-in stranger can't learn which businesses or invoice numbers exist (audit 2026-11-13). The tenant-claim and verified-email checks run before anything is read; the email match runs as soon as the document is read, before anything else about it can show.
+- Checks `invoices` feature is enabled for the invoice's tenant (read from `entitlements`), after the caller is authorized
 - Loads the invoice doc, extracts `tenantSnapshot`
 - POSTs `{ snapshot, data }` to `${PDF_SERVICE_URL}/render/invoice` with `X-Api-Key: ${PDF_SERVICE_API_KEY}`
 - Streams the PDF response back to the caller
