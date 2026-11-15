@@ -1,6 +1,6 @@
 # TechFlow SaaS — Rebuild Plan
 
-**Status:** Backend largely built, product screens not built, nothing deployed — see "Build Status, Decisions & Conventions" (audit 2026-09-13)
+**Status:** Built. Staging live at `staging.techflowsolutions.ca` since 2026-11-13; production project `techflow-saas-prod` created 2026-11-14, not yet deployed — see "Build Status, Decisions & Conventions" (audit 2026-09-13, staging 2026-11-13)
 **Plan date:** 2026-04-11 · **Last reconciled with code:** 2026-09-13 (decisions D1–D5)
 **Owner:** Reggie (solo dev)
 **Scope:** Full rebuild of the TechFlow Solutions invoicing SaaS ("InvoicePro") into a multi-tenant Next.js + Tailwind app on a new repo, one pass, pre-launch.
@@ -77,10 +77,10 @@
 | 1.5 Design system | Done | — |
 | 2 Cloud Functions | Done — 405 callable, 69 email, 175 shared tests; PaymentReceipt and MagicLinkSignIn emails (E-01); App Check switch and per-user rate limits (R-04); Sentry reporting on every function (O-01) | — |
 | 3 Frontend architecture | Contexts, guards, auth recovery done; dashboard navigation and home (S-01); invoices list (S-02); new invoice (S-03); invoice detail (S-04); customers (S-05); quotes list, new quote, and quote detail (S-06); portal home (S-07); portal invoice and quote pages (S-08); public pay page with its success and cancelled pages (S-09); portal sign-in by email link (S-10) | No placeholder pages left |
-| 4 Stripe Connect | Backend done (D1 applied); webhook money bugs A-02, A-03, A-08 fixed | Public pay page UI |
-| 5 Onboarding & domains | Signup, login, settings, team, domain, billing UI done; host-routing proxy loads | Customer magic-link sign-in (portal login is password-only today) |
-| 6 PDF | Code done — 229 tests; Node 24 image (D6); `puppeteer-core` 25 with Chrome for Testing pinned to it (U-02) | Deploy — build the image and render a real PDF on staging (no Docker locally) |
-| 7 Testing & first onboarding | Bundles A–E done | Test matrix, staging project, backup restore drill, first onboarding |
+| 4 Stripe Connect | Backend done (D1 applied); webhook money bugs A-02, A-03, A-08 fixed; public pay page built (S-09) | Platform profile (Y-02), then a test-card payment end to end on staging |
+| 5 Onboarding & domains | Signup, login, settings, team, domain, billing UI done; host-routing proxy loads | Customer email-link sign-in built (S-10); a custom domain end to end on staging |
+| 6 PDF | Code done — 229 tests; Node 24 image (D6); `puppeteer-core` 25 with Chrome for Testing pinned to it (U-02) | Deployed to staging 2026-11-13 and rendering real PDFs (after dropping the single-process Chrome flags); each business's font embedded (G-04) |
+| 7 Testing & first onboarding | Bundles A–E done | Test matrix on staging (project live 2026-11-13), backup restore drill, first onboarding |
 | Deploy | Nothing deployed | "Environment Strategy & Deploy Runbook" |
 
 ### Confirmed open bugs (fix before the first tenant)
@@ -136,15 +136,15 @@ Fixed: S-10, part 1 (2026-09-15) — the plan says the invoice email links to `/
 - **Next.js:** on 16.4.2 with React 19.3.1 (2026-10-22: 16.3.5 had 11 advisories, 3 of them critical remote code execution, all fixed by 16.4.1; Next 15's 2026-10-21 end of life no longer applies). `@sentry/nextjs` 10.76.2 (critical tunnel-route advisory fixed in 10.75.2). Next 16 removed `next lint` — run `npm run lint`; `next build` no longer lints.
 - **Node.js:** 24 everywhere (D6). Cloud Functions deprecates Node 24 on 2028-04-30; Vercel deprecates Node 20 on 2026-10-01, which the `engines.node: 24.x` pin avoids.
 - **Stripe:** SDK 22.6.2 in both the app and functions, pinning API version `2026-08-26.dahlia` (U-01, 2026-09-14; was 18.5). Stripe's Clover and Dahlia changelogs list no breaking change to the calls we make (Checkout Session create without `ui_mode`, refunds with idempotency keys, charge retrieval, v1 accounts with controller properties, account links, and the webhook events we handle). v22 made `Stripe` a real class — every call site already uses `new Stripe(key)`. Webhook endpoints must be created on the same API version (Deploy Runbook, Stripe).
-- **Puppeteer:** `puppeteer-core` 25.10.0 in `pdf-service`, rendering with Chrome for Testing 152.0.7977.75 — the build that release is tested against, installed at that exact version by the Dockerfile (U-02, 2026-09-14; was 23.10 with an unpinned `google-chrome-stable`). v25 is ESM-only and needs Node ≥ 22.12; the service stays CommonJS and loads it through Node 24's `require(esm)`. `page.setContent` now waits for `load` — Puppeteer removed the networkidle options there because they never worked reliably, and the templates fetch nothing over the network. Not yet verified: building the image and rendering a real PDF on staging (no Docker locally).
+- **Puppeteer:** `puppeteer-core` 25.10.0 in `pdf-service`, rendering with Chrome for Testing 152.0.7977.75 — the build that release is tested against, installed at that exact version by the Dockerfile (U-02, 2026-09-14; was 23.10 with an unpinned `google-chrome-stable`). v25 is ESM-only and needs Node ≥ 22.12; the service stays CommonJS and loads it through Node 24's `require(esm)`. `page.setContent` now waits for `load` — Puppeteer removed the networkidle options there because they never worked reliably, and the templates fetch nothing over the network. Verified 2026-11-13: Cloud Build builds the image and staging renders real PDFs, once the `--single-process`/`--no-zygote` flags that crash Chrome 152 were removed.
 
 ### Path to launch (in order)
 
 1. ~~Next 15.5.25 and move the A-01 files into `src/`.~~ Done 2026-09-13.
 2. ~~Platform upgrade: Node 22, firebase-functions 7, firebase-admin 14, firebase-tools 15, Next 16.~~ Done 2026-09-13 — Node 24 (D6), firebase-functions 7.3, firebase-admin 14.4, firebase-tools 15.30, Next 16.3, React 19.3.
-3. Backend fixes A-02 → A-12, each with a test that would have caught it.
-4. Product screens: Phase 3 placeholders, public pay page, portal magic-link sign-in.
-5. Stand up staging, then prod, per the Deploy Runbook.
+3. ~~Backend fixes A-02 → A-12, each with a test that would have caught it.~~ Done 2026-09-13.
+4. ~~Product screens: Phase 3 placeholders, public pay page, portal magic-link sign-in.~~ Done (S-01 → S-10).
+5. Stand up staging, then prod, per the Deploy Runbook. Staging live 2026-11-13; production project created 2026-11-14.
 6. Phase 7 test matrix, backup restore drill, first onboarding.
 
 ---
@@ -1675,7 +1675,7 @@ Incidents are written to `tenants/{t}/invoices/{i}/paymentIncidents/{kind}_{stri
 - Complete the Connect platform profile in the Stripe Dashboard, in both test and live mode.
 - Register both webhook endpoints per environment (Deploy Runbook).
 - Tell each contractor to leave **Settings → Business → Customer emails → Successful payments** off in their Stripe Dashboard. Direct charges use the connected account's customer email settings, so turning it on sends Stripe's receipt alongside the branded PaymentReceipt from `onInvoicePaid` (E-01).
-- `/billing` onboarding UI — built. Public pay page — not built.
+- `/billing` onboarding UI — built. Public pay page — built (S-09).
 
 ### Credit card surcharge — line-item application
 
