@@ -4,6 +4,12 @@
 // emails/send.ts with the invoice PDF attached (D14). Transitions status from
 // "draft" to "sent" if currently draft. Not deduplicated — pressing Send again
 // is a legitimate resend.
+//
+// The email's Pay button and the PDF's pay link carry the stored pay token,
+// which lives 60 days from creation. A token that is missing, expired, nearly
+// expired, or dies before the due date is re-issued first, the way
+// regenerateInvoicePayLink does (payLinkNeedsReissue in shared/payToken.ts), so
+// a resend of an overdue invoice never mails a dead link.
 
 import {
   onCall,
@@ -12,7 +18,8 @@ import {
 } from "firebase-functions/v2/https";
 import { createElement } from "react";
 import { render } from "@react-email/render";
-import { db, FieldValue } from "../shared/admin";
+import { defineSecret } from "firebase-functions/params";
+import { db, FieldValue, Timestamp } from "../shared/admin";
 import { readClaims, requireTenant } from "../shared/auth";
 import { requireDocId } from "../shared/docId";
 import { isPayableInvoiceStatus } from "../shared/invoiceStatus";
@@ -24,6 +31,12 @@ import {
   renderPdfOrThrow,
 } from "../shared/documentPdf";
 import { requireFeature } from "../shared/requireFeature";
+import {
+  PAY_LINK_TTL_MS,
+  payLinkNeedsReissue,
+  payTokenExpiryMs,
+  signPayToken,
+} from "../shared/payToken";
 import { RATE_LIMITS, enforceRateLimit } from "../shared/rateLimit";
 import { withSentryCallable } from "../shared/withSentry";
 import { sanitizeEmailField } from "../emails/sanitize";
@@ -33,32 +46,11 @@ import { emailLogoUrl } from "../shared/logo";
 import { InvoiceSent } from "../emails/templates/InvoiceSent";
 import type { TenantSnapshotForEmail } from "../emails/components/TenantEmailLayout";
 
-export async function sendInvoiceEmailHandler(
-  request: CallableRequest,
-): Promise<{ success: true }> {
-  const claims = readClaims(request);
-  const { uid, tenantId } = requireTenant(claims);
-  const features = await requireFeature(tenantId, "invoices");
-  await enforceRateLimit(uid, RATE_LIMITS.sendEmail);
+const PAY_TOKEN_SECRET = defineSecret("PAY_TOKEN_SECRET");
 
-  const data = request.data as Record<string, unknown> | undefined;
-  const invoiceId = requireDocId(data?.invoiceId, "invoiceId");
+type InvoiceData = FirebaseFirestore.DocumentData;
 
-  // Load invoice.
-  const invoiceRef = db.doc(`tenants/${tenantId}/invoices/${invoiceId}`);
-  const invoiceSnap = await invoiceRef.get();
-  if (!invoiceSnap.exists) {
-    throw new HttpsError("not-found", "Invoice not found.");
-  }
-  const invoice = invoiceSnap.data()!;
-
-  if (!invoice.customer?.email) {
-    throw new HttpsError(
-      "failed-precondition",
-      "Invoice has no customer email.",
-    );
-  }
-
+function assertSendable(invoice: InvoiceData): void {
   // A-12: a void invoice is cancelled; sending it would ask for payment.
   if (invoice.status === "void") {
     throw new HttpsError(
@@ -78,6 +70,72 @@ export async function sendInvoiceEmailHandler(
       `This invoice is ${status}, so there's nothing left to pay and it can't be sent.`,
     );
   }
+}
+
+// Re-issues the pay link in a transaction (version + 1, new token and expiry),
+// re-checking the invoice so two sends at once issue one link and a send that
+// races a void or payment doesn't issue one at all. Returns the invoice as the
+// email and PDF should see it.
+async function withSendablePayLink(
+  invoiceRef: FirebaseFirestore.DocumentReference,
+  tenantId: string,
+  invoiceId: string,
+): Promise<{ invoice: InvoiceData; payLinkRegenerated: boolean }> {
+  return await db.runTransaction(async (tx) => {
+    const snap = await tx.get(invoiceRef);
+    if (!snap.exists) {
+      throw new HttpsError("not-found", "Invoice not found.");
+    }
+    const invoice = snap.data()!;
+    assertSendable(invoice);
+    const now = Date.now();
+    if (!payLinkNeedsReissue(invoice.payToken, invoice.dueDate, now)) {
+      return { invoice, payLinkRegenerated: false };
+    }
+
+    const payTokenVersion = Number(invoice.payTokenVersion ?? 0) + 1;
+    const payToken = signPayToken(
+      { invoiceId, tenantId, v: payTokenVersion },
+      PAY_TOKEN_SECRET.value(),
+    );
+    const payTokenExpiresAt = Timestamp.fromMillis(
+      payTokenExpiryMs(payToken) ?? now + PAY_LINK_TTL_MS,
+    );
+    tx.update(invoiceRef, { payToken, payTokenVersion, payTokenExpiresAt });
+    return {
+      invoice: { ...invoice, payToken, payTokenVersion, payTokenExpiresAt },
+      payLinkRegenerated: true,
+    };
+  });
+}
+
+export async function sendInvoiceEmailHandler(
+  request: CallableRequest,
+): Promise<{ success: true; payLinkRegenerated: boolean }> {
+  const claims = readClaims(request);
+  const { uid, tenantId } = requireTenant(claims);
+  const features = await requireFeature(tenantId, "invoices");
+  await enforceRateLimit(uid, RATE_LIMITS.sendEmail);
+
+  const data = request.data as Record<string, unknown> | undefined;
+  const invoiceId = requireDocId(data?.invoiceId, "invoiceId");
+
+  // Load invoice.
+  const invoiceRef = db.doc(`tenants/${tenantId}/invoices/${invoiceId}`);
+  const invoiceSnap = await invoiceRef.get();
+  if (!invoiceSnap.exists) {
+    throw new HttpsError("not-found", "Invoice not found.");
+  }
+  let invoice = invoiceSnap.data()!;
+
+  if (!invoice.customer?.email) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Invoice has no customer email.",
+    );
+  }
+
+  assertSendable(invoice);
 
   // Phase 4 Bundle E — refuse to send if the customer would have no way to
   // pay. Card payments require stripeStatus.chargesEnabled === true; e-transfer
@@ -97,6 +155,16 @@ export async function sendInvoiceEmailHandler(
         "Add an e-transfer email or finish Stripe onboarding before sending invoices.",
       );
     }
+  }
+
+  // A fresh-enough link is reused, so links in earlier emails keep working.
+  let payLinkRegenerated = false;
+  if (payLinkNeedsReissue(invoice.payToken, invoice.dueDate, Date.now())) {
+    ({ invoice, payLinkRegenerated } = await withSendablePayLink(
+      invoiceRef,
+      tenantId,
+      invoiceId,
+    ));
   }
 
   // Build email props.
@@ -179,10 +247,10 @@ export async function sendInvoiceEmailHandler(
     });
   }
 
-  return { success: true };
+  return { success: true, payLinkRegenerated };
 }
 
 export const sendInvoiceEmail = onCall(
-  { secrets: [...EMAIL_SECRETS, PDF_SERVICE_API_KEY] },
+  { secrets: [...EMAIL_SECRETS, PDF_SERVICE_API_KEY, PAY_TOKEN_SECRET] },
   withSentryCallable("sendInvoiceEmail", sendInvoiceEmailHandler),
 );

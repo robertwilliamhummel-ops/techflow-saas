@@ -237,8 +237,19 @@ function InvoiceDetailBody({
   }
 
   async function send() {
-    const result = await run("send", "sendInvoiceEmail", { invoiceId }, "Couldn't send the invoice. Try again.");
-    if (result) toast.success(`Invoice ${invoiceId} sent to ${invoice!.customer.email}.`);
+    const result = await run<{ success: true; payLinkRegenerated?: boolean }>(
+      "send",
+      "sendInvoiceEmail",
+      { invoiceId },
+      "Couldn't send the invoice. Try again.",
+    );
+    if (!result) return;
+    // A link that had expired or was about to is re-issued before sending.
+    toast.success(
+      result.payLinkRegenerated
+        ? `Invoice ${invoiceId} sent to ${invoice!.customer.email} with a new pay link. Earlier links no longer work.`
+        : `Invoice ${invoiceId} sent to ${invoice!.customer.email}.`,
+    );
   }
 
   async function previewPdf() {

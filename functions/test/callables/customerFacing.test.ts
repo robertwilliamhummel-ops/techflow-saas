@@ -86,6 +86,7 @@ import { regenerateInvoicePayLinkHandler } from "../../src/invoices/regenerateIn
 import { sendInvoiceEmailHandler } from "../../src/invoices/sendInvoiceEmail";
 import { sendQuoteEmailHandler } from "../../src/quotes/sendQuoteEmail";
 import { FieldValue } from "firebase-admin/firestore";
+import { render as mockRender } from "@react-email/render";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1126,6 +1127,130 @@ describe("sendInvoiceEmail — SES request shape (D5)", () => {
       fakeRequest({ invoiceId: "INV-0001" }, ownerAuth),
     );
     expect(mockSesSend).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// sendInvoiceEmail — the pay link it mails still works (audit 2026-11-13)
+// ---------------------------------------------------------------------------
+
+describe("sendInvoiceEmail — a stale pay link is re-issued before sending", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const invoiceRef = () => testDb.doc(`tenants/${TENANT}/invoices/INV-0001`);
+
+  function tokenExpiringIn(days: number, version = 1): string {
+    return sign(
+      {
+        invoiceId: "INV-0001",
+        tenantId: TENANT,
+        v: version,
+        exp: Math.floor((Date.now() + days * DAY) / 1000),
+      },
+      TEST_SECRET,
+    );
+  }
+
+  // The Pay Invoice button's URL, from the props the template was rendered with.
+  function emailPayUrl(): string {
+    const calls = vi.mocked(mockRender).mock.calls;
+    return (calls[calls.length - 1][0] as { props: { payUrl: string } }).props.payUrl;
+  }
+
+  function pdfPayUrl(): string | null {
+    return mockRenderViaPdfService.mock.calls[0][0].body.data.payUrl;
+  }
+
+  beforeEach(async () => {
+    await clearFirestore();
+    await seedTenantAndInvoice();
+    // Card payments ready, so the attached PDF carries the pay link too.
+    await testDb.doc(`tenants/${TENANT}/meta/settings`).update({
+      stripeStatus: { chargesEnabled: true },
+    });
+    mockSesSend.mockClear();
+    mockSesSend.mockResolvedValue({ MessageId: "ses_msg_fresh" });
+    mockRenderViaPdfService.mockClear();
+    vi.mocked(mockRender).mockClear();
+  });
+
+  it("an overdue invoice's expired link: a new one in the email and the PDF", async () => {
+    const expired = tokenExpiringIn(-5);
+    await invoiceRef().update({ status: "overdue", payToken: expired });
+
+    const result = await sendInvoiceEmailHandler(
+      fakeRequest({ invoiceId: "INV-0001" }, ownerAuth),
+    );
+
+    expect(result).toEqual({ success: true, payLinkRegenerated: true });
+    const inv = (await invoiceRef().get()).data()!;
+    expect(inv.payTokenVersion).toBe(2);
+    expect(inv.payToken).not.toBe(expired);
+    expect(inv.payTokenExpiresAt.toMillis()).toBeGreaterThan(Date.now() + 59 * DAY);
+    expect(emailPayUrl().endsWith(`/pay/${inv.payToken}`)).toBe(true);
+    expect(pdfPayUrl()).toBe(emailPayUrl());
+    expect(mockSesSend).toHaveBeenCalledOnce();
+
+    const verified = await verifyInvoicePayTokenHandler(
+      fakeRequest({ token: inv.payToken }, null),
+    );
+    expect(verified.outcome).toBe("ok");
+  });
+
+  it("a draft first sent late, with 10 days left on its link, goes out with a new one", async () => {
+    const short = tokenExpiringIn(10);
+    await invoiceRef().update({ status: "draft", payToken: short });
+
+    const result = await sendInvoiceEmailHandler(
+      fakeRequest({ invoiceId: "INV-0001" }, ownerAuth),
+    );
+
+    expect(result.payLinkRegenerated).toBe(true);
+    const inv = (await invoiceRef().get()).data()!;
+    expect(inv.status).toBe("sent");
+    expect(inv.payTokenVersion).toBe(2);
+    expect(emailPayUrl().endsWith(`/pay/${inv.payToken}`)).toBe(true);
+  });
+
+  it("an invoice without a pay link gets one", async () => {
+    await invoiceRef().update({
+      payToken: FieldValue.delete(),
+      payTokenVersion: FieldValue.delete(),
+    });
+
+    await sendInvoiceEmailHandler(fakeRequest({ invoiceId: "INV-0001" }, ownerAuth));
+
+    const inv = (await invoiceRef().get()).data()!;
+    expect(inv.payTokenVersion).toBe(1);
+    expect(typeof inv.payToken).toBe("string");
+    expect(emailPayUrl().endsWith(`/pay/${inv.payToken}`)).toBe(true);
+  });
+
+  it("a fresh link is reused, so links in earlier emails keep working", async () => {
+    const before = (await invoiceRef().get()).data()!;
+
+    const result = await sendInvoiceEmailHandler(
+      fakeRequest({ invoiceId: "INV-0001" }, ownerAuth),
+    );
+
+    expect(result).toEqual({ success: true, payLinkRegenerated: false });
+    const inv = (await invoiceRef().get()).data()!;
+    expect(inv.payTokenVersion).toBe(1);
+    expect(inv.payToken).toBe(before.payToken);
+    expect(emailPayUrl().endsWith(`/pay/${before.payToken}`)).toBe(true);
+    expect(pdfPayUrl()).toBe(emailPayUrl());
+  });
+
+  it("issues no link for an invoice that can't be sent", async () => {
+    const expired = tokenExpiringIn(-5);
+    await invoiceRef().update({ status: "void", payToken: expired });
+
+    await expect(
+      sendInvoiceEmailHandler(fakeRequest({ invoiceId: "INV-0001" }, ownerAuth)),
+    ).rejects.toThrow(/void/);
+
+    const inv = (await invoiceRef().get()).data()!;
+    expect(inv.payToken).toBe(expired);
+    expect(inv.payTokenVersion).toBe(1);
   });
 });
 
