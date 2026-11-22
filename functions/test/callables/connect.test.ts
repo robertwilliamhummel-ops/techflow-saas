@@ -229,7 +229,10 @@ describe("startConnectOnboarding", () => {
     expect(meta.data()?.stripeAccountId).toBe("acct_fresh_111");
   });
 
-  it("selects US country when tenant currency is USD", async () => {
+  // D20: the account's country is where the business is established, never
+  // derived from the invoicing currency — a Canadian business billing in USD
+  // still needs a Canadian account (and can't change its country later).
+  it("creates a Canadian account even when the business invoices in USD", async () => {
     const tenantId = await seedOwner();
     await testDb.doc(`tenants/${tenantId}/meta/settings`).set(
       { currency: "USD" },
@@ -261,7 +264,7 @@ describe("startConnectOnboarding", () => {
       ),
     );
 
-    expect(create.mock.calls[0][0].country).toBe("US");
+    expect(create.mock.calls[0][0].country).toBe("CA");
   });
 
   it("rejects staff caller", async () => {

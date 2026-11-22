@@ -19,6 +19,11 @@
 // The stripeAccounts/{accountId} reverse lookup is written in the same batch
 // as meta.stripeAccountId, so Connect webhooks (account.updated) route even if
 // the tenant never returns through /billing/return.
+//
+// D20: every account is created with country "CA". TechFlow serves Canadian
+// businesses only, and an account's country is where the business is legally
+// established — it can't be changed after creation. The invoicing currency is
+// separate: a Canadian account can charge in USD.
 
 import { withSentryCallable } from "../shared/withSentry";
 import {
@@ -40,9 +45,7 @@ function defaultAppUrl(): string {
   return process.env.APP_URL || "https://portal.techflowsolutions.ca";
 }
 
-function countryForCurrency(currency: unknown): "CA" | "US" {
-  return currency === "USD" ? "US" : "CA";
-}
+const ACCOUNT_COUNTRY = "CA";
 
 export async function startConnectOnboardingHandler(
   request: CallableRequest,
@@ -82,7 +85,7 @@ export async function startConnectOnboardingHandler(
 
   if (!accountId) {
     const account = await stripe.accounts.create({
-      country: countryForCurrency(meta.currency),
+      country: ACCOUNT_COUNTRY,
       email: claims.email ?? undefined,
       controller: {
         losses: { payments: "stripe" },
