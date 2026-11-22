@@ -58,7 +58,17 @@ const OUTSIDE_REQUIRE_TENANT: Record<string, string> = {
   sendPortalSignInLink: "no sign-in; links go only to addresses with documents",
   verifyInvoicePayToken: "no sign-in; the signed pay token is the credential",
   createPayTokenCheckoutSession: "no sign-in; the signed pay token is the credential",
+  // D18 — the platform admin, for a business named in the input.
+  setupCustomDomain: "the platform admin, through requirePlatformAdmin",
+  removeCustomDomain: "the platform admin, through requirePlatformAdmin",
+  recheckCustomDomain: "the platform admin, through requirePlatformAdmin",
 };
+
+const PLATFORM_ADMIN_CALLABLES = [
+  "setupCustomDomain",
+  "removeCustomDomain",
+  "recheckCustomDomain",
+];
 
 const callables = Object.entries(deployedModule).flatMap(([name, value]) => {
   const endpoint = (value as { __endpoint?: { callableTrigger?: unknown } })
@@ -130,7 +140,7 @@ describe("every tenant callable refuses an unverified email (F-02)", () => {
         "sendInvoiceEmail",
         "createInvitation",
         "startConnectOnboarding",
-        "setupCustomDomain",
+        "deleteCustomer",
         "previewInvoicePDF",
       ]),
     );
@@ -239,6 +249,44 @@ describe("what runs before verification still works (F-02)", () => {
     const user = await testDb.doc(`users/${OWNER_UID}`).get();
     expect(user.data()?.displayName).toBe("Jane Owner");
   });
+});
+
+describe("platform-admin callables (D18)", () => {
+  it.each(PLATFORM_ADMIN_CALLABLES)(
+    "%s refuses a platform admin whose email isn't verified",
+    async (name) => {
+      for (const emailVerified of [false, undefined]) {
+        await expect(
+          callable(name).run(
+            fakeRequest(
+              { tenantId: "acme-plumbing", domain: "invoices.acme.test" },
+              {
+                uid: "u_platform",
+                claims: { email: "ops@techflow.test", platformAdmin: true, email_verified: emailVerified },
+              },
+            ),
+          ),
+        ).rejects.toMatchObject({
+          code: "failed-precondition",
+          message: VERIFY_EMAIL_MESSAGE,
+        });
+      }
+    },
+  );
+
+  it.each(PLATFORM_ADMIN_CALLABLES)(
+    "%s refuses a verified business owner",
+    async (name) => {
+      await expect(
+        callable(name).run(
+          fakeRequest(
+            { tenantId: "acme-plumbing", domain: "invoices.acme.test" },
+            owner("acme-plumbing", true),
+          ),
+        ),
+      ).rejects.toMatchObject({ code: "permission-denied" });
+    },
+  );
 });
 
 describe("signed-in callables outside requireTenant check the email themselves", () => {

@@ -5,7 +5,8 @@ import {
 } from "firebase-functions/v2/https";
 import * as logger from "firebase-functions/logger";
 import { db, FieldValue } from "../shared/admin";
-import { readClaims, requireRole, requireTenant } from "../shared/auth";
+import { readClaims, requirePlatformAdmin } from "../shared/auth";
+import { requireDocId } from "../shared/docId";
 import { requireFeature } from "../shared/requireFeature";
 import {
   edgeConfigDelete,
@@ -26,9 +27,18 @@ import {
 import { domainCacheKey } from "../shared/domainCacheKey";
 import { withSentryCallable } from "../shared/withSentry";
 
+// D18: custom domains are set up, removed and re-checked by the platform admin
+// only, for the business named by `tenantId`. Self-serve setup let any business
+// add a hostname it controls to the project-wide Firebase Auth authorized
+// domains and collect other businesses' customers' sign-in codes there.
 interface Input {
+  tenantId?: unknown;
   domain?: unknown;
 }
+
+// The platform's own zone. Vercel treats a subdomain of a domain the team owns
+// as verified at once, so no business may claim any host under it.
+const PLATFORM_ZONE = "techflowsolutions.ca";
 
 // Strict domain validation. We're going to write this string into a Firestore
 // document ID and a Vercel API call — sanitize aggressively. RFC 1035-ish:
@@ -48,10 +58,11 @@ function validateDomain(raw: unknown): string {
       "domain is not a valid hostname.",
     );
   }
-  // Block apex domains we already control + Vercel preview hosts.
+  // The platform zone (apex and every subdomain) and Vercel's own hosts.
   if (
-    d === "techflowsolutions.ca" ||
-    d === "portal.techflowsolutions.ca" ||
+    d === PLATFORM_ZONE ||
+    d.endsWith(`.${PLATFORM_ZONE}`) ||
+    d === "vercel.app" ||
     d.endsWith(".vercel.app")
   ) {
     throw new HttpsError(
@@ -62,42 +73,64 @@ function validateDomain(raw: unknown): string {
   return d;
 }
 
-export async function setupCustomDomainHandler(
-  request: CallableRequest<Input>,
-): Promise<{ ok: true; domain: string }> {
-  const claims = readClaims(request);
-  const { tenantId } = requireTenant(claims);
-  requireRole(claims, ["owner", "admin"]);
-  await requireFeature(tenantId, "customDomain");
-
-  const data = (request.data as Input | undefined) ?? {};
-  const domain = validateDomain(data.domain);
-
-  // Reject if the domain already maps to a different tenant. Use the
-  // top-level customDomains/{domain} doc as the uniqueness index.
-  const domainRef = db.doc(`customDomains/${domain}`);
-  const existing = await domainRef.get();
-  if (existing.exists) {
-    const owner = (existing.data() as { tenantId?: string } | undefined)
-      ?.tenantId;
-    if (owner && owner !== tenantId) {
-      throw new HttpsError(
-        "already-exists",
-        "This domain is already in use.",
-      );
-    }
-  }
-
-  // If this tenant already had a different custom domain, swap atomically:
-  // we'll detach the old one after the new one is in place.
+// The platform admin names the business; it must exist.
+async function targetTenant(data: Input): Promise<{
+  tenantId: string;
+  metaRef: FirebaseFirestore.DocumentReference;
+  meta: { customDomain?: string | null };
+}> {
+  const tenantId = requireDocId(data.tenantId, "tenantId");
   const metaRef = db.doc(`tenants/${tenantId}/meta/settings`);
   const metaSnap = await metaRef.get();
   if (!metaSnap.exists) {
-    throw new HttpsError("not-found", "Tenant settings not found.");
+    throw new HttpsError("not-found", "No business with that tenantId.");
   }
-  const previousDomain =
-    (metaSnap.data() as { customDomain?: string | null } | undefined)
-      ?.customDomain ?? null;
+  return {
+    tenantId,
+    metaRef,
+    meta: (metaSnap.data() ?? {}) as { customDomain?: string | null },
+  };
+}
+
+export async function setupCustomDomainHandler(
+  request: CallableRequest<Input>,
+): Promise<{ ok: true; domain: string }> {
+  requirePlatformAdmin(readClaims(request));
+  const data = (request.data as Input | undefined) ?? {};
+  const domain = validateDomain(data.domain);
+  const { tenantId, metaRef, meta } = await targetTenant(data);
+  await requireFeature(tenantId, "customDomain");
+
+  // If this tenant already had a different custom domain, we detach the old
+  // one after the new one is in place.
+  const previousDomain = meta.customDomain ?? null;
+
+  // Claim the hostname before provisioning anything. customDomains/{domain}
+  // is the uniqueness index: the transaction creates it only if nobody holds
+  // it, so two businesses racing for one hostname can't both win, and a
+  // business re-running setup for its own domain keeps its claim.
+  const domainRef = db.doc(`customDomains/${domain}`);
+  const claimedNow = await db.runTransaction(async (tx) => {
+    const existing = await tx.get(domainRef);
+    if (existing.exists) {
+      const owner = (existing.data() as { tenantId?: unknown } | undefined)
+        ?.tenantId;
+      if (owner !== tenantId) {
+        throw new HttpsError("already-exists", "This domain is already in use.");
+      }
+      return false;
+    }
+    tx.create(domainRef, {
+      tenantId,
+      createdAt: FieldValue.serverTimestamp(),
+    });
+    return true;
+  });
+  // A provisioning failure gives back a claim this call made, never one the
+  // business already held.
+  const releaseClaim = async (): Promise<void> => {
+    if (claimedNow) await domainRef.delete().catch(() => {});
+  };
 
   // Step 1: Vercel — add to project domains. If this fails we abort before
   // touching Firestore so there's nothing to clean up.
@@ -105,6 +138,7 @@ export async function setupCustomDomainHandler(
     await vercelAddDomain(domain);
   } catch (err) {
     logger.error("setupCustomDomain: vercel add failed", { domain, err });
+    await releaseClaim();
     throw new HttpsError(
       "internal",
       err instanceof Error ? err.message : "Vercel domain add failed.",
@@ -118,6 +152,7 @@ export async function setupCustomDomainHandler(
     logger.error("setupCustomDomain: auth domain add failed", { domain, err });
     // Roll back Vercel.
     await vercelRemoveDomain(domain).catch(() => {});
+    await releaseClaim();
     throw new HttpsError(
       "internal",
       err instanceof Error ? err.message : "Firebase Auth update failed.",
@@ -136,21 +171,16 @@ export async function setupCustomDomainHandler(
     });
     await vercelRemoveDomain(domain).catch(() => {});
     await removeAuthorizedDomain(domain).catch(() => {});
+    await releaseClaim();
     throw new HttpsError(
       "internal",
       err instanceof Error ? err.message : "reCAPTCHA key update failed.",
     );
   }
 
-  // Step 3: Firestore — domain index doc + meta update in one batch.
+  // Step 3: Firestore — point the business's meta at the claimed domain.
   try {
-    const batch = db.batch();
-    batch.set(domainRef, {
-      tenantId,
-      createdAt: FieldValue.serverTimestamp(),
-    });
-    batch.set(
-      metaRef,
+    await metaRef.set(
       {
         customDomain: domain,
         customDomainStatus: {
@@ -162,12 +192,12 @@ export async function setupCustomDomainHandler(
       },
       { merge: true },
     );
-    await batch.commit();
   } catch (err) {
     logger.error("setupCustomDomain: firestore write failed", { domain, err });
     await vercelRemoveDomain(domain).catch(() => {});
     await removeAuthorizedDomain(domain).catch(() => {});
     await removeRecaptchaAllowedDomain(domain).catch(() => {});
+    await releaseClaim();
     throw new HttpsError("internal", "Failed to record custom domain.");
   }
 
@@ -218,24 +248,18 @@ export const setupCustomDomain = onCall<Input>(
 );
 
 // ---------------------------------------------------------------------------
-// removeCustomDomain — owner/admin tears down their custom domain.
+// removeCustomDomain — the platform admin tears down a business's custom
+// domain (D18).
 // ---------------------------------------------------------------------------
 
 export async function removeCustomDomainHandler(
-  request: CallableRequest,
+  request: CallableRequest<Input>,
 ): Promise<{ ok: true }> {
-  const claims = readClaims(request);
-  const { tenantId } = requireTenant(claims);
-  requireRole(claims, ["owner", "admin"]);
-
-  const metaRef = db.doc(`tenants/${tenantId}/meta/settings`);
-  const metaSnap = await metaRef.get();
-  if (!metaSnap.exists) {
-    throw new HttpsError("not-found", "Tenant settings not found.");
-  }
-  const domain =
-    (metaSnap.data() as { customDomain?: string | null } | undefined)
-      ?.customDomain ?? null;
+  requirePlatformAdmin(readClaims(request));
+  const { metaRef, meta } = await targetTenant(
+    (request.data as Input | undefined) ?? {},
+  );
+  const domain = meta.customDomain ?? null;
   if (!domain) {
     return { ok: true };
   }
@@ -258,13 +282,13 @@ export async function removeCustomDomainHandler(
   return { ok: true };
 }
 
-export const removeCustomDomain = onCall(
+export const removeCustomDomain = onCall<Input>(
   { secrets: [...VERCEL_SECRETS] },
   withSentryCallable("removeCustomDomain", removeCustomDomainHandler),
 );
 
 // ---------------------------------------------------------------------------
-// recheckCustomDomain — owner/admin manual "check now" button. The
+// recheckCustomDomain — the platform admin's manual "check now" (D18). The
 // scheduled function runs the same logic on a 5-minute cron.
 // ---------------------------------------------------------------------------
 
@@ -320,16 +344,13 @@ export async function checkAndUpdateDomainStatus(
 }
 
 export async function recheckCustomDomainHandler(
-  request: CallableRequest,
+  request: CallableRequest<Input>,
 ): Promise<{ stage: string; message: string | null }> {
-  const claims = readClaims(request);
-  const { tenantId } = requireTenant(claims);
-  requireRole(claims, ["owner", "admin"]);
-
-  const metaSnap = await db.doc(`tenants/${tenantId}/meta/settings`).get();
-  const domain =
-    (metaSnap.data() as { customDomain?: string | null } | undefined)
-      ?.customDomain ?? null;
+  requirePlatformAdmin(readClaims(request));
+  const { tenantId, meta } = await targetTenant(
+    (request.data as Input | undefined) ?? {},
+  );
+  const domain = meta.customDomain ?? null;
   if (!domain) {
     throw new HttpsError(
       "failed-precondition",
@@ -339,7 +360,7 @@ export async function recheckCustomDomainHandler(
   return checkAndUpdateDomainStatus(tenantId, domain);
 }
 
-export const recheckCustomDomain = onCall(
+export const recheckCustomDomain = onCall<Input>(
   { secrets: [...VERCEL_SECRETS] },
   withSentryCallable("recheckCustomDomain", recheckCustomDomainHandler),
 );

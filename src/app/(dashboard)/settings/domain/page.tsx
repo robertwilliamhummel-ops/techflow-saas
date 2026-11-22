@@ -1,17 +1,12 @@
 "use client";
 
-import { useState } from "react";
-import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { z } from "zod";
-import { httpsCallable } from "firebase/functions";
-import { toast } from "sonner";
+// D18: custom domains are set up, changed and removed by TechFlow (the platform
+// admin) only, so this page is read-only for every business role. It shows the
+// domain, its status and, while DNS is pending, the record the business adds at
+// its DNS provider. The scheduled re-check moves the status on by itself.
 
-import { getClientFunctions } from "@/lib/firebase/client";
 import { useTenantContext } from "@/lib/tenant/TenantContext";
-import { useAuth } from "@/lib/auth/useAuth";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -20,16 +15,6 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import {
-  Form,
-  FormControl,
-  FormDescription,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from "@/components/ui/form";
-import { Input } from "@/components/ui/input";
-import {
   Table,
   TableBody,
   TableCell,
@@ -37,49 +22,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import type { CustomDomainStage } from "@/lib/schema/tenant";
-
-const DOMAIN_RE =
-  /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
-
-const schema = z.object({
-  domain: z
-    .string()
-    .trim()
-    .toLowerCase()
-    .refine(
-      (v) => DOMAIN_RE.test(v),
-      "Enter a valid hostname (e.g. invoices.smithplumbing.ca).",
-    ),
-});
-
-type FormValues = z.infer<typeof schema>;
 
 export default function SettingsDomainPage() {
   const { meta, hasFeature, loading } = useTenantContext();
-  const { claims } = useAuth();
-  const isOwnerOrAdmin = claims.role === "owner" || claims.role === "admin";
   const featureEnabled = hasFeature("customDomain");
-
-  const [submitError, setSubmitError] = useState<string | null>(null);
-  const [rechecking, setRechecking] = useState(false);
-  const [removeOpen, setRemoveOpen] = useState(false);
-  const [removing, setRemoving] = useState(false);
-
-  const form = useForm<FormValues>({
-    resolver: zodResolver(schema),
-    values: { domain: meta?.customDomain ?? "" },
-  });
 
   if (loading) {
     return (
@@ -97,7 +44,7 @@ export default function SettingsDomainPage() {
         <CardHeader>
           <CardTitle>Custom domain</CardTitle>
           <CardDescription>
-            Send invoices from a domain you control (e.g.
+            Let customers view and pay invoices at a domain you own (e.g.
             invoices.yourcompany.ca) instead of the generic portal.
           </CardDescription>
         </CardHeader>
@@ -116,165 +63,40 @@ export default function SettingsDomainPage() {
   const status = meta?.customDomainStatus;
   const currentDomain = meta?.customDomain ?? null;
 
-  async function onSubmit(values: FormValues) {
-    setSubmitError(null);
-    try {
-      const fn = httpsCallable(getClientFunctions(), "setupCustomDomain");
-      await fn({ domain: values.domain });
-      toast.success("Domain saved. Add the DNS records below to complete setup.");
-    } catch (err) {
-      setSubmitError(
-        err instanceof Error ? err.message : "Could not save custom domain.",
-      );
-    }
-  }
-
-  async function onRecheck() {
-    setRechecking(true);
-    try {
-      const fn = httpsCallable(getClientFunctions(), "recheckCustomDomain");
-      const res = (await fn({})) as {
-        data: { stage: CustomDomainStage; message: string | null };
-      };
-      if (res.data.stage === "verified") {
-        toast.success("Domain verified.");
-      } else {
-        toast.info(res.data.message ?? "Still pending — check again shortly.");
-      }
-    } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : "Could not re-check status.",
-      );
-    } finally {
-      setRechecking(false);
-    }
-  }
-
-  async function onRemove() {
-    setRemoveOpen(false);
-    setRemoving(true);
-    try {
-      const fn = httpsCallable(getClientFunctions(), "removeCustomDomain");
-      await fn({});
-      toast.success("Custom domain removed.");
-    } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : "Could not remove domain.",
-      );
-    } finally {
-      setRemoving(false);
-    }
-  }
-
   return (
     <div className="grid gap-6">
       <Card>
         <CardHeader>
           <CardTitle>Custom domain</CardTitle>
           <CardDescription>
-            Customers will sign in to view invoices at the domain you choose.
-            Until DNS is verified, the generic portal continues to work and
-            outgoing emails keep using it.
+            Customers sign in to view and pay invoices at this domain. Until it
+            is verified, the generic portal keeps working and outgoing emails
+            keep using it.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
+          {currentDomain ? (
+            <dl className="grid gap-1 text-sm">
+              <dt className="text-muted-foreground">Domain</dt>
+              <dd className="font-mono">{currentDomain}</dd>
+            </dl>
+          ) : null}
+
           {currentDomain && status ? (
             <StatusBanner stage={status.stage} message={status.message} />
           ) : null}
 
-          {isOwnerOrAdmin ? (
-            <Form {...form}>
-              <form
-                onSubmit={form.handleSubmit(onSubmit)}
-                className="grid gap-4 sm:grid-cols-[1fr_auto] sm:items-end"
-              >
-                <FormField
-                  control={form.control}
-                  name="domain"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Domain</FormLabel>
-                      <FormControl>
-                        <Input
-                          placeholder="invoices.yourcompany.ca"
-                          autoComplete="off"
-                          {...field}
-                        />
-                      </FormControl>
-                      <FormDescription>
-                        Use a subdomain you control. CNAME it to{" "}
-                        <code className="rounded bg-muted px-1 text-xs">
-                          cname.vercel-dns.com
-                        </code>
-                        .
-                      </FormDescription>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <Button
-                  type="submit"
-                  disabled={form.formState.isSubmitting}
-                  className="sm:mb-0.5"
-                >
-                  {form.formState.isSubmitting ? "Saving…" : "Save domain"}
-                </Button>
-              </form>
-              {submitError ? (
-                <Alert variant="destructive" className="mt-2">
-                  <AlertDescription>{submitError}</AlertDescription>
-                </Alert>
-              ) : null}
-            </Form>
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              Only owners and admins can change the custom domain.
-            </p>
-          )}
-
-          {currentDomain ? (
-            <div className="flex flex-wrap gap-2">
-              <Button
-                variant="outline"
-                onClick={onRecheck}
-                disabled={rechecking}
-              >
-                {rechecking ? "Checking…" : "Re-check now"}
-              </Button>
-              {isOwnerOrAdmin ? (
-                <Button
-                  variant="outline"
-                  onClick={() => setRemoveOpen(true)}
-                  disabled={removing}
-                >
-                  {removing ? "Removing…" : "Remove domain"}
-                </Button>
-              ) : null}
-            </div>
-          ) : null}
+          <p className="text-sm text-muted-foreground">
+            {currentDomain
+              ? "Contact TechFlow to change or remove your domain."
+              : "Contact TechFlow to set up your own domain."}
+          </p>
         </CardContent>
       </Card>
 
       {currentDomain && status ? (
         <DnsRecordsCard domain={currentDomain} stage={status.stage} />
       ) : null}
-
-      <AlertDialog open={removeOpen} onOpenChange={setRemoveOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Remove custom domain?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Customers will go back to using the generic portal at
-              portal.techflowsolutions.ca. Outgoing invoice emails will switch
-              back automatically. You can re-add the domain later.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={onRemove}>Remove</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   );
 }
@@ -301,10 +123,10 @@ function StatusBanner({
 }
 
 const STAGE_COPY: Record<CustomDomainStage, { label: string; hint: string }> = {
-  unverified: { label: "Not configured", hint: "Add a domain to begin." },
+  unverified: { label: "Not configured", hint: "" },
   dns_pending: {
     label: "Waiting on DNS",
-    hint: "Add the records below — propagation can take 5 min to 48 hours.",
+    hint: "Add the record below — propagation can take 5 min to 48 hours.",
   },
   ssl_pending: {
     label: "Issuing SSL",
@@ -317,10 +139,10 @@ const STAGE_COPY: Record<CustomDomainStage, { label: string; hint: string }> = {
   error: { label: "Error", hint: "" },
 };
 
-// DNS records the customer must add. We don't get them back from our callable
-// (they only come from Vercel's verification endpoint), so we render the
-// generic CNAME instructions that work for ~all hosting providers. Tenants
-// with edge cases (apex domains) can contact support.
+// The DNS record the business adds. We don't get records back from the setup
+// callable (they only come from Vercel's verification endpoint), so this shows
+// the generic CNAME that works for ~all hosting providers; apex domains get
+// Vercel's A record.
 function DnsRecordsCard({
   domain,
   stage,
@@ -333,11 +155,11 @@ function DnsRecordsCard({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>DNS records to add</CardTitle>
+        <CardTitle>DNS record to add</CardTitle>
         <CardDescription>
-          Add these at your DNS provider (GoDaddy, Cloudflare, Squarespace,
+          Add this at your DNS provider (GoDaddy, Cloudflare, Squarespace,
           etc.). We re-check every 5 minutes — you don&rsquo;t need to do
-          anything else once the records are live.
+          anything else once the record is live.
         </CardDescription>
       </CardHeader>
       <CardContent>

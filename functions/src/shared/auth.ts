@@ -51,6 +51,22 @@ export function requireTenant(claims: AuthedClaims): {
   return { uid: claims.uid, tenantId: claims.tenantId, role: claims.role };
 }
 
+/**
+ * The platform admin (TechFlow): the `platformAdmin` claim, granted only by
+ * scripts/setPlatformAdmin.ts from a trusted machine, on a verified email like
+ * every tenant caller (F-02). Platform-admin callables act on a business named
+ * in their input rather than one from a tenant claim (D18).
+ */
+export function requirePlatformAdmin(claims: AuthedClaims): { uid: string } {
+  if (!claims.platformAdmin) {
+    throw new HttpsError("permission-denied", "Requires the platform admin.");
+  }
+  if (!claims.emailVerified) {
+    throw new HttpsError("failed-precondition", VERIFY_EMAIL_MESSAGE);
+  }
+  return { uid: claims.uid };
+}
+
 export function requireRole(
   claims: AuthedClaims,
   allowed: readonly MembershipRole[],

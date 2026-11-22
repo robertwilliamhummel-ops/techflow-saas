@@ -75,11 +75,28 @@ async function seedTenant(opts: { customDomainFeature?: boolean } = {}) {
   });
 }
 
-function ownerReq<T>(data: T) {
-  return fakeRequest(data, {
-    uid: OWNER_UID,
-    claims: { tenantId: TENANT, role: "owner", email_verified: true },
-  });
+const ADMIN_UID = "platform-admin-1";
+
+// D18: the platform admin names the business in the request.
+function adminReq<T extends object>(data: T, tenantId: string = TENANT) {
+  return fakeRequest(
+    { tenantId, ...data },
+    { uid: ADMIN_UID, claims: { platformAdmin: true, email_verified: true } },
+  );
+}
+
+// A business member asking for its own tenant — refused since D18.
+function memberReq<T extends object>(
+  data: T,
+  role: "owner" | "admin" | "staff" = "owner",
+) {
+  return fakeRequest(
+    { tenantId: TENANT, ...data },
+    {
+      uid: role === "owner" ? OWNER_UID : `${role}1`,
+      claims: { tenantId: TENANT, role, email_verified: true },
+    },
+  );
 }
 
 describe("setupCustomDomain", () => {
@@ -98,7 +115,7 @@ describe("setupCustomDomain", () => {
     await seedTenant();
 
     const res = await setupCustomDomainHandler(
-      ownerReq({ domain: "invoices.smithplumbing.ca" }),
+      adminReq({ domain: "invoices.smithplumbing.ca" }),
     );
     expect(res).toEqual({
       ok: true,
@@ -126,41 +143,78 @@ describe("setupCustomDomain", () => {
     expect(idx?.tenantId).toBe(TENANT);
   });
 
-  it("rejects when caller is not owner/admin", async () => {
+  it("refuses every business role, the owner included (D18)", async () => {
+    await seedTenant();
+    for (const role of ["owner", "admin", "staff"] as const) {
+      await expect(
+        setupCustomDomainHandler(memberReq({ domain: "invoices.test.ca" }, role)),
+      ).rejects.toMatchObject({ code: "permission-denied" });
+    }
+    expect(vercelAddDomain).not.toHaveBeenCalled();
+    expect(addAuthorizedDomain).not.toHaveBeenCalled();
+    expect((await testDb.doc("customDomains/invoices.test.ca").get()).exists).toBe(false);
+  });
+
+  it("refuses a platform admin whose email isn't verified (F-02)", async () => {
+    await seedTenant();
+    await expect(
+      setupCustomDomainHandler(
+        fakeRequest(
+          { tenantId: TENANT, domain: "invoices.test.ca" },
+          { uid: ADMIN_UID, claims: { platformAdmin: true, email_verified: false } },
+        ),
+      ),
+    ).rejects.toMatchObject({ code: "failed-precondition" });
+    expect(vercelAddDomain).not.toHaveBeenCalled();
+  });
+
+  it("needs a valid tenantId for an existing business", async () => {
     await seedTenant();
     await expect(
       setupCustomDomainHandler(
         fakeRequest(
           { domain: "invoices.test.ca" },
-          { uid: "staff1", claims: { tenantId: TENANT, role: "staff", email_verified: true } },
+          { uid: ADMIN_UID, claims: { platformAdmin: true, email_verified: true } },
         ),
       ),
-    ).rejects.toMatchObject({ code: "permission-denied" });
+    ).rejects.toMatchObject({ code: "invalid-argument" });
+    await expect(
+      setupCustomDomainHandler(adminReq({ domain: "invoices.test.ca" }, "acme/meta")),
+    ).rejects.toMatchObject({ code: "invalid-argument" });
+    await expect(
+      setupCustomDomainHandler(adminReq({ domain: "invoices.test.ca" }, "ghost")),
+    ).rejects.toMatchObject({ code: "not-found" });
+    expect(vercelAddDomain).not.toHaveBeenCalled();
+    expect((await testDb.doc("customDomains/invoices.test.ca").get()).exists).toBe(false);
   });
 
   it("rejects when customDomain feature is disabled", async () => {
     await seedTenant({ customDomainFeature: false });
     await expect(
-      setupCustomDomainHandler(ownerReq({ domain: "invoices.test.ca" })),
+      setupCustomDomainHandler(adminReq({ domain: "invoices.test.ca" })),
     ).rejects.toMatchObject({ code: "permission-denied" });
   });
 
   it("rejects invalid domain syntax", async () => {
     await seedTenant();
     await expect(
-      setupCustomDomainHandler(ownerReq({ domain: "not a domain" })),
+      setupCustomDomainHandler(adminReq({ domain: "not a domain" })),
     ).rejects.toMatchObject({ code: "invalid-argument" });
   });
 
-  it("rejects reserved domains (vercel.app, platform apex)", async () => {
+  it("rejects reserved domains: the whole platform zone and vercel.app", async () => {
     await seedTenant();
     for (const bad of [
       "myapp.vercel.app",
+      "vercel.app",
       "techflowsolutions.ca",
       "portal.techflowsolutions.ca",
+      "staging.techflowsolutions.ca",
+      "www.techflowsolutions.ca",
+      "pay.acme.techflowsolutions.ca",
     ]) {
       await expect(
-        setupCustomDomainHandler(ownerReq({ domain: bad })),
+        setupCustomDomainHandler(adminReq({ domain: bad })),
       ).rejects.toMatchObject({ code: "invalid-argument" });
     }
   });
@@ -172,8 +226,75 @@ describe("setupCustomDomain", () => {
       createdAt: new Date(),
     });
     await expect(
-      setupCustomDomainHandler(ownerReq({ domain: "taken.example.com" })),
+      setupCustomDomainHandler(adminReq({ domain: "taken.example.com" })),
     ).rejects.toMatchObject({ code: "already-exists" });
+  });
+
+  it("two businesses racing for one hostname: exactly one gets it", async () => {
+    await seedTenant();
+    await testDb.doc("tenants/bravo/meta/settings").set({
+      name: "Bravo",
+      customDomain: null,
+      customDomainStatus: { stage: "unverified", message: null, checkedAt: null },
+    });
+
+    const results = await Promise.allSettled([
+      setupCustomDomainHandler(adminReq({ domain: "race.test.ca" })),
+      setupCustomDomainHandler(adminReq({ domain: "race.test.ca" }, "bravo")),
+    ]);
+
+    const won = results.filter((r) => r.status === "fulfilled");
+    const lost = results.filter((r) => r.status === "rejected");
+    expect(won).toHaveLength(1);
+    expect(lost).toHaveLength(1);
+    expect((lost[0] as PromiseRejectedResult).reason).toMatchObject({
+      code: "already-exists",
+    });
+    const winner = results[0].status === "fulfilled" ? TENANT : "bravo";
+    const loser = winner === TENANT ? "bravo" : TENANT;
+    expect((await testDb.doc("customDomains/race.test.ca").get()).data()?.tenantId).toBe(
+      winner,
+    );
+    expect(
+      (await testDb.doc(`tenants/${loser}/meta/settings`).get()).data()?.customDomain,
+    ).toBeNull();
+    expect(vercelAddDomain).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-running setup for the business's own domain keeps its claim", async () => {
+    await seedTenant();
+    await setupCustomDomainHandler(adminReq({ domain: "again.test.ca" }));
+    await expect(
+      setupCustomDomainHandler(adminReq({ domain: "again.test.ca" })),
+    ).resolves.toEqual({ ok: true, domain: "again.test.ca" });
+    expect((await testDb.doc("customDomains/again.test.ca").get()).data()?.tenantId).toBe(
+      TENANT,
+    );
+  });
+
+  it("a failed Vercel add releases a fresh claim", async () => {
+    await seedTenant();
+    vercelAddDomain.mockRejectedValueOnce(new Error("Vercel 500"));
+    await expect(
+      setupCustomDomainHandler(adminReq({ domain: "fresh.test.ca" })),
+    ).rejects.toMatchObject({ code: "internal" });
+    expect((await testDb.doc("customDomains/fresh.test.ca").get()).exists).toBe(false);
+    expect(addAuthorizedDomain).not.toHaveBeenCalled();
+  });
+
+  it("a failed re-run leaves a claim the business already held", async () => {
+    await seedTenant();
+    await testDb.doc("customDomains/held.test.ca").set({
+      tenantId: TENANT,
+      createdAt: new Date(),
+    });
+    vercelAddDomain.mockRejectedValueOnce(new Error("Vercel 500"));
+    await expect(
+      setupCustomDomainHandler(adminReq({ domain: "held.test.ca" })),
+    ).rejects.toMatchObject({ code: "internal" });
+    expect((await testDb.doc("customDomains/held.test.ca").get()).data()?.tenantId).toBe(
+      TENANT,
+    );
   });
 
   it("rolls back Vercel + Auth when Firestore write fails", async () => {
@@ -188,7 +309,7 @@ describe("setupCustomDomain", () => {
     );
 
     await expect(
-      setupCustomDomainHandler(ownerReq({ domain: "rollback.test.ca" })),
+      setupCustomDomainHandler(adminReq({ domain: "rollback.test.ca" })),
     ).rejects.toMatchObject({ code: "internal" });
 
     // Vercel add was called, then Vercel remove for rollback.
@@ -206,7 +327,7 @@ describe("setupCustomDomain", () => {
     );
 
     const res = await setupCustomDomainHandler(
-      ownerReq({ domain: "best-effort.test.ca" }),
+      adminReq({ domain: "best-effort.test.ca" }),
     );
     expect(res.ok).toBe(true);
     // Index doc still written — middleware will self-heal on miss.
@@ -217,11 +338,11 @@ describe("setupCustomDomain", () => {
   it("swapping domain detaches the previous one", async () => {
     await seedTenant();
     // First setup
-    await setupCustomDomainHandler(ownerReq({ domain: "first.test.ca" }));
+    await setupCustomDomainHandler(adminReq({ domain: "first.test.ca" }));
     vi.clearAllMocks();
 
     // Switch to a new domain
-    await setupCustomDomainHandler(ownerReq({ domain: "second.test.ca" }));
+    await setupCustomDomainHandler(adminReq({ domain: "second.test.ca" }));
 
     // Previous one detached: vercel remove + auth remove + edge delete + index delete.
     expect(vercelRemoveDomain).toHaveBeenCalledWith("first.test.ca");
@@ -249,7 +370,7 @@ describe("setupCustomDomain — reCAPTCHA key behind App Check (R-04)", () => {
   it("adds the custom domain to the reCAPTCHA key", async () => {
     await seedTenant();
     await setupCustomDomainHandler(
-      ownerReq({ domain: "invoices.smithplumbing.ca" }),
+      adminReq({ domain: "invoices.smithplumbing.ca" }),
     );
     expect(addRecaptchaAllowedDomain).toHaveBeenCalledWith(
       "invoices.smithplumbing.ca",
@@ -265,7 +386,7 @@ describe("setupCustomDomain — reCAPTCHA key behind App Check (R-04)", () => {
     );
 
     await expect(
-      setupCustomDomainHandler(ownerReq({ domain: "full.test.ca" })),
+      setupCustomDomainHandler(adminReq({ domain: "full.test.ca" })),
     ).rejects.toMatchObject({
       code: "internal",
       message: expect.stringContaining("250 domains"),
@@ -284,8 +405,8 @@ describe("setupCustomDomain — reCAPTCHA key behind App Check (R-04)", () => {
 
   it("takes a replaced domain off the reCAPTCHA key", async () => {
     await seedTenant();
-    await setupCustomDomainHandler(ownerReq({ domain: "first.test.ca" }));
-    await setupCustomDomainHandler(ownerReq({ domain: "second.test.ca" }));
+    await setupCustomDomainHandler(adminReq({ domain: "first.test.ca" }));
+    await setupCustomDomainHandler(adminReq({ domain: "second.test.ca" }));
     expect(removeRecaptchaAllowedDomain).toHaveBeenCalledWith("first.test.ca");
   });
 });
@@ -315,7 +436,7 @@ describe("removeCustomDomain", () => {
       createdAt: new Date(),
     });
 
-    await removeCustomDomainHandler(ownerReq({}));
+    await removeCustomDomainHandler(adminReq({}));
 
     expect(vercelRemoveDomain).toHaveBeenCalledWith("live.test.ca");
     expect(removeAuthorizedDomain).toHaveBeenCalledWith("live.test.ca");
@@ -330,9 +451,29 @@ describe("removeCustomDomain", () => {
 
   it("noop if no custom domain is set", async () => {
     await seedTenant();
-    const res = await removeCustomDomainHandler(ownerReq({}));
+    const res = await removeCustomDomainHandler(adminReq({}));
     expect(res.ok).toBe(true);
     expect(vercelRemoveDomain).not.toHaveBeenCalled();
+  });
+
+  it("refuses every business role and needs an existing business (D18)", async () => {
+    await seedTenant();
+    await testDb.doc(`tenants/${TENANT}/meta/settings`).set(
+      { customDomain: "live.test.ca" },
+      { merge: true },
+    );
+    for (const role of ["owner", "admin", "staff"] as const) {
+      await expect(removeCustomDomainHandler(memberReq({}, role))).rejects.toMatchObject({
+        code: "permission-denied",
+      });
+    }
+    await expect(removeCustomDomainHandler(adminReq({}, "ghost"))).rejects.toMatchObject({
+      code: "not-found",
+    });
+    expect(vercelRemoveDomain).not.toHaveBeenCalled();
+    expect(
+      (await testDb.doc(`tenants/${TENANT}/meta/settings`).get()).data()?.customDomain,
+    ).toBe("live.test.ca");
   });
 });
 
@@ -355,7 +496,7 @@ describe("recheckCustomDomain", () => {
       verificationRecords: [],
     });
 
-    const res = await recheckCustomDomainHandler(ownerReq({}));
+    const res = await recheckCustomDomainHandler(adminReq({}));
     expect(res.stage).toBe("verified");
 
     const meta = (
@@ -376,7 +517,7 @@ describe("recheckCustomDomain", () => {
       verificationRecords: [],
     });
 
-    const res = await recheckCustomDomainHandler(ownerReq({}));
+    const res = await recheckCustomDomainHandler(adminReq({}));
     expect(res.stage).toBe("dns_pending");
   });
 
@@ -392,7 +533,7 @@ describe("recheckCustomDomain", () => {
       verificationRecords: [],
     });
 
-    const res = await recheckCustomDomainHandler(ownerReq({}));
+    const res = await recheckCustomDomainHandler(adminReq({}));
     expect(res.stage).toBe("ssl_pending");
   });
 
@@ -406,7 +547,7 @@ describe("recheckCustomDomain", () => {
       new Error("Vercel 500"),
     );
 
-    const res = await recheckCustomDomainHandler(ownerReq({}));
+    const res = await recheckCustomDomainHandler(adminReq({}));
     expect(res.stage).toBe("error");
     expect(res.message).toContain("Vercel 500");
   });
@@ -414,7 +555,24 @@ describe("recheckCustomDomain", () => {
   it("rejects when no custom domain is set", async () => {
     await seedTenant();
     await expect(
-      recheckCustomDomainHandler(ownerReq({})),
+      recheckCustomDomainHandler(adminReq({})),
     ).rejects.toMatchObject({ code: "failed-precondition" });
+  });
+
+  it("refuses every business role and needs a valid tenantId (D18)", async () => {
+    await seedTenant();
+    await testDb.doc(`tenants/${TENANT}/meta/settings`).set(
+      { customDomain: "live.test.ca" },
+      { merge: true },
+    );
+    for (const role of ["owner", "admin", "staff"] as const) {
+      await expect(recheckCustomDomainHandler(memberReq({}, role))).rejects.toMatchObject({
+        code: "permission-denied",
+      });
+    }
+    await expect(recheckCustomDomainHandler(adminReq({}, ""))).rejects.toMatchObject({
+      code: "invalid-argument",
+    });
+    expect(vercelGetDomainStatus).not.toHaveBeenCalled();
   });
 });
