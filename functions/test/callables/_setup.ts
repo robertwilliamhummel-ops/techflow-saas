@@ -65,6 +65,60 @@ export function fakeRequest<T>(
   return request as CallableRequest<T>;
 }
 
+// D21: requireTenant refuses a caller without an active
+// userTenantMemberships/{uid}_{tenantId} document. In production onSignup and
+// onAcceptInvite write it before the claims exist. A test file registers the
+// tenant users it signs in as (at module level), and clearFirestore() recreates
+// their memberships after every wipe, so each test starts from that state.
+type MemberRole = "owner" | "admin" | "staff";
+const registeredMembers = new Map<
+  string,
+  { uid: string; tenantId: string; role: MemberRole }
+>();
+
+export function registerMembers(
+  ...auths: Array<{ uid: string; claims?: FakeAuthClaims }>
+): void {
+  for (const auth of auths) {
+    const tenantId = auth.claims?.tenantId;
+    const role = auth.claims?.role;
+    if (!tenantId || !role) {
+      throw new Error(`registerMembers: ${auth.uid} has no tenant claims`);
+    }
+    registeredMembers.set(`${auth.uid}_${tenantId}`, {
+      uid: auth.uid,
+      tenantId,
+      role,
+    });
+  }
+}
+
+export function membershipDoc(m: {
+  uid: string;
+  tenantId: string;
+  role: MemberRole;
+}) {
+  return {
+    uid: m.uid,
+    tenantId: m.tenantId,
+    role: m.role,
+    invitedBy: null,
+    createdAt: new Date(),
+    deletedAt: null,
+  };
+}
+
+// For a tenant whose id a test only learns at run time (e.g. from onSignup).
+export async function seedMembership(
+  uid: string,
+  tenantId: string,
+  role: MemberRole,
+): Promise<void> {
+  await testDb
+    .doc(`userTenantMemberships/${uid}_${tenantId}`)
+    .set(membershipDoc({ uid, tenantId, role }));
+}
+
 export async function clearFirestore(): Promise<void> {
   const res = await fetch(
     `http://${process.env.FIRESTORE_EMULATOR_HOST}/emulator/v1/projects/${PROJECT_ID}/databases/(default)/documents`,
@@ -74,6 +128,13 @@ export async function clearFirestore(): Promise<void> {
     throw new Error(
       `Failed to clear Firestore emulator: ${res.status} ${res.statusText}`,
     );
+  }
+  if (registeredMembers.size) {
+    const batch = testDb.batch();
+    for (const [id, m] of registeredMembers) {
+      batch.set(testDb.doc(`userTenantMemberships/${id}`), membershipDoc(m));
+    }
+    await batch.commit();
   }
 }
 

@@ -49,7 +49,7 @@ export async function updateRecurringInvoiceHandler(
   request: CallableRequest,
 ): Promise<UpdateRecurringInvoiceResult> {
   const claims = readClaims(request);
-  const { uid, tenantId } = requireTenant(claims);
+  const { uid, tenantId } = await requireTenant(claims);
 
   const data = request.data as Record<string, unknown> | undefined;
   const recurringInvoiceId = requireDocId(

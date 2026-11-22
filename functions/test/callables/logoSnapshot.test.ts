@@ -36,7 +36,7 @@ vi.mock("../../src/shared/documentPdf", async (importOriginal) => ({
   }),
 }));
 
-import { clearFirestore, fakeRequest, testDb } from "./_setup";
+import { clearFirestore, fakeRequest, registerMembers, testDb } from "./_setup";
 import { getStorage } from "firebase-admin/storage";
 import {
   applyLogoToSnapshot,
@@ -48,6 +48,7 @@ import { createInvoiceHandler } from "../../src/invoices/createInvoice";
 import { sendInvoiceEmailHandler } from "../../src/invoices/sendInvoiceEmail";
 
 const TENANT = "logo-tenant";
+registerMembers({ uid: "u_owner", claims: { tenantId: TENANT, role: "owner" } });
 const SOURCE = "https://tenant-uploads.example.com/logo.png";
 const PNG = Buffer.from([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01, 0x02, 0x03, 0x04,

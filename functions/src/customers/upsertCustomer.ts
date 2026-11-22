@@ -73,7 +73,7 @@ export async function upsertCustomerHandler(
   request: CallableRequest,
 ): Promise<{ customerId: string; created: boolean }> {
   const claims = readClaims(request);
-  const { uid, tenantId } = requireTenant(claims);
+  const { uid, tenantId } = await requireTenant(claims);
 
   const data = request.data as Record<string, unknown> | undefined;
   const fields = validateCustomerInput(data);

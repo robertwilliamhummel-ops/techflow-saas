@@ -20,7 +20,7 @@ vi.mock("firebase-functions/logger", () => ({
   error: vi.fn(),
 }));
 
-import { clearFirestore, fakeRequest, testDb } from "./_setup";
+import { clearFirestore, fakeRequest, registerMembers, testDb } from "./_setup";
 import { FieldValue } from "firebase-admin/firestore";
 import { previewInvoicePDFHandler } from "../../src/invoices/previewInvoicePDF";
 import { previewQuotePDFHandler } from "../../src/quotes/previewQuotePDF";
@@ -37,6 +37,7 @@ const ownerAuth = {
     email_verified: true,
   },
 };
+registerMembers(ownerAuth);
 
 const ORIGINAL_FETCH = globalThis.fetch;
 const fetchMock = vi.fn();

@@ -17,7 +17,7 @@ export async function deleteCustomerHandler(
   request: CallableRequest,
 ): Promise<{ deleted: boolean }> {
   const claims = readClaims(request);
-  const { tenantId } = requireTenant(claims);
+  const { tenantId } = await requireTenant(claims);
   requireRole(claims, ["owner", "admin"]);
 
   const data = request.data as Record<string, unknown> | undefined;

@@ -39,7 +39,7 @@ export async function updateInvoiceHandler(
   request: CallableRequest,
 ): Promise<{ invoiceId: string; payLinkRegenerated: boolean }> {
   const claims = readClaims(request);
-  const { tenantId } = requireTenant(claims);
+  const { tenantId } = await requireTenant(claims);
   await requireFeature(tenantId, "invoices");
 
   const data = request.data as Record<string, unknown> | undefined;

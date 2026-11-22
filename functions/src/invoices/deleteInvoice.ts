@@ -20,7 +20,7 @@ export async function deleteInvoiceHandler(
   request: CallableRequest,
 ): Promise<{ deleted: boolean }> {
   const claims = readClaims(request);
-  const { tenantId } = requireTenant(claims);
+  const { tenantId } = await requireTenant(claims);
   requireRole(claims, ["owner", "admin"]);
   await requireFeature(tenantId, "invoices");
 

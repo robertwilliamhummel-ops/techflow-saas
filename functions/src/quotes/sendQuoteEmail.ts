@@ -35,7 +35,7 @@ export async function sendQuoteEmailHandler(
   request: CallableRequest,
 ): Promise<{ success: true }> {
   const claims = readClaims(request);
-  const { uid, tenantId } = requireTenant(claims);
+  const { uid, tenantId } = await requireTenant(claims);
   await requireFeature(tenantId, "quotes");
   await enforceRateLimit(uid, RATE_LIMITS.sendEmail);
 

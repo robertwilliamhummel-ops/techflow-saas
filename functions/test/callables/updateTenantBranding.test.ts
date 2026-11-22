@@ -4,6 +4,7 @@ import {
   clearFirestore,
   createAuthUser,
   fakeRequest,
+  seedMembership,
   testDb,
 } from "./_setup";
 import { updateTenantBrandingHandler } from "../../src/tenants/updateTenantBranding";
@@ -66,6 +67,7 @@ describe("updateTenantBranding", () => {
 
   it("admin can update branding", async () => {
     const tenantId = await seedOwner();
+    await seedMembership("adminUser", tenantId, "admin");
     const res = await updateTenantBrandingHandler(
       fakeRequest(
         { name: "Renamed Co" },
@@ -77,6 +79,7 @@ describe("updateTenantBranding", () => {
 
   it("rejects staff caller", async () => {
     const tenantId = await seedOwner();
+    await seedMembership("staffUser", tenantId, "staff");
     await expect(
       updateTenantBrandingHandler(
         fakeRequest(

@@ -21,6 +21,7 @@ vi.mock("firebase-functions/logger", () => ({
 import {
   clearFirestore,
   fakeRequest,
+  registerMembers,
   testDb,
 } from "./_setup";
 
@@ -56,6 +57,7 @@ const staffAuth = {
     email_verified: true,
   },
 };
+registerMembers(ownerAuth, staffAuth);
 
 function validInvoiceData(overrides: Record<string, unknown> = {}) {
   return {

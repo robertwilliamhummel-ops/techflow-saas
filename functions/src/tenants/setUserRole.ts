@@ -29,7 +29,7 @@ export async function setUserRoleHandler(
   request: CallableRequest<Input>,
 ): Promise<{ ok: true }> {
   const claims = readClaims(request);
-  const { tenantId } = requireTenant(claims);
+  const { tenantId } = await requireTenant(claims);
   requireRole(claims, ["owner"]);
 
   const targetUid = String((request.data as Input | undefined)?.targetUid ?? "");

@@ -33,7 +33,7 @@ export async function markInvoicePaidHandler(
   request: CallableRequest,
 ): Promise<{ invoiceId: string; status: string }> {
   const claims = readClaims(request);
-  const { tenantId } = requireTenant(claims);
+  const { tenantId } = await requireTenant(claims);
   requireRole(claims, ["owner", "admin"]);
   await requireFeature(tenantId, "invoices");
 

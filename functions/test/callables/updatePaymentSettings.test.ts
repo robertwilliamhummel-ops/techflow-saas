@@ -4,6 +4,8 @@ import {
   clearFirestore,
   createAuthUser,
   fakeRequest,
+  registerMembers,
+  seedMembership,
   testDb,
 } from "./_setup";
 import { updatePaymentSettingsHandler } from "../../src/tenants/updatePaymentSettings";
@@ -26,6 +28,9 @@ async function seedOwner(): Promise<string> {
 
 // D3 — surcharging is off by default; tests that exercise it enable the flag
 // the way the platform admin would.
+// A member of a business whose settings don't exist yet.
+registerMembers({ uid: "someone", claims: { tenantId: "ghost", role: "owner" } });
+
 async function enableCardSurcharge(tenantId: string): Promise<void> {
   await testDb
     .doc(`tenants/${tenantId}/entitlements/current`)
@@ -224,6 +229,7 @@ describe("updatePaymentSettings", () => {
 
   it("rejects staff caller", async () => {
     const tenantId = await seedOwner();
+    await seedMembership("staffUser", tenantId, "staff");
     await expect(
       updatePaymentSettingsHandler(
         fakeRequest(

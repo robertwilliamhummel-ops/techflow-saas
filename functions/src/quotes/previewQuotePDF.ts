@@ -33,7 +33,7 @@ export async function previewQuotePDFHandler(
   request: CallableRequest<PreviewQuotePDFInput>,
 ): Promise<PreviewQuotePDFResult> {
   const claims = readClaims(request);
-  const { uid, tenantId } = requireTenant(claims);
+  const { uid, tenantId } = await requireTenant(claims);
   await requireFeature(tenantId, "quotes");
   await enforceRateLimit(uid, RATE_LIMITS.pdfPreview);
 

@@ -21,7 +21,7 @@ export async function updateQuoteHandler(
   request: CallableRequest,
 ): Promise<{ quoteId: string }> {
   const claims = readClaims(request);
-  const { tenantId } = requireTenant(claims);
+  const { tenantId } = await requireTenant(claims);
   await requireFeature(tenantId, "quotes");
 
   const data = request.data as Record<string, unknown> | undefined;

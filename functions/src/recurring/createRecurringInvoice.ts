@@ -23,7 +23,7 @@ export async function createRecurringInvoiceHandler(
   request: CallableRequest,
 ): Promise<{ recurringInvoiceId: string }> {
   const claims = readClaims(request);
-  const { uid, tenantId } = requireTenant(claims);
+  const { uid, tenantId } = await requireTenant(claims);
   await requireFeature(tenantId, "recurringInvoices");
 
   const input = validateRecurringInvoiceInput(request.data);

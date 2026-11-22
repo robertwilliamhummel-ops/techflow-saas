@@ -19,7 +19,7 @@ export async function revokeInvitationHandler(
   request: CallableRequest<Input>,
 ): Promise<{ ok: true }> {
   const claims = readClaims(request);
-  const { tenantId, uid } = requireTenant(claims);
+  const { tenantId, uid } = await requireTenant(claims);
   requireRole(claims, ["owner", "admin"]);
 
   const invitationId = String(

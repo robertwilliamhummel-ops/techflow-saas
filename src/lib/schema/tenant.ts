@@ -304,7 +304,9 @@ export interface UserTenantMembership {
   role: MembershipRole;
   invitedBy: string | null;
   createdAt: Timestamp;
+  // D21 — set by removeMember; requireTenant refuses a deleted membership.
   deletedAt: Timestamp | null;
+  deletedBy?: string | null;
 }
 
 // users/{uid}

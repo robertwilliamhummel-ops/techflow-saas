@@ -23,6 +23,7 @@ import {
   clearFirestore,
   createAuthUser,
   fakeRequest,
+  seedMembership,
   testDb,
 } from "./_setup";
 import { onSignupHandler } from "../../src/tenants/onSignup";
@@ -269,6 +270,7 @@ describe("startConnectOnboarding", () => {
 
   it("rejects staff caller", async () => {
     const tenantId = await seedOwner();
+    await seedMembership("staffUser", tenantId, "staff");
     __setStripeClientForTest(fakeStripeClient({}));
 
     await expect(
@@ -451,6 +453,7 @@ describe("completeConnectOnboarding", () => {
 
   it("rejects staff caller", async () => {
     const tenantId = await seedOwner();
+    await seedMembership("staffUser", tenantId, "staff");
     await testDb.doc(`tenants/${tenantId}/meta/settings`).set(
       { stripeAccountId: "acct_ignored" },
       { merge: true },

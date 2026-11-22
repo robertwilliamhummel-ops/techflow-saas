@@ -57,7 +57,7 @@ export async function convertQuoteToInvoiceHandler(
   request: CallableRequest,
 ): Promise<{ invoiceId: string; quoteId: string }> {
   const claims = readClaims(request);
-  const { uid, tenantId } = requireTenant(claims);
+  const { uid, tenantId } = await requireTenant(claims);
 
   // Must have BOTH features enabled.
   await requireFeature(tenantId, "quotes");

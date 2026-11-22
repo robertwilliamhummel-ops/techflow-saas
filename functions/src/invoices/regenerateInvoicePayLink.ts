@@ -28,7 +28,7 @@ export async function regenerateInvoicePayLinkHandler(
   request: CallableRequest,
 ): Promise<{ payToken: string; payTokenExpiresAt: number }> {
   const claims = readClaims(request);
-  const { tenantId } = requireTenant(claims);
+  const { tenantId } = await requireTenant(claims);
   requireRole(claims, ["owner", "admin"]);
   await requireFeature(tenantId, "invoices");
 

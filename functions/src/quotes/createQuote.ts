@@ -29,7 +29,7 @@ export async function createQuoteHandler(
   request: CallableRequest,
 ): Promise<{ quoteId: string }> {
   const claims = readClaims(request);
-  const { uid, tenantId } = requireTenant(claims);
+  const { uid, tenantId } = await requireTenant(claims);
   const features = await requireFeature(tenantId, "quotes");
 
   const input = validateQuoteInput(request.data);

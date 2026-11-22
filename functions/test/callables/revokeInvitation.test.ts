@@ -4,6 +4,7 @@ import {
   clearAuthUsers,
   clearFirestore,
   fakeRequest,
+  registerMembers,
   testDb,
 } from "./_setup";
 
@@ -16,6 +17,11 @@ vi.mock("firebase-functions/logger", () => ({
 import { revokeInvitationHandler } from "../../src/tenants/revokeInvitation";
 
 const TENANT = "acme";
+registerMembers(
+  { uid: "owner1", claims: { tenantId: TENANT, role: "owner" } },
+  { uid: "admin1", claims: { tenantId: TENANT, role: "admin" } },
+  { uid: "staff1", claims: { tenantId: TENANT, role: "staff" } },
+);
 
 async function seedInvite(
   opts: {

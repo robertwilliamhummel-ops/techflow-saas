@@ -127,11 +127,12 @@ async function claimTenant(
     return { tenantId, role };
   }
 
-  // Invited members have a membership but never signed up.
+  // Invited members have a membership but never signed up. A membership an
+  // owner removed (D21) doesn't count: that person may start their own business.
   const memberships = await tx.get(
-    db.collection("userTenantMemberships").where("uid", "==", uid).limit(1),
+    db.collection("userTenantMemberships").where("uid", "==", uid),
   );
-  if (!memberships.empty) {
+  if (memberships.docs.some((m) => !m.data().deletedAt)) {
     throw new HttpsError(
       "already-exists",
       "This user is already a member of a tenant.",

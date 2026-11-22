@@ -71,6 +71,7 @@ vi.mock("@react-email/render", () => ({
 import {
   clearFirestore,
   fakeRequest,
+  registerMembers,
   testDb,
 } from "./_setup";
 
@@ -105,6 +106,10 @@ const ownerAuth = {
     email_verified: true,
   },
 };
+registerMembers(ownerAuth, {
+  uid: "u_staff",
+  claims: { tenantId: TENANT, role: "staff" },
+});
 
 const customerAuth = {
   uid: "u_customer",

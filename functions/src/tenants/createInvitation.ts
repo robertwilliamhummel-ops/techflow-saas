@@ -38,7 +38,7 @@ export async function createInvitationHandler(
   request: CallableRequest<Input>,
 ): Promise<{ invitationId: string }> {
   const claims = readClaims(request);
-  const { tenantId, uid: inviterUid } = requireTenant(claims);
+  const { tenantId, uid: inviterUid } = await requireTenant(claims);
   requireRole(claims, ["owner", "admin"]);
   await enforceRateLimit(inviterUid, RATE_LIMITS.invitation);
 

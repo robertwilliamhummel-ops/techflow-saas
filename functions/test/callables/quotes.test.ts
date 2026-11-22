@@ -16,7 +16,7 @@ vi.mock("firebase-functions/logger", () => ({
   error: vi.fn(),
 }));
 
-import { clearFirestore, fakeRequest, testDb } from "./_setup";
+import { clearFirestore, fakeRequest, registerMembers, testDb } from "./_setup";
 import { FieldValue } from "firebase-admin/firestore";
 
 import { createQuoteHandler, quotePrefixFor } from "../../src/quotes/createQuote";
@@ -50,6 +50,7 @@ const staffAuth = {
     email_verified: true,
   },
 };
+registerMembers(ownerAuth, staffAuth);
 
 function validQuoteData(overrides: Record<string, unknown> = {}) {
   return {

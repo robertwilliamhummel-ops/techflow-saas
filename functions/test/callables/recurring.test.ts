@@ -51,6 +51,7 @@ mockRenderViaPdfService.mockResolvedValue({
 import {
   clearFirestore,
   fakeRequest,
+  registerMembers,
   testDb,
 } from "./_setup";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
@@ -81,6 +82,7 @@ const ownerAuth = {
     email_verified: true,
   },
 };
+registerMembers(ownerAuth);
 
 const validInput = {
   customer: { name: "Jane Doe", email: "JANE@example.com", phone: "555-1234" },
@@ -884,6 +886,7 @@ describe("updateRecurringInvoice (A-10)", () => {
     uid: "u_outsider",
     claims: { email: "owner@other.test", tenantId: "other-tenant", role: "owner" as const, email_verified: true },
   };
+  registerMembers(staffAuth, adminAuth, outsiderAuth);
 
   type Auth = typeof ownerAuth | typeof staffAuth | typeof adminAuth | typeof outsiderAuth;
 

@@ -29,7 +29,7 @@ vi.mock("@react-email/render", () => ({
 }));
 
 import { FieldValue } from "firebase-admin/firestore";
-import { clearFirestore, fakeRequest, testDb } from "./_setup";
+import { clearFirestore, fakeRequest, registerMembers, testDb } from "./_setup";
 import { createInvoiceHandler } from "../../src/invoices/createInvoice";
 import { updateInvoiceHandler } from "../../src/invoices/updateInvoice";
 import { markInvoicePaidHandler } from "../../src/invoices/markInvoicePaid";
@@ -46,6 +46,7 @@ function member(role: "owner" | "admin" | "staff") {
   };
 }
 const ownerAuth = member("owner");
+registerMembers(ownerAuth, member("admin"), member("staff"));
 
 function validInvoiceData(overrides: Record<string, unknown> = {}) {
   return {

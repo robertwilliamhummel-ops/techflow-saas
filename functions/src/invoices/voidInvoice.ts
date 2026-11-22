@@ -24,7 +24,7 @@ export async function voidInvoiceHandler(
   request: CallableRequest,
 ): Promise<{ invoiceId: string; status: "void"; changed: boolean }> {
   const claims = readClaims(request);
-  const { uid, tenantId } = requireTenant(claims);
+  const { uid, tenantId } = await requireTenant(claims);
   requireRole(claims, ["owner", "admin"]);
   await requireFeature(tenantId, "invoices");
 

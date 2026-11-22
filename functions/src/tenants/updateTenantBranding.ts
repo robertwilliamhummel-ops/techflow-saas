@@ -151,7 +151,7 @@ export async function updateTenantBrandingHandler(
   request: CallableRequest<Input>,
 ): Promise<{ ok: true }> {
   const claims = readClaims(request);
-  const { tenantId } = requireTenant(claims);
+  const { tenantId } = await requireTenant(claims);
   requireRole(claims, ["owner", "admin"]);
 
   const data = (request.data as Input | undefined) ?? {};

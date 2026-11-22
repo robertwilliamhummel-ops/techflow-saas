@@ -4,6 +4,7 @@ import {
   clearFirestore,
   createAuthUser,
   fakeRequest,
+  seedMembership,
   testDb,
 } from "./_setup";
 
@@ -95,6 +96,7 @@ describe("createInvitation", () => {
 
   it("rejects when caller is staff, not owner/admin", async () => {
     const tenantId = await seedOwner();
+    await seedMembership("intruder", tenantId, "staff");
     await expect(
       createInvitationHandler(
         fakeRequest(

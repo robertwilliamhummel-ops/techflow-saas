@@ -18,6 +18,9 @@ export { updateUserProfile } from "./tenants/updateUserProfile";
 export { createInvitation } from "./tenants/createInvitation";
 export { onAcceptInvite } from "./tenants/onAcceptInvite";
 export { revokeInvitation } from "./tenants/revokeInvitation";
+// D21 — owners remove a teammate; the Team page lists the current team.
+export { removeMember } from "./tenants/removeMember";
+export { listMembers } from "./tenants/listMembers";
 
 // Bundle B — Tenant settings (Phase 2).
 export { updateTenantBranding } from "./tenants/updateTenantBranding";

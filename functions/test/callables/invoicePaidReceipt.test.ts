@@ -22,11 +22,12 @@ vi.mock("firebase-functions/logger", () => ({
 }));
 
 import { Timestamp } from "firebase-admin/firestore";
-import { clearFirestore, fakeRequest, testDb } from "./_setup";
+import { clearFirestore, fakeRequest, registerMembers, testDb } from "./_setup";
 import { handleInvoicePaid } from "../../src/invoices/onInvoicePaid";
 import { markInvoicePaidHandler } from "../../src/invoices/markInvoicePaid";
 
 const TENANT = "acme-plumbing";
+registerMembers({ uid: "u_owner", claims: { tenantId: TENANT, role: "owner" } });
 const INVOICE = "INV-0001";
 const PAID_AT = Timestamp.fromDate(new Date("2026-09-13T15:30:00Z"));
 

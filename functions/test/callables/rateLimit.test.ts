@@ -24,7 +24,7 @@ vi.mock("@aws-sdk/client-sesv2", () => ({
 }));
 
 import { Timestamp } from "firebase-admin/firestore";
-import { clearFirestore, fakeRequest, testDb } from "./_setup";
+import { clearFirestore, fakeRequest, registerMembers, testDb } from "./_setup";
 import {
   RATE_LIMITS,
   enforceRateLimit,
@@ -42,6 +42,7 @@ const owner = {
   uid: "u_owner",
   claims: { email: "owner@acme.test", tenantId: TENANT, role: "owner" as const, email_verified: true },
 };
+registerMembers(owner);
 
 function counterRef(uid: string, action: string) {
   return testDb.doc(`rateLimits/${uid}_${action}`);

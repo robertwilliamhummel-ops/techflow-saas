@@ -36,7 +36,7 @@ export async function previewInvoicePDFHandler(
   request: CallableRequest<PreviewInvoicePDFInput>,
 ): Promise<PreviewInvoicePDFResult> {
   const claims = readClaims(request);
-  const { uid, tenantId } = requireTenant(claims);
+  const { uid, tenantId } = await requireTenant(claims);
   const features = await requireFeature(tenantId, "invoices");
   await enforceRateLimit(uid, RATE_LIMITS.pdfPreview);
 

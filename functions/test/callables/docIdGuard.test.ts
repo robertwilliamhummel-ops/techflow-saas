@@ -19,7 +19,7 @@ vi.mock("@aws-sdk/client-sesv2", () => ({
   SendEmailCommand: vi.fn().mockImplementation((input: unknown) => ({ input })),
 }));
 
-import { clearFirestore, fakeRequest } from "./_setup";
+import { clearFirestore, fakeRequest, registerMembers } from "./_setup";
 import { deleteInvoiceHandler } from "../../src/invoices/deleteInvoice";
 import { markInvoicePaidHandler } from "../../src/invoices/markInvoicePaid";
 import { previewInvoicePDFHandler } from "../../src/invoices/previewInvoicePDF";
@@ -37,6 +37,7 @@ const owner = {
   uid: "u_owner",
   claims: { email: "owner@ids.test", tenantId: "ids-tenant", role: "owner" as const, email_verified: true },
 };
+registerMembers(owner);
 
 type Handler = (request: ReturnType<typeof fakeRequest>) => Promise<unknown>;
 

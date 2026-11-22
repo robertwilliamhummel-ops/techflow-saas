@@ -34,7 +34,7 @@ export async function completeConnectOnboardingHandler(
   request: CallableRequest,
 ): Promise<Result> {
   const claims = readClaims(request);
-  const { tenantId } = requireTenant(claims);
+  const { tenantId } = await requireTenant(claims);
   requireRole(claims, ["owner", "admin"]);
   await requireFeature(tenantId, "stripePayments");
 

@@ -17,6 +17,11 @@ import { toast } from "sonner";
 import { getClientDb, getClientFunctions } from "@/lib/firebase/client";
 import { useTenantContext } from "@/lib/tenant/TenantContext";
 import { useAuth } from "@/lib/auth/useAuth";
+import {
+  canRemoveMember,
+  memberName,
+  type TeamMember,
+} from "@/lib/team/members";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -79,14 +84,57 @@ interface InvitationDoc {
 }
 
 export default function SettingsTeamPage() {
-  const { tenantId } = useTenantContext();
-  const { claims } = useAuth();
+  const { tenantId, meta } = useTenantContext();
+  const { claims, user } = useAuth();
   const isOwnerOrAdmin = claims.role === "owner" || claims.role === "admin";
+  const viewer = { uid: user?.uid, role: claims.role };
 
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [invites, setInvites] = useState<InvitationDoc[]>([]);
   const [invitesLoading, setInvitesLoading] = useState(true);
   const [revokeTarget, setRevokeTarget] = useState<InvitationDoc | null>(null);
+
+  // D21 — the current team comes from listMembers (memberships are readable
+  // only by their own user), and owners can remove an admin or staff member.
+  // Each load answers one attempt; bumping the attempt reloads. The last list
+  // stays on screen while a reload is in flight.
+  const [membersAttempt, setMembersAttempt] = useState(0);
+  const [membersLoad, setMembersLoad] = useState<{
+    attempt: number;
+    members: TeamMember[] | null;
+  } | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<TeamMember | null>(null);
+  const [removingUid, setRemovingUid] = useState<string | null>(null);
+  const reloadMembers = () => setMembersAttempt((n) => n + 1);
+
+  useEffect(() => {
+    if (!tenantId) return;
+    let active = true;
+    const attempt = membersAttempt;
+    Promise.resolve()
+      .then(() =>
+        httpsCallable<Record<string, never>, { members: TeamMember[] }>(
+          getClientFunctions(),
+          "listMembers",
+        )({}),
+      )
+      .then(({ data }) => {
+        if (active) setMembersLoad({ attempt, members: data.members });
+      })
+      .catch(() => {
+        if (active) setMembersLoad({ attempt, members: null });
+      });
+    return () => {
+      active = false;
+    };
+  }, [tenantId, membersAttempt]);
+
+  const members = membersLoad?.members ?? [];
+  const membersState: "loading" | "ready" | "error" = membersLoad?.members
+    ? "ready"
+    : membersLoad?.attempt === membersAttempt
+      ? "error"
+      : "loading";
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -131,6 +179,23 @@ export default function SettingsTeamPage() {
       setSubmitError(
         err instanceof Error ? err.message : "Could not send invitation.",
       );
+    }
+  }
+
+  async function onRemove(target: TeamMember) {
+    setRemoveTarget(null);
+    setRemovingUid(target.uid);
+    try {
+      const fn = httpsCallable(getClientFunctions(), "removeMember");
+      await fn({ targetUid: target.uid });
+      toast.success(`${memberName(target)} was removed from your team.`);
+      reloadMembers();
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Could not remove this member.",
+      );
+    } finally {
+      setRemovingUid(null);
     }
   }
 
@@ -227,6 +292,81 @@ export default function SettingsTeamPage() {
 
       <Card>
         <CardHeader>
+          <CardTitle>Team members</CardTitle>
+          <CardDescription>
+            Everyone who can sign in to your business.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {membersState === "loading" ? (
+            <p className="text-sm text-muted-foreground">Loading…</p>
+          ) : membersState === "error" ? (
+            <Alert variant="destructive">
+              <AlertDescription>
+                Couldn&rsquo;t load your team.{" "}
+                <button
+                  type="button"
+                  className="underline underline-offset-2"
+                  onClick={reloadMembers}
+                >
+                  Try again
+                </button>
+              </AlertDescription>
+            </Alert>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Role</TableHead>
+                  {claims.role === "owner" ? (
+                    <TableHead className="w-24 text-right">Action</TableHead>
+                  ) : null}
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {members.map((m) => (
+                  <TableRow key={m.uid}>
+                    <TableCell>
+                      <div className="font-medium">{memberName(m)}</div>
+                      {m.displayName && m.email ? (
+                        <div className="text-xs text-muted-foreground">
+                          {m.email}
+                        </div>
+                      ) : null}
+                    </TableCell>
+                    <TableCell className="capitalize">
+                      {m.role}
+                      {m.uid === user?.uid ? (
+                        <span className="ml-1 normal-case text-muted-foreground">
+                          (you)
+                        </span>
+                      ) : null}
+                    </TableCell>
+                    {claims.role === "owner" ? (
+                      <TableCell className="text-right">
+                        {canRemoveMember(viewer, m) ? (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={removingUid === m.uid}
+                            onClick={() => setRemoveTarget(m)}
+                          >
+                            {removingUid === m.uid ? "Removing…" : "Remove"}
+                          </Button>
+                        ) : null}
+                      </TableCell>
+                    ) : null}
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle>Pending invitations</CardTitle>
           <CardDescription>
             People you&rsquo;ve invited who haven&rsquo;t accepted yet.
@@ -277,6 +417,32 @@ export default function SettingsTeamPage() {
           )}
         </CardContent>
       </Card>
+
+      <AlertDialog
+        open={removeTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setRemoveTarget(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove team member?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {removeTarget
+                ? `${memberName(removeTarget)} will lose access to ${meta?.name ?? "your business"} right away and be signed out on every device. Invoices, quotes, and customers they created stay. You can invite them again later.`
+                : null}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => removeTarget && onRemove(removeTarget)}
+            >
+              Remove
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog
         open={revokeTarget !== null}

@@ -2,7 +2,7 @@
 // customers, so these callables are the only way to manage the records.
 
 import { beforeEach, describe, expect, it } from "vitest";
-import { clearFirestore, fakeRequest, testDb } from "./_setup";
+import { clearFirestore, fakeRequest, registerMembers, testDb } from "./_setup";
 import { upsertCustomerHandler } from "../../src/customers/upsertCustomer";
 import { deleteCustomerHandler } from "../../src/customers/deleteCustomer";
 
@@ -14,6 +14,12 @@ function member(role: "owner" | "admin" | "staff", tenantId = TENANT) {
     claims: { email: `${role}@acme.test`, tenantId, role, email_verified: true },
   };
 }
+registerMembers(
+  member("owner"),
+  member("admin"),
+  member("staff"),
+  member("owner", "other-tenant"),
+);
 
 const jane = {
   name: "  Jane Doe ",
