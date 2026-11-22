@@ -141,7 +141,9 @@ export interface InvoiceDoc {
   disputed?: boolean;
   disputedAt?: Timestamp | FieldValue | null;
   disputeReason?: string | null;
-  disputeOutcome?: "won" | "lost" | null;
+  // D19: "warning_closed" is an inquiry that closed without a chargeback; the
+  // business kept the money, as with "won". Only "lost" refunds.
+  disputeOutcome?: "won" | "lost" | "warning_closed" | null;
 }
 
 // ---------------------------------------------------------------------------

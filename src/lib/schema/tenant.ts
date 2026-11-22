@@ -189,7 +189,9 @@ export interface Invoice {
   disputed?: boolean;
   disputedAt?: Timestamp | null;
   disputeReason?: string | null;
-  disputeOutcome?: "won" | "lost" | null;
+  // D19: "warning_closed" is an inquiry that closed without a chargeback — the
+  // business kept the money, as with "won". Only "lost" refunds.
+  disputeOutcome?: "won" | "lost" | "warning_closed" | null;
 
   // A-12 — set by voidInvoice.
   voidedAt?: Timestamp | null;

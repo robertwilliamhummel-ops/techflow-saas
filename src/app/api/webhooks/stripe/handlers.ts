@@ -442,8 +442,18 @@ export async function handleDisputeCreated(
 }
 
 // ---------------------------------------------------------------------------
-// charge.dispute.closed — dispute resolved (won or lost)
+// charge.dispute.closed — dispute resolved
 // ---------------------------------------------------------------------------
+
+// D19: Stripe fires charge.dispute.closed when the status becomes `lost`,
+// `won`, or `warning_closed`. Only a lost chargeback takes the money back. A
+// won dispute returns the debited amount, and `warning_closed` is an inquiry
+// (a pre-dispute request for information) that closed without becoming a
+// chargeback, so no funds were ever withdrawn. Both keep the payment.
+const DISPUTE_KEPT_STATUSES: ReadonlySet<string> = new Set([
+  "won",
+  "warning_closed",
+]);
 
 export async function handleDisputeClosed(
   tenantId: string,
@@ -462,15 +472,18 @@ export async function handleDisputeClosed(
     return;
   }
 
-  // charge.dispute.closed only fires for terminal states. 'won' means the
-  // tenant kept the money; anything else (lost, charge_refunded) means the
-  // chargeback went through, which is effectively a forced refund.
-  if (dispute.status === "won") {
+  if (DISPUTE_KEPT_STATUSES.has(dispute.status)) {
+    // The business keeps the money, so the invoice's status stays as it was.
+    // disputeOutcome says how it closed: "won", or "warning_closed" for an
+    // inquiry that never became a chargeback.
     await match.ref.set(
-      { disputed: false, disputeOutcome: "won" },
+      {
+        disputed: false,
+        disputeOutcome: dispute.status === "won" ? "won" : "warning_closed",
+      },
       { merge: true },
     );
-  } else {
+  } else if (dispute.status === "lost") {
     await match.ref.set(
       {
         disputed: false,
@@ -488,6 +501,14 @@ export async function handleDisputeClosed(
       amountCents: dispute.amount ?? null,
       outcomeStatus: dispute.status,
     });
+  } else {
+    // Not a status Stripe documents for this event. Guessing either way would
+    // misstate the money, so the invoice is left as it is (still disputed)
+    // and the event is logged for a person to look at.
+    console.error(
+      `[stripe connect] dispute.closed with an unexpected status; invoice left unchanged`,
+      { tenantId, disputeId: dispute.id, status: dispute.status },
+    );
   }
 }
 

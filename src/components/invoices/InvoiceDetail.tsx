@@ -88,6 +88,13 @@ type ManualMethod = (typeof MANUAL_PAYMENT_METHODS)[number];
 // requireDocId in Cloud Functions; anything else can't be an invoice id.
 const DOC_ID = /^[A-Za-z0-9_-]{1,128}$/;
 
+// D19: an inquiry closed without a chargeback is not a dispute the business won.
+const DISPUTE_OUTCOME_LABEL: Record<NonNullable<Invoice["disputeOutcome"]>, string> = {
+  won: "Dispute won",
+  lost: "Dispute lost",
+  warning_closed: "Inquiry closed",
+};
+
 function errorMessage(err: unknown, fallback: string): string {
   const code = (err as { code?: unknown } | null)?.code;
   if (typeof code === "string" && /(internal|unknown)$/.test(code)) return fallback;
@@ -346,7 +353,7 @@ function InvoiceDetailBody({
   const disputed = formatTimestamp(invoice.disputedAt);
   if (disputed) {
     activity.push({
-      label: invoice.disputeOutcome ? `Dispute ${invoice.disputeOutcome}` : "Disputed",
+      label: invoice.disputeOutcome ? DISPUTE_OUTCOME_LABEL[invoice.disputeOutcome] : "Disputed",
       value: disputed,
       detail: invoice.disputeReason ?? null,
     });

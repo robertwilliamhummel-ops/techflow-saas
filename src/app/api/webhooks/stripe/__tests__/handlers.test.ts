@@ -1005,27 +1005,64 @@ describe("handleDisputeClosed", () => {
     });
   });
 
-  it("status='charge_refunded' is also treated as lost (chargeback went through)", async () => {
+  // D19: an inquiry that closes without becoming a chargeback never took the
+  // money (Stripe: warning_closed — open 120 days without escalation).
+  it("status='warning_closed' → the business kept the money: outcome recorded, invoice stays paid", async () => {
     docs.set(`tenants/${TENANT}/invoices/INV-6`, {
       status: "paid",
       stripePaymentIntentId: "pi_disputed",
       disputed: true,
     });
 
-    await handleDisputeClosed(TENANT, event("charge_refunded"));
+    await handleDisputeClosed(TENANT, event("warning_closed"));
 
     const inv = docs.get(`tenants/${TENANT}/invoices/INV-6`);
-    expect(inv?.status).toBe("refunded");
-    expect(inv?.disputeOutcome).toBe("lost");
-    expect(
-      docs.get(
-        `tenants/${TENANT}/invoices/INV-6/paymentIncidents/dispute-lost_dp_1`,
-      ),
-    ).toMatchObject({
-      kind: "dispute-lost",
-      outcomeStatus: "charge_refunded",
-      amountCents: 11300,
+    expect(inv?.disputed).toBe(false);
+    expect(inv?.disputeOutcome).toBe("warning_closed");
+    expect(inv?.status).toBe("paid");
+    expect(inv?.refundedAt).toBeUndefined();
+    expect(inv?.refundedAmountCents).toBeUndefined();
+    expect(incidentDocs(TENANT, "INV-6")).toHaveLength(0);
+  });
+
+  it("a kept dispute leaves a partly refunded invoice's status alone", async () => {
+    docs.set(`tenants/${TENANT}/invoices/INV-6b`, {
+      status: "partially-refunded",
+      stripePaymentIntentId: "pi_disputed",
+      refundedAmountCents: 1000,
+      disputed: true,
     });
+
+    await handleDisputeClosed(TENANT, event("won"));
+
+    const inv = docs.get(`tenants/${TENANT}/invoices/INV-6b`);
+    expect(inv?.status).toBe("partially-refunded");
+    expect(inv?.refundedAmountCents).toBe(1000);
+    expect(inv?.disputeOutcome).toBe("won");
+  });
+
+  it("a status Stripe doesn't document for this event leaves the invoice unchanged and logs", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    docs.set(`tenants/${TENANT}/invoices/INV-7`, {
+      status: "paid",
+      stripePaymentIntentId: "pi_disputed",
+      disputed: true,
+    });
+
+    await handleDisputeClosed(TENANT, event("under_review"));
+
+    const inv = docs.get(`tenants/${TENANT}/invoices/INV-7`);
+    expect(inv).toEqual({
+      status: "paid",
+      stripePaymentIntentId: "pi_disputed",
+      disputed: true,
+    });
+    expect(incidentDocs(TENANT, "INV-7")).toHaveLength(0);
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining("unexpected status"),
+      expect.objectContaining({ status: "under_review", disputeId: "dp_1" }),
+    );
+    error.mockRestore();
   });
 });
 
