@@ -3,11 +3,14 @@ import {
   onCall,
   type CallableRequest,
 } from "firebase-functions/v2/https";
+import * as logger from "firebase-functions/logger";
 import { adminAuth, db, FieldValue } from "../shared/admin";
 import { lowerEmail } from "../shared/email";
 import { pickTenantId } from "../shared/tenantId";
 import { defaultTenantMeta } from "../shared/meta";
-import { withSentryCallable } from "../shared/withSentry";
+import { reportError, withSentryCallable } from "../shared/withSentry";
+import { EMAIL_SECRETS, sesClient } from "../emails/send";
+import { ensureSesTenant, sesTenantsEnabled } from "../emails/sesTenants";
 
 interface SignupInput {
   businessName?: unknown;
@@ -81,6 +84,23 @@ export async function onSignupHandler(
     tenantId,
     role,
   });
+
+  // D22: the business's SES tenant, so its emails can send as it once
+  // SES_TENANTS_ENABLED is on. A failure never fails signup — the business
+  // exists and its claims are set — and send.ts creates a missing tenant on
+  // its first email anyway; it's reported so it doesn't pass unnoticed. A
+  // repeat call (signup retry) runs it again harmlessly.
+  if (sesTenantsEnabled()) {
+    try {
+      await ensureSesTenant(tenantId, sesClient());
+    } catch (err) {
+      logger.error("onSignup: SES tenant setup failed (signup continues)", {
+        tenantId,
+        error: String(err),
+      });
+      await reportError(err, { functionName: "onSignup", tenantId, uid });
+    }
+  }
 
   return { tenantId };
 }
@@ -193,5 +213,7 @@ async function claimTenant(
 }
 
 export const onSignup = onCall<SignupInput>(
+  // The SES credentials create the business's SES tenant (D22).
+  { secrets: EMAIL_SECRETS },
   withSentryCallable("onSignup", onSignupHandler),
 );

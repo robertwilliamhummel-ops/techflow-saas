@@ -19,15 +19,20 @@
 //                           events, so sesEvents.ts records nothing and a dead
 //                           address looks like a successful send. Its absence
 //                           is logged as an error on every send.
-//   SES_TENANTS_ENABLED     "true" once SES tenants exist (TenantName = tenantId)
-// Secrets: AWS_SES_ACCESS_KEY_ID, AWS_SES_SECRET_ACCESS_KEY — an IAM user
-// limited to ses:SendEmail on the platform identity.
+//   SES_TENANTS_ENABLED     "true" sends as the business's SES tenant
+//                           (TenantName = tenantId, D22); a send that finds the
+//                           tenant missing creates it once (ensureSesTenant) and
+//                           otherwise goes out without TenantName, reported
+// Secrets: AWS_SES_ACCESS_KEY_ID, AWS_SES_SECRET_ACCESS_KEY — the environment's
+// sending IAM user: ses:SendEmail on the platform identity, plus a separate
+// statement for SES tenant management (D22, Deploy Runbook step 5).
 
 import { createHash } from "node:crypto";
 import {
   SESv2Client,
   SendEmailCommand,
   type Attachment,
+  type SendEmailCommandOutput,
 } from "@aws-sdk/client-sesv2";
 import { defineSecret } from "firebase-functions/params";
 import * as logger from "firebase-functions/logger";
@@ -36,6 +41,8 @@ import { render } from "@react-email/render";
 import { db, FieldValue, Timestamp } from "../shared/admin";
 import { isValidEmail, lowerEmail } from "../shared/email";
 import { sanitizeEmailField, sanitizeHeaderValue } from "./sanitize";
+import { ensureSesTenant, sesTenantName, sesTenantsEnabled } from "./sesTenants";
+import { reportError } from "../shared/withSentry";
 import { StaffInvite } from "./templates/StaffInvite";
 import type { TenantSnapshotForEmail } from "./components/TenantEmailLayout";
 
@@ -103,7 +110,9 @@ export interface SendEmailResult {
 
 let cachedClient: { key: string; client: SESv2Client } | null = null;
 
-function sesClient(): SESv2Client {
+// Also used by onSignup to create the business's SES tenant (D22). Callers
+// must declare EMAIL_SECRETS.
+export function sesClient(): SESv2Client {
   const region = process.env.SES_REGION || DEFAULT_REGION;
   const accessKeyId = AWS_SES_ACCESS_KEY_ID.value();
   const secretAccessKey = AWS_SES_SECRET_ACCESS_KEY.value();
@@ -161,31 +170,32 @@ export async function sendEmail(
   }
 
   const tenantName =
-    process.env.SES_TENANTS_ENABLED === "true" && input.tenantId
-      ? input.tenantId
+    sesTenantsEnabled() && input.tenantId
+      ? sesTenantName(input.tenantId)
       : undefined;
 
-  try {
-    const result = await sesClient().send(
-      new SendEmailCommand({
-        FromEmailAddress: formatFromHeader(input.fromName, fromAddress),
-        Destination: { ToAddresses: [to] },
-        ReplyToAddresses: replyTo ? [replyTo] : undefined,
-        Content: {
-          Simple: {
-            Subject: { Data: subject, Charset: "UTF-8" },
-            Body: {
-              Html: { Data: input.html, Charset: "UTF-8" },
-              Text: { Data: input.text, Charset: "UTF-8" },
-            },
-            Attachments: sesAttachments(input.attachments),
+  const command = (TenantName: string | undefined) =>
+    new SendEmailCommand({
+      FromEmailAddress: formatFromHeader(input.fromName, fromAddress),
+      Destination: { ToAddresses: [to] },
+      ReplyToAddresses: replyTo ? [replyTo] : undefined,
+      Content: {
+        Simple: {
+          Subject: { Data: subject, Charset: "UTF-8" },
+          Body: {
+            Html: { Data: input.html, Charset: "UTF-8" },
+            Text: { Data: input.text, Charset: "UTF-8" },
           },
+          Attachments: sesAttachments(input.attachments),
         },
-        ConfigurationSetName: configurationSet,
-        TenantName: tenantName,
-        EmailTags: tags,
-      }),
-    );
+      },
+      ConfigurationSetName: configurationSet,
+      TenantName,
+      EmailTags: tags,
+    });
+
+  try {
+    const result = await sendAsTenant(input, tenantName, command);
     const messageId = result.MessageId ?? null;
     if (sentinelRef) {
       await sentinelRef.set(
@@ -203,6 +213,58 @@ export async function sendEmail(
       error: String(err),
     });
     throw err;
+  }
+}
+
+// D22: SES refuses a send whose tenant doesn't exist or lacks the identity or
+// configuration set. AWS doesn't document the exact error; SendEmail lists
+// NotFoundException for a missing resource, and anything else that names the
+// tenant is treated the same way.
+function isTenantProblem(err: unknown): boolean {
+  const e = err as { name?: unknown; message?: unknown } | null;
+  if (e?.name === "NotFoundException") return true;
+  return (
+    e?.name === "BadRequestException" &&
+    typeof e.message === "string" &&
+    /tenant/i.test(e.message)
+  );
+}
+
+// Sends as the business's SES tenant. If the tenant is missing it is created
+// once and the send retried; if that fails too, the email still goes out
+// without TenantName — refusing to send an invoice over tenant isolation would
+// be worse — and the failure is reported so the tenant gets fixed. Each failed
+// attempt sent nothing, so the retries can't double-send.
+async function sendAsTenant(
+  input: SendEmailInput,
+  tenantName: string | undefined,
+  command: (tenantName: string | undefined) => SendEmailCommand,
+): Promise<SendEmailCommandOutput> {
+  const client = sesClient();
+  if (!tenantName || !input.tenantId) return await client.send(command(undefined));
+  try {
+    return await client.send(command(tenantName));
+  } catch (err) {
+    if (!isTenantProblem(err)) throw err;
+    logger.warn("SES tenant unusable — creating it and retrying once", {
+      ...logContext(input),
+      error: String(err),
+    });
+  }
+  try {
+    await ensureSesTenant(input.tenantId, client);
+    return await client.send(command(tenantName));
+  } catch (err) {
+    logger.error("SES tenant still unusable — sending without TenantName", {
+      ...logContext(input),
+      error: String(err),
+    });
+    await reportError(err, {
+      functionName: "sendEmail",
+      tenantId: input.tenantId,
+      extra: { category: input.category, sesTenant: tenantName },
+    });
+    return await client.send(command(undefined));
   }
 }
 
