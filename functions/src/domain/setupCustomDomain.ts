@@ -204,7 +204,8 @@ export async function setupCustomDomainHandler(
   // Step 4: Global Config cache write. Best-effort — the proxy falls back to
   // Firestore on a miss and self-heals, so a failure here isn't fatal. The key
   // must be a valid Global Config key (A-07); a host that can't be encoded is
-  // simply served from Firestore.
+  // simply served from Firestore. With no store at all (production on Vercel
+  // Hobby) edgeConfigUpsert/edgeConfigDelete skip the write.
   const cacheKey = domainCacheKey(domain);
   if (cacheKey) {
     try {

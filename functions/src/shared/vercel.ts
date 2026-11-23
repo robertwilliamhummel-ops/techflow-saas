@@ -4,12 +4,14 @@
 //   VERCEL_API_TOKEN   — personal/team token with Domains + Edge Config scopes
 //   VERCEL_PROJECT_ID  — the techflow-saas project's ID
 //   VERCEL_TEAM_ID     — required if the project belongs to a team (optional)
-//   EDGE_CONFIG_ID     — for the domain→tenantId cache writes
+//   EDGE_CONFIG_ID     — for the domain→tenantId cache writes; may be unset or
+//                        the no-store placeholder below
 //
 // All helpers throw on non-2xx so callers can convert Vercel API failures
 // into Firestore rollbacks.
 
 import { defineSecret } from "firebase-functions/params";
+import * as logger from "firebase-functions/logger";
 
 const VERCEL_API_TOKEN = defineSecret("VERCEL_API_TOKEN");
 const VERCEL_PROJECT_ID = defineSecret("VERCEL_PROJECT_ID");
@@ -154,7 +156,24 @@ export async function vercelGetDomainStatus(
 // ---------------------------------------------------------------------------
 // Global Config (Vercel's new name for Edge Config; same store) — write side.
 // The Next.js proxy reads through the SDK. Keys come from domainCacheKey (A-07).
+//
+// The store is optional. Vercel Hobby allows one store per account, and
+// staging has it, so production has none: its EDGE_CONFIG_ID secret holds this
+// placeholder (firebase deploy needs a value for every declared secret). With
+// no store the cache writes are skipped — logged once per instance — and the
+// proxy, with no GLOBAL_CONFIG to read, looks custom domains up in Firestore
+// (customDomains/{domain}), which these callables keep current either way.
 // ---------------------------------------------------------------------------
+
+export const NO_GLOBAL_CONFIG_STORE = "unset-hobby-plan-one-store-limit";
+
+let loggedNoStore = false;
+
+// The store's id, or null when there is no store.
+export function globalConfigStoreId(): string | null {
+  const id = safeSecret(EDGE_CONFIG_ID).trim();
+  return id && id !== NO_GLOBAL_CONFIG_STORE ? id : null;
+}
 
 export async function edgeConfigUpsert(
   key: string,
@@ -174,8 +193,16 @@ interface EdgeOp {
 }
 
 async function edgeConfigBatch(items: EdgeOp[]): Promise<void> {
-  const id = safeSecret(EDGE_CONFIG_ID);
-  if (!id) throw new Error("EDGE_CONFIG_ID is not configured.");
+  const id = globalConfigStoreId();
+  if (!id) {
+    if (!loggedNoStore) {
+      loggedNoStore = true;
+      logger.info(
+        "No Global Config store (EDGE_CONFIG_ID unset or the no-store placeholder): skipping domain cache writes; the proxy reads customDomains from Firestore",
+      );
+    }
+    return;
+  }
   await vercelFetch(
     teamQueryAppend(`/v1/global-config/${encodeURIComponent(id)}/items`),
     {
