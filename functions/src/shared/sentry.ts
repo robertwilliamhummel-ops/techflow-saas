@@ -9,9 +9,12 @@
 // Sentry's automatic Firebase integration only instruments firebase-functions
 // below 7 (we run 7), so functions report errors explicitly through the
 // withSentry* wrappers in withSentry.ts. Errors only — no performance tracing
-// and no default PII; events carry the uid, never an email address.
+// and no default PII; events carry the uid, never an email address. Request
+// bodies, auth headers and pay tokens are stripped before sending
+// (sentryScrub.ts).
 
 import * as Sentry from "@sentry/node";
+import { scrubBreadcrumb, scrubEvent } from "./sentryScrub";
 
 const dsn = process.env.SENTRY_DSN || undefined;
 
@@ -21,4 +24,6 @@ Sentry.init({
   environment:
     process.env.GCLOUD_PROJECT ?? process.env.GOOGLE_CLOUD_PROJECT ?? "local",
   sendDefaultPii: false,
+  beforeSend: (event) => scrubEvent(event),
+  beforeBreadcrumb: (crumb) => scrubBreadcrumb(crumb),
 });
